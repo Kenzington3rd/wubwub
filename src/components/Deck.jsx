@@ -65,6 +65,11 @@ const Deck = forwardRef(function Deck(
   });
   const [cues, setCues] = useState([]);
   const cueIdRef = useRef(0);
+  // Incremented every time `chainRef.current` is (re)constructed. Used as a
+  // dep on every chain-mutating useEffect so that UI state set before the
+  // chain existed (e.g. user toggles reverb before loading a file) gets
+  // applied as soon as the chain comes into existence.
+  const [chainTick, setChainTick] = useState(0);
 
   // ─── Refs for non-rendering state ───
   const bufferRef = useRef(null);
@@ -101,6 +106,10 @@ const Deck = forwardRef(function Deck(
     const ctx = await ensureMasterCtx();
     if (!chainRef.current) {
       chainRef.current = buildDeckChain(ctx, masterCompressorRef.current);
+      // Signal the chain-mutating useEffects to re-run with the live chain
+      // so any state set before now (effects toggled, EQ tweaked, etc.)
+      // gets applied.
+      setChainTick((t) => t + 1);
     }
     return chainRef.current;
   }, [ensureMasterCtx, masterCompressorRef]);
@@ -111,7 +120,7 @@ const Deck = forwardRef(function Deck(
     const ctx = audioCtxRef.current;
     if (!chain || !ctx) return;
     rampGain(chain.gain.gain, volume * crossfadeGain, ctx);
-  }, [volume, crossfadeGain, audioCtxRef]);
+  }, [volume, crossfadeGain, audioCtxRef, chainTick]);
 
   // ─── EQ ───
   useEffect(() => {
@@ -120,7 +129,7 @@ const Deck = forwardRef(function Deck(
     chain.eqLow.gain.value = eq.low;
     chain.eqMid.gain.value = eq.mid;
     chain.eqHigh.gain.value = eq.high;
-  }, [eq]);
+  }, [eq, chainTick]);
 
   // ─── Filter sweep ───
   useEffect(() => {
@@ -128,7 +137,7 @@ const Deck = forwardRef(function Deck(
     const ctx = audioCtxRef.current;
     if (!chain || !ctx) return;
     chain.filter.frequency.setTargetAtTime(filterFreq, ctx.currentTime, 0.03);
-  }, [filterFreq, audioCtxRef]);
+  }, [filterFreq, audioCtxRef, chainTick]);
 
   // ─── Effects: reverb mix/on ───
   useEffect(() => {
@@ -140,7 +149,7 @@ const Deck = forwardRef(function Deck(
     const targetDry = on ? 1 - mix : 1;
     rampGain(chain.reverbWet.gain, targetWet, ctx);
     rampGain(chain.reverbDry.gain, targetDry, ctx);
-  }, [effects.reverb.on, effects.reverb.mix, audioCtxRef]);
+  }, [effects.reverb.on, effects.reverb.mix, audioCtxRef, chainTick]);
 
   // ─── Effects: reverb size (rebuild IR, debounced) ───
   useEffect(() => {
@@ -152,7 +161,7 @@ const Deck = forwardRef(function Deck(
       chain.reverbConv.buffer = buildReverbIR(ctx, effects.reverb.size, 3.0);
     }, 200);
     return () => clearTimeout(reverbSizeDebounceRef.current);
-  }, [effects.reverb.size, audioCtxRef]);
+  }, [effects.reverb.size, audioCtxRef, chainTick]);
 
   // ─── Effects: delay (on/mix/time/feedback) ───
   useEffect(() => {
@@ -167,7 +176,7 @@ const Deck = forwardRef(function Deck(
     chain.delay.delayTime.setTargetAtTime(time, ctx.currentTime, 0.05);
     // Clamp feedback ≤ 0.9 to prevent runaway
     rampGain(chain.delayFb.gain, on ? clamp(feedback, 0, 0.9) : 0, ctx, 0.05);
-  }, [effects.delay.on, effects.delay.mix, effects.delay.time, effects.delay.feedback, audioCtxRef]);
+  }, [effects.delay.on, effects.delay.mix, effects.delay.time, effects.delay.feedback, audioCtxRef, chainTick]);
 
   // ─── Effects: distortion ───
   useEffect(() => {
@@ -180,7 +189,7 @@ const Deck = forwardRef(function Deck(
     rampGain(chain.distortionWet.gain, targetWet, ctx);
     rampGain(chain.distortionDry.gain, targetDry, ctx);
     chain.distortion.curve = buildDistortionCurve(drive);
-  }, [effects.distortion.on, effects.distortion.mix, effects.distortion.drive, audioCtxRef]);
+  }, [effects.distortion.on, effects.distortion.mix, effects.distortion.drive, audioCtxRef, chainTick]);
 
   // ─── Source lifecycle ───
   const stopAndDisconnectSource = useCallback(() => {

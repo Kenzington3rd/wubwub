@@ -56,6 +56,8 @@ export default function App() {
   const mappingsRef = useRef({});
   const learnTargetRef = useRef(null);
   const masterVolRef = useRef(0.85);
+  const workletLoadingRef = useRef(null);
+  const recordTogglingRef = useRef(false);
 
   // Keep masterVolRef in sync so ensureMasterCtx doesn't need masterVol in deps.
   useEffect(() => { masterVolRef.current = masterVol; }, [masterVol]);
@@ -102,22 +104,30 @@ export default function App() {
       }
     }
 
-    // Load looper worklet once.
-    if (!workletNodeRef.current) {
-      try {
-        await ctx.audioWorklet.addModule("/worklets/looper-worklet.js");
-        const node = new AudioWorkletNode(ctx, "looper-processor", {
-          numberOfInputs: 1,
-          numberOfOutputs: 0,
-          processorOptions: { seconds: 30 },
-        });
-        masterCompressorRef.current.connect(node);
-        workletNodeRef.current = node;
-        setWorkletReady(true);
-      } catch (err) {
-        console.warn("Looper worklet failed to load — looper disabled.", err);
-      }
+    // Load looper worklet once. Gate with a promise ref so two concurrent
+    // ensureMasterCtx calls don't both pass the null-check + create
+    // duplicate worklet nodes (the first would leak: still connected to
+    // the master compressor with no JS reference).
+    if (!workletNodeRef.current && !workletLoadingRef.current) {
+      workletLoadingRef.current = (async () => {
+        try {
+          await ctx.audioWorklet.addModule("/worklets/looper-worklet.js");
+          if (workletNodeRef.current) return; // someone got there first
+          const node = new AudioWorkletNode(ctx, "looper-processor", {
+            numberOfInputs: 1,
+            numberOfOutputs: 0,
+            processorOptions: { seconds: 30 },
+          });
+          masterCompressorRef.current.connect(node);
+          workletNodeRef.current = node;
+          setWorkletReady(true);
+        } catch (err) {
+          console.warn("Looper worklet failed to load — looper disabled.", err);
+          workletLoadingRef.current = null; // allow retry
+        }
+      })();
     }
+    if (workletLoadingRef.current) await workletLoadingRef.current;
 
     return ctx;
   }, []);
@@ -269,38 +279,47 @@ export default function App() {
   }, []);
 
   // ── Recording ──
+  // Gated by `recordTogglingRef` so a rapid double-click doesn't create
+  // two recorders (the first would leak: still tapping the master output
+  // with no JS reference in `recorderRef`).
   const onToggleRecord = useCallback(async () => {
-    if (isRecording) {
-      const rec = recorderRef.current;
-      if (!rec) return;
-      const mime = rec.mime;
-      const blob = await rec.stop();
-      rec.dispose();
-      recorderRef.current = null;
-      setIsRecording(false);
-      setRecordStartedAt(null);
-      if (blob && blob.size > 0) {
-        const ext = extensionForMime(mime);
-        const ts = new Date()
-          .toISOString()
-          .replace(/[:.]/g, "-")
-          .replace("T", "_")
-          .slice(0, 19);
-        downloadBlob(blob, `wavecraft-mix-${ts}.${ext}`);
+    if (recordTogglingRef.current) return;
+    recordTogglingRef.current = true;
+    try {
+      if (isRecording) {
+        const rec = recorderRef.current;
+        if (!rec) return;
+        const mime = rec.mime;
+        const blob = await rec.stop();
+        rec.dispose();
+        recorderRef.current = null;
+        setIsRecording(false);
+        setRecordStartedAt(null);
+        if (blob && blob.size > 0) {
+          const ext = extensionForMime(mime);
+          const ts = new Date()
+            .toISOString()
+            .replace(/[:.]/g, "-")
+            .replace("T", "_")
+            .slice(0, 19);
+          downloadBlob(blob, `wavecraft-mix-${ts}.${ext}`);
+        }
+        return;
       }
-      return;
+      const ctx = await ensureMasterCtx();
+      if (!ctx || !masterCompressorRef.current) return;
+      const rec = createMasterRecorder(ctx, masterCompressorRef.current);
+      if (!rec) {
+        setRecordSupported(false);
+        return;
+      }
+      recorderRef.current = rec;
+      rec.start();
+      setIsRecording(true);
+      setRecordStartedAt(Date.now());
+    } finally {
+      recordTogglingRef.current = false;
     }
-    const ctx = await ensureMasterCtx();
-    if (!ctx || !masterCompressorRef.current) return;
-    const rec = createMasterRecorder(ctx, masterCompressorRef.current);
-    if (!rec) {
-      setRecordSupported(false);
-      return;
-    }
-    recorderRef.current = rec;
-    rec.start();
-    setIsRecording(true);
-    setRecordStartedAt(Date.now());
   }, [isRecording, ensureMasterCtx]);
 
   // ── MIDI ──
@@ -530,6 +549,7 @@ export default function App() {
           ref={samplePadRef}
           audioCtxRef={audioCtxRef}
           outputNodeRef={masterCompressorRef}
+          ensureMasterCtx={ensureMasterCtx}
         />
 
         <TheoryPanel />

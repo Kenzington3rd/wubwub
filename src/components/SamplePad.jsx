@@ -3,7 +3,7 @@ import { SAMPLE_PAD_KEYS } from "../data.js";
 
 const PAD_COUNT = 8;
 
-const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef }, ref) {
+const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, ensureMasterCtx }, ref) {
   const [pads, setPads] = useState(() =>
     Array.from({ length: PAD_COUNT }, () => ({ name: null, volume: 0.8 }))
   );
@@ -31,7 +31,11 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef }, 
   const loadPad = useCallback(
     async (i, file) => {
       if (!file) return;
-      const ctx = audioCtxRef.current;
+      // Ensure the master AudioContext exists before decoding. If this is the
+      // user's first interaction (e.g. drag-dropping a sample on a fresh page),
+      // audioCtxRef.current is still null, and decodeAudioData would have
+      // nothing to decode against.
+      const ctx = ensureMasterCtx ? await ensureMasterCtx() : audioCtxRef.current;
       if (!ctx) return;
       try {
         const buf = await ctx.decodeAudioData(await file.arrayBuffer());
@@ -43,7 +47,7 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef }, 
         alert(`Couldn't decode "${file.name}". Try WAV, MP3, OGG, or FLAC.`);
       }
     },
-    [audioCtxRef]
+    [audioCtxRef, ensureMasterCtx]
   );
 
   const trigger = useCallback(
