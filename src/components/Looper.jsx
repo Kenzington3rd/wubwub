@@ -53,8 +53,11 @@ export default function Looper({
     [audioCtxRef, outputNodeRef, slots]
   );
 
-  // Listen for worklet capture responses
+  // Listen for worklet capture responses.
+  // `workletReady` is in deps so this re-runs once the worklet loads (which
+  // happens lazily on first user gesture, after Looper has already mounted).
   useEffect(() => {
+    if (!workletReady) return;
     const node = workletNodeRef.current;
     if (!node) return;
     const onMessage = (e) => {
@@ -75,7 +78,7 @@ export default function Looper({
     node.port.addEventListener("message", onMessage);
     node.port.start();
     return () => node.port.removeEventListener("message", onMessage);
-  }, [workletNodeRef, audioCtxRef]);
+  }, [workletReady, workletNodeRef, audioCtxRef]);
 
   const capture = (slot) => {
     const node = workletNodeRef.current;

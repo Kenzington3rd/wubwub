@@ -71,7 +71,7 @@ export const BASS_DROP_PRESETS = {
     buildSec: 1.5,
     lpfStart: 200,
     eqLowKill: -24,
-    eqHighBoost: 12,
+    eqLowPostDrop: 12,
     decaySec: 2.0,
     wobble: null,
   },
@@ -80,7 +80,7 @@ export const BASS_DROP_PRESETS = {
     buildSec: 2.5,
     lpfStart: 150,
     eqLowKill: -24,
-    eqHighBoost: 9,
+    eqLowPostDrop: 9,
     decaySec: 2.5,
     wobble: null,
   },
@@ -89,9 +89,12 @@ export const BASS_DROP_PRESETS = {
     buildSec: 1.5,
     lpfStart: 200,
     eqLowKill: -24,
-    eqHighBoost: 12,
+    eqLowPostDrop: 12,
     decaySec: 2.5,
-    wobble: { freq: 6, depth: 2000, baseFreq: 800 },
+    // baseFreq + depth chosen so modulation stays positive (LFO swings filter
+    // freq between 300 Hz and 1700 Hz). Asymmetric values (depth > baseFreq)
+    // get clamped by BiquadFilter and sound less musical.
+    wobble: { freq: 6, depth: 700, baseFreq: 1000 },
   },
 };
 

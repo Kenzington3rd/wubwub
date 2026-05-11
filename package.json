@@ -8,17 +8,24 @@
     "dev": "vite",
     "build": "vite build",
     "build:single": "vite build --mode single --outDir dist-single",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test": "vitest run",
+    "test:watch": "vitest"
   },
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@testing-library/jest-dom": "^6.9.1",
+    "@testing-library/react": "^16.3.2",
+    "@testing-library/user-event": "^14.6.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "happy-dom": "^15.11.7",
     "vite": "^5.4.10",
     "vite-plugin-pwa": "^1.3.0",
-    "vite-plugin-singlefile": "^2.3.3"
+    "vite-plugin-singlefile": "^2.3.3",
+    "vitest": "^2.1.9"
   },
   "license": "MIT"
 }

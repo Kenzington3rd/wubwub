@@ -23,6 +23,7 @@ export default defineConfig(({ mode }) => {
               "fonts/Audiowide-Regular.woff2",
               "fonts/Exo2-Variable.woff2",
               "worklets/looper-worklet.js",
+              "icons/icon.svg",
             ],
             manifest: {
               name: "WAVECRAFT",
@@ -33,7 +34,20 @@ export default defineConfig(({ mode }) => {
               background_color: "#070a14",
               display: "standalone",
               start_url: ".",
-              icons: [],
+              icons: [
+                {
+                  src: "icons/icon.svg",
+                  sizes: "any",
+                  type: "image/svg+xml",
+                  purpose: "any",
+                },
+                {
+                  src: "icons/icon.svg",
+                  sizes: "512x512",
+                  type: "image/svg+xml",
+                  purpose: "any maskable",
+                },
+              ],
             },
             workbox: {
               globPatterns: [

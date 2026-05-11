@@ -4,7 +4,7 @@ function formatTime(s) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-export default function CuePanel({ cues, color, disabled, onSet, onJump, onDelete }) {
+export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJump, onDelete }) {
   return (
     <div
       style={{
@@ -17,7 +17,8 @@ export default function CuePanel({ cues, color, disabled, onSet, onJump, onDelet
       <button
         onClick={onSet}
         disabled={disabled}
-        title="Set cue at current position"
+        title={maxReached ? "Max 8 cues — delete one first" : "Set cue at current position"}
+        aria-label={maxReached ? "Cue limit reached" : "Add cue at current position"}
         style={{
           background: disabled ? "rgba(255,255,255,0.04)" : `${color}22`,
           border: `1px solid ${color}55`,
@@ -32,7 +33,7 @@ export default function CuePanel({ cues, color, disabled, onSet, onJump, onDelet
           cursor: disabled ? "not-allowed" : "pointer",
         }}
       >
-        + CUE
+        {maxReached ? "8 / 8" : "+ CUE"}
       </button>
       {cues.map((cue, i) => (
         <span

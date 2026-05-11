@@ -15,7 +15,10 @@ import BassDropMenu from "./BassDropMenu.jsx";
 import { buildDeckChain, disconnectChain } from "../audio/chain.js";
 import { buildReverbIR, buildDistortionCurve, clamp, rampGain } from "../audio/effects.js";
 import { detectBpm } from "../audio/bpmDetect.js";
+import { detectKey } from "../audio/keyDetect.js";
 import { BASS_DROP_PRESETS } from "../data.js";
+
+const MAX_CUES = 8;
 
 const CUE_PALETTE = ["#00f5d4", "#a78bfa", "#f0c040", "#f472b6", "#4ade80", "#fb923c", "#60a5fa", "#fde047"];
 
@@ -54,6 +57,7 @@ const Deck = forwardRef(function Deck(
   const [bpm, setBpm] = useState(128);
   const [bpmConfidence, setBpmConfidence] = useState(null);
   const [autoBpmRunning, setAutoBpmRunning] = useState(false);
+  const [detectedKey, setDetectedKey] = useState(null);
   const [effects, setEffects] = useState({
     reverb: { on: false, mix: 0.3, size: 2.0 },
     delay: { on: false, mix: 0.3, time: 0.375, feedback: 0.4 },
@@ -254,41 +258,69 @@ const Deck = forwardRef(function Deck(
   );
 
   // ─── File loading ───
+  // Shared between <input> change and drag-drop on the deck.
+  const loadFile = useCallback(
+    async (file) => {
+      if (!file) return;
+      if (
+        !file.type.startsWith("audio/") &&
+        !/\.(mp3|wav|ogg|flac|m4a|aac)$/i.test(file.name)
+      ) {
+        alert("Please choose an audio file (MP3, WAV, OGG, FLAC, M4A, AAC).");
+        return;
+      }
+      const ctx = await ensureMasterCtx();
+      await buildChain();
+      stopAndDisconnectSource();
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      clearInterval(timeIntervalRef.current);
+
+      const arrayBuf = await file.arrayBuffer();
+      try {
+        const audioBuf = await ctx.decodeAudioData(arrayBuf);
+        bufferRef.current = audioBuf;
+        setFileName(file.name);
+        setDuration(audioBuf.duration);
+        durationRef.current = audioBuf.duration;
+        setCurrentTime(0);
+        currentTimeRef.current = 0;
+        offsetRef.current = 0;
+        setCues([]);
+        cuesRef.current = [];
+        setBpmConfidence(null);
+        setDetectedKey(null);
+      } catch {
+        alert("Could not decode audio file. Try WAV, MP3, OGG, or FLAC.");
+      }
+    },
+    [buildChain, ensureMasterCtx, stopAndDisconnectSource]
+  );
+
   const handleFile = async (e) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    if (
-      !file.type.startsWith("audio/") &&
-      !/\.(mp3|wav|ogg|flac|m4a|aac)$/i.test(file.name)
-    ) {
-      alert("Please choose an audio file (MP3, WAV, OGG, FLAC, M4A, AAC).");
-      return;
-    }
-    const ctx = await ensureMasterCtx();
-    await buildChain();
-    stopAndDisconnectSource();
-    isPlayingRef.current = false;
-    setIsPlaying(false);
-    clearInterval(timeIntervalRef.current);
-
-    const arrayBuf = await file.arrayBuffer();
-    try {
-      const audioBuf = await ctx.decodeAudioData(arrayBuf);
-      bufferRef.current = audioBuf;
-      setFileName(file.name);
-      setDuration(audioBuf.duration);
-      durationRef.current = audioBuf.duration;
-      setCurrentTime(0);
-      currentTimeRef.current = 0;
-      offsetRef.current = 0;
-      setCues([]);
-      cuesRef.current = [];
-      setBpmConfidence(null);
-    } catch {
-      alert("Could not decode audio file. Try WAV, MP3, OGG, or FLAC.");
-    }
+    await loadFile(file);
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
+
+  // Drag-and-drop on the deck card.
+  const [isDragOver, setIsDragOver] = useState(false);
+  const onDragOver = useCallback((e) => {
+    if (e.dataTransfer?.items?.length) {
+      e.preventDefault();
+      setIsDragOver(true);
+    }
+  }, []);
+  const onDragLeave = useCallback(() => setIsDragOver(false), []);
+  const onDrop = useCallback(
+    (e) => {
+      e.preventDefault();
+      setIsDragOver(false);
+      const file = e.dataTransfer?.files?.[0];
+      if (file) loadFile(file);
+    },
+    [loadFile]
+  );
 
   // ─── Transport ───
   const play = useCallback(() => {
@@ -364,7 +396,7 @@ const Deck = forwardRef(function Deck(
     chain.eqLow.gain.setValueAtTime(eq.low, now);
     chain.eqLow.gain.linearRampToValueAtTime(preset.eqLowKill, t1 - 0.1);
     chain.eqLow.gain.setValueAtTime(preset.eqLowKill, t1);
-    chain.eqLow.gain.linearRampToValueAtTime(preset.eqHighBoost, t2);
+    chain.eqLow.gain.linearRampToValueAtTime(preset.eqLowPostDrop, t2);
     chain.eqLow.gain.linearRampToValueAtTime(eq.low, t3);
 
     // Wobble preset: LFO modulating filter freq after the drop
@@ -422,12 +454,21 @@ const Deck = forwardRef(function Deck(
   const runAutoBpm = async () => {
     if (!bufferRef.current || autoBpmRunning) return;
     setAutoBpmRunning(true);
+    // Run BPM + key detection in parallel — both read the same buffer offline.
     try {
-      const { bpm: detected, confidence } = await detectBpm(bufferRef.current);
-      setBpm(detected);
-      setBpmConfidence(confidence);
+      const [bpmResult, keyResult] = await Promise.all([
+        detectBpm(bufferRef.current).catch(() => null),
+        detectKey(bufferRef.current).catch(() => null),
+      ]);
+      if (bpmResult) {
+        setBpm(bpmResult.bpm);
+        setBpmConfidence(bpmResult.confidence);
+      }
+      if (keyResult && keyResult.confidence > 0.3) {
+        setDetectedKey(keyResult);
+      }
     } catch (err) {
-      console.warn("auto-bpm failed", err);
+      console.warn("auto-detect failed", err);
     } finally {
       setAutoBpmRunning(false);
     }
@@ -436,10 +477,11 @@ const Deck = forwardRef(function Deck(
   // ─── Cues ───
   const setCueAtCurrent = () => {
     if (!bufferRef.current) return;
+    if (cues.length >= MAX_CUES) return;
     const id = ++cueIdRef.current;
     const time = currentTimeRef.current;
     const color = CUE_PALETTE[cues.length % CUE_PALETTE.length];
-    setCues((prev) => [...prev, { id, time, color }].slice(0, 8));
+    setCues((prev) => [...prev, { id, time, color }]);
   };
   const jumpCue = (i) => {
     const cue = cues[i];
@@ -502,18 +544,29 @@ const Deck = forwardRef(function Deck(
   return (
     <div
       onPointerDown={onFocus}
+      onDragOver={onDragOver}
+      onDragLeave={onDragLeave}
+      onDrop={onDrop}
+      role="region"
+      aria-label={`Deck ${id}${focused ? " (focused)" : ""}`}
       style={{
         flex: 1,
         minWidth: 0,
         background: "rgba(15,18,35,0.7)",
         borderRadius: 16,
         padding: 16,
-        border: `1px solid ${focused ? color + "88" : color + "22"}`,
+        border: `1px solid ${
+          isDragOver ? color : focused ? color + "88" : color + "22"
+        }`,
         backdropFilter: "blur(10px)",
         display: "flex",
         flexDirection: "column",
         gap: 10,
-        boxShadow: focused ? `0 0 40px ${color}44` : `0 0 30px ${color}08`,
+        boxShadow: isDragOver
+          ? `0 0 60px ${color}88`
+          : focused
+          ? `0 0 40px ${color}44`
+          : `0 0 30px ${color}08`,
         transition: "border 0.2s, box-shadow 0.2s",
       }}
     >
@@ -554,9 +607,11 @@ const Deck = forwardRef(function Deck(
             }}
           />
         </div>
-        <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button
             onClick={tapBpm}
+            title="Tap to set BPM by ear"
+            aria-label={`Tap BPM for deck ${id}`}
             style={{
               background: "rgba(255,255,255,0.05)",
               border: "1px solid rgba(255,255,255,0.1)",
@@ -574,6 +629,7 @@ const Deck = forwardRef(function Deck(
             onClick={onSync}
             disabled={!fileName}
             title="Sync speed to the other deck's BPM"
+            aria-label={`Sync deck ${id} to other deck`}
             style={{
               background: "rgba(255,255,255,0.05)",
               border: `1px solid ${color}33`,
@@ -591,7 +647,8 @@ const Deck = forwardRef(function Deck(
           <button
             onClick={runAutoBpm}
             disabled={!fileName || autoBpmRunning}
-            title="Auto-detect BPM from track"
+            title="Auto-detect BPM + key from track"
+            aria-label={`Auto-detect BPM and key for deck ${id}`}
             style={{
               background: autoBpmRunning ? `${color}22` : "rgba(255,255,255,0.05)",
               border: `1px solid ${color}33`,
@@ -606,11 +663,66 @@ const Deck = forwardRef(function Deck(
           >
             {autoBpmRunning ? "…" : "AUTO"}
           </button>
+          <button
+            onClick={() => setBpm((b) => Math.max(40, Math.round(b / 2)))}
+            disabled={!fileName}
+            title="Half BPM (fix double-time detection)"
+            aria-label={`Halve BPM for deck ${id}`}
+            style={{
+              background: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 6,
+              padding: "4px 6px",
+              color: fileName ? "#8892b0" : "#4a5580",
+              fontSize: 10,
+              cursor: fileName ? "pointer" : "not-allowed",
+              fontFamily: "'Exo 2', sans-serif",
+              opacity: fileName ? 1 : 0.5,
+            }}
+          >
+            ÷2
+          </button>
+          <button
+            onClick={() => setBpm((b) => Math.min(220, Math.round(b * 2)))}
+            disabled={!fileName}
+            title="Double BPM (fix half-time detection)"
+            aria-label={`Double BPM for deck ${id}`}
+            style={{
+              background: "rgba(255,255,255,0.05)",
+              border: "1px solid rgba(255,255,255,0.1)",
+              borderRadius: 6,
+              padding: "4px 6px",
+              color: fileName ? "#8892b0" : "#4a5580",
+              fontSize: 10,
+              cursor: fileName ? "pointer" : "not-allowed",
+              fontFamily: "'Exo 2', sans-serif",
+              opacity: fileName ? 1 : 0.5,
+            }}
+          >
+            ×2
+          </button>
           <span style={{ fontFamily: "'Exo 2', sans-serif", fontSize: 14, color, fontWeight: 700 }}>
             {bpm} BPM
           </span>
+          {detectedKey && (
+            <span
+              title={`Detected key: ${detectedKey.key} (Camelot ${detectedKey.camelot})`}
+              style={{
+                fontSize: 10,
+                color: color,
+                fontFamily: "'Exo 2', sans-serif",
+                background: `${color}11`,
+                border: `1px solid ${color}33`,
+                padding: "1px 6px",
+                borderRadius: 4,
+                fontWeight: 700,
+              }}
+            >
+              {detectedKey.camelot}
+            </span>
+          )}
           {bpmConfidence != null && (
-            <span style={{ fontSize: 9, color: "#4a5580" }}>
+            <span style={{ fontSize: 9, color: "#4a5580" }} aria-label="BPM detection confidence">
               {Math.round(bpmConfidence * 100)}%
             </span>
           )}
@@ -644,9 +756,10 @@ const Deck = forwardRef(function Deck(
 
       {/* Waveform */}
       <WaveformCanvas
-        analyserRef={{ get current() { return chainRef.current?.analyser ?? null; } }}
+        chainRef={chainRef}
         color={color}
         isPlaying={isPlaying}
+        isLooping={isLooping}
         currentTimeRef={currentTimeRef}
         durationRef={durationRef}
         cuesRef={cuesRef}
@@ -661,14 +774,15 @@ const Deck = forwardRef(function Deck(
       <CuePanel
         cues={cues}
         color={color}
-        disabled={!fileName}
+        disabled={!fileName || cues.length >= MAX_CUES}
+        maxReached={cues.length >= MAX_CUES}
         onSet={setCueAtCurrent}
         onJump={jumpCue}
         onDelete={deleteCue}
       />
 
       {/* Transport */}
-      <div style={{ display: "flex", justifyContent: "center", gap: 6 }}>
+      <div style={{ display: "flex", justifyContent: "center", gap: 6 }} role="group" aria-label={`Deck ${id} transport`}>
         {[
           { icon: "▶", action: play, active: isPlaying, label: "Play" },
           { icon: "⏸", action: pause, active: false, label: "Pause" },
@@ -677,8 +791,10 @@ const Deck = forwardRef(function Deck(
         ].map((btn) => (
           <button
             key={btn.label}
-            onClick={btn.action}
+            onClick={(e) => { btn.action(); e.currentTarget.blur(); }}
             title={btn.label}
+            aria-label={`${btn.label} deck ${id}`}
+            aria-pressed={btn.active}
             style={{
               width: 38,
               height: 38,

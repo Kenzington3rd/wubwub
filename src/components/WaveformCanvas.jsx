@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useRef } from "react";
 
 // Live waveform + frequency-bar canvas with optional click-to-seek and cue markers.
-// Mutating values (currentTime, duration, cues) come in via refs so the RAF loop
-// doesn't restart on every parent render.
+// Reads the analyser via `chainRef` so the RAF loop doesn't restart when the
+// parent re-renders (chainRef identity is stable; .current changes are picked up
+// dynamically inside the loop).
+//
+// Mutating values (currentTime, duration, cues) also come in via refs.
 export default function WaveformCanvas({
-  analyserRef,
+  chainRef,
   color,
   isPlaying,
+  isLooping,
   currentTimeRef,
   durationRef,
   cuesRef,
@@ -19,12 +23,21 @@ export default function WaveformCanvas({
     const canvas = canvasRef.current;
     if (!canvas) return;
     const ctx2d = canvas.getContext("2d");
+    // Canvas 2D can be unavailable (GPU blocked, headless test env, very old
+    // browser). Skip the entire draw loop in that case rather than crashing.
+    if (!ctx2d) return;
     const W = canvas.width;
     const H = canvas.height;
 
+    // Pre-allocate the FFT scratch buffers once. The AnalyserNode's
+    // frequencyBinCount is fixed (fftSize/2 = 1024 here), so this never grows.
+    // Avoids ~245 KB/sec of GC pressure on mobile.
+    let timeData = null;
+    let freqData = null;
+
     const draw = () => {
       animRef.current = requestAnimationFrame(draw);
-      const analyser = analyserRef.current;
+      const analyser = chainRef?.current?.analyser ?? null;
       const duration = durationRef?.current ?? 0;
       const currentTime = currentTimeRef?.current ?? 0;
       const cues = cuesRef?.current ?? [];
@@ -43,8 +56,11 @@ export default function WaveformCanvas({
       }
 
       const bufLen = analyser.frequencyBinCount;
-      const data = new Uint8Array(bufLen);
-      analyser.getByteTimeDomainData(data);
+      if (!timeData || timeData.length !== bufLen) {
+        timeData = new Uint8Array(bufLen);
+        freqData = new Uint8Array(bufLen);
+      }
+      analyser.getByteTimeDomainData(timeData);
 
       ctx2d.fillStyle = "rgba(10,14,26,0.25)";
       ctx2d.fillRect(0, 0, W, H);
@@ -57,7 +73,7 @@ export default function WaveformCanvas({
       const sliceW = W / bufLen;
       let x = 0;
       for (let i = 0; i < bufLen; i++) {
-        const v = data[i] / 128.0;
+        const v = timeData[i] / 128.0;
         const y = (v * H) / 2;
         if (i === 0) ctx2d.moveTo(x, y);
         else ctx2d.lineTo(x, y);
@@ -67,7 +83,6 @@ export default function WaveformCanvas({
       ctx2d.stroke();
       ctx2d.shadowBlur = 0;
 
-      const freqData = new Uint8Array(bufLen);
       analyser.getByteFrequencyData(freqData);
       const barCount = 48;
       const barW = W / barCount - 1;
@@ -93,7 +108,6 @@ export default function WaveformCanvas({
           ctx2d.moveTo(cx, 0);
           ctx2d.lineTo(cx, H);
           ctx2d.stroke();
-          // Index badge at the top
           ctx2d.fillStyle = cue.color || "#f0c040";
           ctx2d.fillRect(cx - 8, 0, 16, 14);
           ctx2d.fillStyle = "#0a0e1a";
@@ -104,7 +118,7 @@ export default function WaveformCanvas({
         }
       }
 
-      // Playhead line — dashed so it doesn't get confused with cue lines
+      // Playhead — dashed so it doesn't get confused with cue lines
       if (duration > 0) {
         const px = (currentTime / duration) * W;
         ctx2d.strokeStyle = color + "cc";
@@ -119,7 +133,7 @@ export default function WaveformCanvas({
     };
     draw();
     return () => cancelAnimationFrame(animRef.current);
-  }, [analyserRef, color, isPlaying, currentTimeRef, durationRef, cuesRef]);
+  }, [chainRef, color, isPlaying, currentTimeRef, durationRef, cuesRef]);
 
   const handlePointer = useCallback(
     (e) => {
@@ -143,7 +157,9 @@ export default function WaveformCanvas({
         width: "100%",
         height: 120,
         borderRadius: 8,
-        border: `1px solid ${color}33`,
+        border: isLooping
+          ? `1px dashed ${color}aa`
+          : `1px solid ${color}33`,
         cursor: onSeek ? "crosshair" : "default",
         touchAction: "none",
       }}

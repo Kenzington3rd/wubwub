@@ -55,6 +55,10 @@ export default function App() {
   const effectiveBpmRef = useRef(128);
   const mappingsRef = useRef({});
   const learnTargetRef = useRef(null);
+  const masterVolRef = useRef(0.85);
+
+  // Keep masterVolRef in sync so ensureMasterCtx doesn't need masterVol in deps.
+  useEffect(() => { masterVolRef.current = masterVol; }, [masterVol]);
 
   const isMobile = useMatchMedia("(max-width: 720px)");
 
@@ -66,6 +70,8 @@ export default function App() {
 
   // ── Master audio chain ──
   // Lazily constructed on first user gesture. Returns the audio context.
+  // No dependency on `masterVol` state — read via masterVolRef so callback
+  // identity stays stable across volume changes.
   const ensureMasterCtx = useCallback(async () => {
     if (!audioCtxRef.current) {
       const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -81,7 +87,7 @@ export default function App() {
       comp.attack.value = 0.003;
       comp.release.value = 0.05;
       const gain = ctx.createGain();
-      gain.gain.value = masterVol;
+      gain.gain.value = masterVolRef.current;
       comp.connect(gain);
       gain.connect(ctx.destination);
       masterCompressorRef.current = comp;
@@ -96,13 +102,10 @@ export default function App() {
       }
     }
 
-    // Load looper worklet once
+    // Load looper worklet once.
     if (!workletNodeRef.current) {
       try {
-        const worker = new URL("../public/worklets/looper-worklet.js", import.meta.url);
-        await ctx.audioWorklet.addModule("/worklets/looper-worklet.js").catch(() =>
-          ctx.audioWorklet.addModule(worker)
-        );
+        await ctx.audioWorklet.addModule("/worklets/looper-worklet.js");
         const node = new AudioWorkletNode(ctx, "looper-processor", {
           numberOfInputs: 1,
           numberOfOutputs: 0,
@@ -117,7 +120,35 @@ export default function App() {
     }
 
     return ctx;
-  }, [masterVol]);
+  }, []);
+
+  // iOS Safari sometimes refuses to unlock the AudioContext from async paths.
+  // Belt-and-suspenders: synchronously create + resume on the first user gesture.
+  useEffect(() => {
+    const kick = () => {
+      try {
+        if (!audioCtxRef.current) {
+          const Ctx = window.AudioContext || window.webkitAudioContext;
+          audioCtxRef.current = new Ctx();
+        }
+        const ctx = audioCtxRef.current;
+        if (ctx.state === "suspended") {
+          ctx.resume().catch(() => {});
+        }
+      } catch {
+        /* ignore — full setup happens lazily via ensureMasterCtx */
+      }
+    };
+    const opts = { once: true, passive: true };
+    window.addEventListener("pointerdown", kick, opts);
+    window.addEventListener("touchend", kick, opts);
+    window.addEventListener("keydown", kick, opts);
+    return () => {
+      window.removeEventListener("pointerdown", kick);
+      window.removeEventListener("touchend", kick);
+      window.removeEventListener("keydown", kick);
+    };
+  }, []);
 
   // ── Apply master volume ──
   useEffect(() => {
@@ -173,14 +204,23 @@ export default function App() {
       const ownRef = focused === "B" ? deckBRef : focused === "A" ? deckARef : null;
       const otherRef = focused === "A" ? deckBRef : focused === "B" ? deckARef : null;
 
-      // Sample pad keys (always active, no focus required)
-      if (SAMPLE_PAD_KEYS.includes(e.key.toLowerCase()) && !e.ctrlKey && !e.metaKey) {
+      // Sample pad keys (always active, no focus required).
+      // Skip key-repeat to avoid retriggering during key-hold.
+      if (
+        !e.repeat &&
+        SAMPLE_PAD_KEYS.includes(e.key.toLowerCase()) &&
+        !e.ctrlKey &&
+        !e.metaKey
+      ) {
         samplePadRef.current?.triggerByKey(e.key.toLowerCase());
         return;
       }
 
-      if (e.key === " ") {
+      if (e.key === " " && !e.repeat) {
         e.preventDefault();
+        // If a button is focused (e.g. user just clicked PLAY), blur it.
+        // Otherwise browser synthesizes a click on keyup → double-trigger.
+        if (tag === "button" && typeof t.blur === "function") t.blur();
         ownRef?.current?.togglePlay?.();
         return;
       }

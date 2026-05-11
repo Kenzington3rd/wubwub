@@ -6,6 +6,13 @@
     <meta name="theme-color" content="#070a14" />
     <meta name="description" content="WAVECRAFT — free, local-only DJ mixing app. No accounts, no telemetry, nothing leaves your device." />
     <meta name="robots" content="noindex" />
+    <!-- Defense-in-depth: enforce the local-only promise at the browser level.
+         Note: 'unsafe-inline' for style-src is required by Vite-built CSS and
+         our inline styles; we tighten the rest. -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self'; media-src 'self' blob:; worker-src 'self' blob:; connect-src 'self' blob:; object-src 'none'; base-uri 'self';"
+    />
     <title>WAVECRAFT — Free Local DJ Mix Deck</title>
     <link rel="preload" href="/fonts/Audiowide-Regular.woff2" as="font" type="font/woff2" crossorigin />
     <link rel="preload" href="/fonts/Exo2-Variable.woff2" as="font" type="font/woff2" crossorigin />
