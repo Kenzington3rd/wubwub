@@ -1,0 +1,120 @@
+/* ──────────────────────────────────────────────────────────
+   WAVECRAFT — Global styles
+   Self-hosted fonts. No network calls at runtime.
+   ────────────────────────────────────────────────────────── */
+
+@font-face {
+  font-family: "Audiowide";
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+  src: url("/fonts/Audiowide-Regular.woff2") format("woff2");
+}
+
+/* Exo 2 is shipped as a variable font — one file covers weights 100–900. */
+@font-face {
+  font-family: "Exo 2";
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url("/fonts/Exo2-Variable.woff2") format("woff2-variations"),
+       url("/fonts/Exo2-Variable.woff2") format("woff2");
+}
+
+/* Resets */
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  background: #070a14;
+  color: #ccd6f6;
+  font-family: "Exo 2", system-ui, -apple-system, sans-serif;
+  scrollbar-width: thin;
+  scrollbar-color: #1e2440 transparent;
+  -webkit-font-smoothing: antialiased;
+}
+
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-thumb {
+  background: #1e2440;
+  border-radius: 3px;
+}
+
+/* Range inputs (horizontal default) */
+input[type="range"] {
+  background: transparent;
+  -webkit-appearance: none;
+  appearance: none;
+}
+input[type="range"]::-webkit-slider-runnable-track {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  height: 4px;
+}
+input[type="range"]::-moz-range-track {
+  background: rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  height: 4px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-top: -5px;
+  cursor: pointer;
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: currentColor;
+  border: none;
+  cursor: pointer;
+}
+
+/* Keyframes from the prototype */
+@keyframes pulse {
+  from { transform: scale(1); }
+  to { transform: scale(1.02); }
+}
+
+@keyframes float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-4px); }
+}
+
+@keyframes glowPulse {
+  0%, 100% { box-shadow: 0 0 20px rgba(0, 245, 212, 0.1); }
+  50% { box-shadow: 0 0 40px rgba(0, 245, 212, 0.2); }
+}
+
+/* Beat indicator — opacity pulse, duration set inline based on BPM */
+@keyframes beatPulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+/* Mobile responsive — stack decks vertically, swap crossfader orientation. */
+@media (max-width: 720px) {
+  .wc-deck-row {
+    flex-direction: column !important;
+  }
+  .wc-crossfader-column {
+    flex-direction: row !important;
+    width: 100% !important;
+    min-height: 56px;
+    justify-content: center;
+    padding: 4px 8px !important;
+  }
+  .wc-crossfader-column .wc-crossfader-slider {
+    flex: 1;
+  }
+}
