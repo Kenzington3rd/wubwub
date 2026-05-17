@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 import { SAMPLE_PAD_KEYS } from "../data.js";
+import Icon from "./Icon.jsx";
 
 const PAD_COUNT = 8;
 
@@ -179,15 +180,16 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, en
                   onClick={() => clearPad(i)}
                   disabled={!loaded}
                   title="Clear pad"
+                  aria-label={`Clear sample pad ${i + 1}`}
                   style={{
                     background: "transparent",
                     border: "none",
-                    color: "#4a5580",
                     cursor: loaded ? "pointer" : "not-allowed",
-                    fontSize: 12,
+                    display: "flex",
+                    alignItems: "center",
                   }}
                 >
-                  ✕
+                  <Icon name="close" size={12} color="#4a5580" />
                 </button>
               </div>
               <input

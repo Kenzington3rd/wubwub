@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { CAMELOT_WHEEL, GENRE_BPM, TIPS, KEYBOARD_HINTS } from "../data.js";
+import Icon from "./Icon.jsx";
 
 export default function TheoryPanel() {
   const [activeTab, setActiveTab] = useState("theory");
@@ -20,32 +21,40 @@ export default function TheoryPanel() {
     >
       <div style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
         {[
-          { id: "theory", label: "🎵 Harmonic Mixing" },
-          { id: "bpm", label: "⚡ Genre BPM Guide" },
-          { id: "tips", label: "💡 DJ Tips" },
-          { id: "keys", label: "⌨ Shortcuts" },
-        ].map((tab) => (
-          <button
-            key={tab.id}
-            onClick={() => setActiveTab(tab.id)}
-            style={{
-              flex: 1,
-              padding: "10px 8px",
-              border: "none",
-              cursor: "pointer",
-              fontFamily: "'Exo 2', sans-serif",
-              fontSize: 11,
-              letterSpacing: 1,
-              background: activeTab === tab.id ? "rgba(0,245,212,0.08)" : "transparent",
-              color: activeTab === tab.id ? "#00f5d4" : "#4a5580",
-              borderBottom:
-                activeTab === tab.id ? "2px solid #00f5d4" : "2px solid transparent",
-              transition: "all 0.2s",
-            }}
-          >
-            {tab.label}
-          </button>
-        ))}
+          { id: "theory", icon: "music", label: "Harmonic Mixing" },
+          { id: "bpm", icon: "bolt", label: "Genre BPM Guide" },
+          { id: "tips", icon: "bulb", label: "DJ Tips" },
+          { id: "keys", icon: "keyboard", label: "Shortcuts" },
+        ].map((tab) => {
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              aria-pressed={active}
+              style={{
+                flex: 1,
+                padding: "10px 8px",
+                border: "none",
+                cursor: "pointer",
+                fontFamily: "'Exo 2', sans-serif",
+                fontSize: 11,
+                letterSpacing: 1,
+                background: active ? "rgba(0,245,212,0.08)" : "transparent",
+                color: active ? "#00f5d4" : "#4a5580",
+                borderBottom: active ? "2px solid #00f5d4" : "2px solid transparent",
+                transition: "all 0.2s",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+              }}
+            >
+              <Icon name={tab.icon} size={13} color={active ? "#00f5d4" : "#4a5580"} />
+              {tab.label}
+            </button>
+          );
+        })}
       </div>
 
       <div style={{ padding: 16 }}>

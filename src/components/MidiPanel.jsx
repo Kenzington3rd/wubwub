@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { MIDI_SUPPORTED, MIDI_TARGETS } from "../midi/midiMap.js";
+import Icon from "./Icon.jsx";
 
 export default function MidiPanel({
   enabled,
@@ -39,7 +40,15 @@ export default function MidiPanel({
           gap: 8,
         }}
       >
-        <span>{open ? "▼" : "▶"}</span>
+        <span
+          style={{
+            display: "flex",
+            transform: open ? "rotate(90deg)" : "none",
+            transition: "transform 0.15s",
+          }}
+        >
+          <Icon name="chevron" size={12} color="#a78bfa" />
+        </span>
         <span>MIDI</span>
         <span style={{ fontSize: 10, color: "#4a5580", letterSpacing: 0, textTransform: "none" }}>
           {!MIDI_SUPPORTED
@@ -73,7 +82,7 @@ export default function MidiPanel({
               >
                 {enabled ? "Disable MIDI" : "Enable MIDI"}
               </button>
-              {error && <span style={{ fontSize: 11, color: "#f472b6" }}>{error}</span>}
+              {error && <span style={{ fontSize: 11, color: "#f87171" }}>{error}</span>}
             </div>
           )}
           {MIDI_SUPPORTED && enabled && (
@@ -131,17 +140,18 @@ export default function MidiPanel({
                       <button
                         onClick={() => onClearMapping(t.id)}
                         title="Remove mapping"
+                        aria-label={`Remove MIDI mapping for ${t.label}`}
                         style={{
                           background: "transparent",
                           border: "1px solid rgba(255,255,255,0.1)",
-                          color: "#4a5580",
                           borderRadius: 4,
-                          fontSize: 10,
-                          padding: "1px 6px",
+                          padding: "3px 5px",
                           cursor: "pointer",
+                          display: "flex",
+                          alignItems: "center",
                         }}
                       >
-                        ✕
+                        <Icon name="close" size={10} color="#4a5580" />
                       </button>
                     )}
                   </div>

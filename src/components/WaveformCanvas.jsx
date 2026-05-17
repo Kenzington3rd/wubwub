@@ -9,7 +9,6 @@ import { useCallback, useEffect, useRef } from "react";
 export default function WaveformCanvas({
   chainRef,
   color,
-  isPlaying,
   isLooping,
   currentTimeRef,
   durationRef,
@@ -133,7 +132,7 @@ export default function WaveformCanvas({
     };
     draw();
     return () => cancelAnimationFrame(animRef.current);
-  }, [chainRef, color, isPlaying, currentTimeRef, durationRef, cuesRef]);
+  }, [chainRef, color, currentTimeRef, durationRef, cuesRef]);
 
   const handlePointer = useCallback(
     (e) => {

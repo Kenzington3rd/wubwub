@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Slider from "./Slider.jsx";
+import Icon from "./Icon.jsx";
 import { LOOPER_BAR_OPTIONS } from "../data.js";
 
 const SLOT_COUNT = 4;
@@ -33,7 +34,9 @@ export default function Looper({
   const bufferRefs = useRef(Array(SLOT_COUNT).fill(null));
   const sourceRefs = useRef(Array(SLOT_COUNT).fill(null));
   const gainRefs = useRef(Array(SLOT_COUNT).fill(null));
-  const pendingCaptureRef = useRef(null);
+  // State (not a ref) so the Capture button's disabled state re-renders while
+  // a capture is in flight.
+  const [pendingSlot, setPendingSlot] = useState(null);
 
   // Ensure a gain node per slot exists and is wired to the output.
   const ensureGain = useCallback(
@@ -73,7 +76,7 @@ export default function Looper({
       setSlots((s) =>
         s.map((row, i) => (i === slot ? { ...row, hasBuffer: true } : row))
       );
-      pendingCaptureRef.current = null;
+      setPendingSlot(null);
     };
     node.port.addEventListener("message", onMessage);
     node.port.start();
@@ -82,11 +85,11 @@ export default function Looper({
 
   const capture = (slot) => {
     const node = workletNodeRef.current;
-    if (!node) return;
+    if (!node || pendingSlot === slot) return;
     const bars = slots[slot].bars;
     const bpm = effectiveBpmRef.current || DEFAULT_BPM;
     const seconds = (bars * 4 * 60) / Math.max(40, bpm);
-    pendingCaptureRef.current = slot;
+    setPendingSlot(slot);
     node.port.postMessage({ type: "capture", slot, seconds });
   };
 
@@ -250,7 +253,12 @@ export default function Looper({
               <div style={{ display: "flex", gap: 4 }}>
                 <button
                   onClick={() => capture(i)}
-                  disabled={!workletReady || pendingCaptureRef.current === i}
+                  disabled={!workletReady || pendingSlot === i}
+                  title={
+                    workletReady
+                      ? `Capture ${slot.bars} bars into loop ${i + 1}`
+                      : "Audio worklet still initializing"
+                  }
                   style={{
                     flex: 1,
                     background: `${color}22`,
@@ -259,46 +267,56 @@ export default function Looper({
                     borderRadius: 6,
                     fontSize: 10,
                     padding: "4px 6px",
-                    cursor: workletReady ? "pointer" : "not-allowed",
+                    cursor: workletReady && pendingSlot !== i ? "pointer" : "not-allowed",
                     fontFamily: "'Exo 2', sans-serif",
                     fontWeight: 600,
                     textTransform: "uppercase",
                     letterSpacing: 1,
+                    opacity: workletReady && pendingSlot !== i ? 1 : 0.4,
                   }}
                 >
-                  Capture
+                  {pendingSlot === i ? "…" : "Capture"}
                 </button>
                 <button
                   onClick={() => togglePlay(i)}
                   disabled={!slot.hasBuffer}
+                  title={slot.isPlaying ? "Stop loop" : "Play loop"}
+                  aria-label={`${slot.isPlaying ? "Stop" : "Play"} loop ${i + 1}`}
                   style={{
                     flex: 1,
                     background: slot.isPlaying ? `${color}44` : "rgba(255,255,255,0.05)",
                     border: `1px solid ${slot.isPlaying ? color : "rgba(255,255,255,0.1)"}`,
-                    color: slot.isPlaying ? color : "#8892b0",
                     borderRadius: 6,
-                    fontSize: 12,
                     padding: "4px 6px",
                     cursor: slot.hasBuffer ? "pointer" : "not-allowed",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                 >
-                  {slot.isPlaying ? "■" : "▶"}
+                  <Icon
+                    name={slot.isPlaying ? "stop" : "play"}
+                    size={13}
+                    color={slot.isPlaying ? color : "#8892b0"}
+                  />
                 </button>
                 <button
                   onClick={() => clearSlot(i)}
                   disabled={!slot.hasBuffer}
                   title="Clear loop"
+                  aria-label={`Clear loop ${i + 1}`}
                   style={{
                     background: "transparent",
                     border: "1px solid rgba(255,255,255,0.08)",
-                    color: "#4a5580",
                     borderRadius: 6,
-                    fontSize: 11,
                     padding: "4px 6px",
                     cursor: slot.hasBuffer ? "pointer" : "not-allowed",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
                   }}
                 >
-                  ✕
+                  <Icon name="close" size={12} color="#4a5580" />
                 </button>
               </div>
               <Slider

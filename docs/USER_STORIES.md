@@ -106,6 +106,8 @@ Persona: bedroom DJ who mixes local files in the browser. Sometimes streams, som
 | US53 | `clamp` helper bounds values correctly | U | `test/effects.test.js` |
 | US54 | `extensionForMime` returns sensible defaults | U | `test/recorder.test.js` |
 | US55 | `buildDeckChain` wires nodes per the documented signal chain | I | `test/chain.test.js` |
+| US56 | `Icon` component renders the hand-drawn SVG set (no emoji, no network) | C | `test/Icon.test.jsx` |
+| US57 | The UI contains zero emoji — all glyphs come from `<Icon>` (BRANDING_GUIDE §5) | U | `test/Icon.test.jsx` |
 
 ## Privacy / policy promises (D — not executable but worth listing)
 

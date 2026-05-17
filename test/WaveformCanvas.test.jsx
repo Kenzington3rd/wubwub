@@ -21,7 +21,6 @@ function Harness({ onSeek, onMount, isLooping = false }) {
     <WaveformCanvas
       chainRef={chainRef}
       color="#00f5d4"
-      isPlaying={false}
       isLooping={isLooping}
       currentTimeRef={currentTimeRef}
       durationRef={durationRef}

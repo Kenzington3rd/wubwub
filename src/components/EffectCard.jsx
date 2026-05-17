@@ -27,6 +27,8 @@ export default function EffectCard({ title, color, settings, onChange, params })
     >
       <button
         onClick={() => setOn(!settings.on)}
+        aria-pressed={settings.on}
+        aria-label={`${title} effect ${settings.on ? "on" : "off"}`}
         style={{
           background: settings.on ? `${color}33` : "rgba(255,255,255,0.04)",
           border: `1px solid ${settings.on ? color : "rgba(255,255,255,0.08)"}`,

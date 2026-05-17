@@ -9,6 +9,7 @@ import {
 import Knob from "./Knob.jsx";
 import Slider from "./Slider.jsx";
 import WaveformCanvas from "./WaveformCanvas.jsx";
+import Icon from "./Icon.jsx";
 import EffectCard from "./EffectCard.jsx";
 import CuePanel from "./CuePanel.jsx";
 import BassDropMenu from "./BassDropMenu.jsx";
@@ -89,6 +90,11 @@ const Deck = forwardRef(function Deck(
   const bassDropTimeoutRef = useRef(null);
   const wobbleNodesRef = useRef(null);
   const reverbSizeDebounceRef = useRef(null);
+  const filterFreqRef = useRef(20000);
+  // Synchronous re-entry guard for auto-detect. `autoBpmRunning` state lags a
+  // render, so a programmatic / MIDI double-trigger could start two detections
+  // before the disabled attribute updates.
+  const autoDetectRunningRef = useRef(false);
 
   // Keep refs in sync
   useEffect(() => { speedRef.current = speed; }, [speed]);
@@ -100,6 +106,7 @@ const Deck = forwardRef(function Deck(
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
   useEffect(() => { cuesRef.current = cues; }, [cues]);
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
+  useEffect(() => { filterFreqRef.current = filterFreq; }, [filterFreq]);
 
   // ─── Audio graph construction ───
   const buildChain = useCallback(async () => {
@@ -431,8 +438,9 @@ const Deck = forwardRef(function Deck(
           osc.disconnect();
         } catch {}
         wobbleNodesRef.current = null;
-        // Restore filter sweep value
-        chain.filter.frequency.setValueAtTime(filterFreq, ctx.currentTime);
+        // Restore the filter to the user's *current* slider value (read via
+        // ref, not the closure, in case it moved during the wobble).
+        chain.filter.frequency.setValueAtTime(filterFreqRef.current, ctx.currentTime);
       };
     }
 
@@ -441,7 +449,7 @@ const Deck = forwardRef(function Deck(
       () => setBassDropActive(false),
       (preset.buildSec + preset.decaySec) * 1000
     );
-  }, [audioCtxRef, bassDropPreset, eq.low, filterFreq]);
+  }, [audioCtxRef, bassDropPreset, eq.low]);
 
   // ─── BPM ───
   const tapTimesRef = useRef([]);
@@ -461,7 +469,8 @@ const Deck = forwardRef(function Deck(
   };
 
   const runAutoBpm = async () => {
-    if (!bufferRef.current || autoBpmRunning) return;
+    if (!bufferRef.current || autoDetectRunningRef.current) return;
+    autoDetectRunningRef.current = true;
     setAutoBpmRunning(true);
     // Run BPM + key detection in parallel — both read the same buffer offline.
     try {
@@ -479,6 +488,7 @@ const Deck = forwardRef(function Deck(
     } catch (err) {
       console.warn("auto-detect failed", err);
     } finally {
+      autoDetectRunningRef.current = false;
       setAutoBpmRunning(false);
     }
   };
@@ -757,17 +767,28 @@ const Deck = forwardRef(function Deck(
           fontSize: 12,
           cursor: "pointer",
           fontFamily: "'Exo 2', sans-serif",
-          textAlign: deckSide,
+          display: "flex",
+          alignItems: "center",
+          justifyContent: deckSide === "left" ? "flex-start" : "flex-end",
+          gap: 8,
         }}
       >
-        {fileName ? `♪ ${fileName}` : `Drop audio here or click to load → Deck ${id}`}
+        {fileName ? (
+          <>
+            <Icon name="music" size={13} color={color} />
+            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {fileName}
+            </span>
+          </>
+        ) : (
+          `Drop audio here or click to load — Deck ${id}`
+        )}
       </button>
 
       {/* Waveform */}
       <WaveformCanvas
         chainRef={chainRef}
         color={color}
-        isPlaying={isPlaying}
         isLooping={isLooping}
         currentTimeRef={currentTimeRef}
         durationRef={durationRef}
@@ -793,10 +814,10 @@ const Deck = forwardRef(function Deck(
       {/* Transport */}
       <div style={{ display: "flex", justifyContent: "center", gap: 6 }} role="group" aria-label={`Deck ${id} transport`}>
         {[
-          { icon: "▶", action: play, active: isPlaying, label: "Play" },
-          { icon: "⏸", action: pause, active: false, label: "Pause" },
-          { icon: "⏹", action: stop, active: false, label: "Stop" },
-          { icon: "🔁", action: () => setIsLooping((v) => !v), active: isLooping, label: "Loop" },
+          { icon: "play", action: play, active: isPlaying, label: "Play" },
+          { icon: "pause", action: pause, active: false, label: "Pause" },
+          { icon: "stop", action: stop, active: false, label: "Stop" },
+          { icon: "loop", action: () => setIsLooping((v) => !v), active: isLooping, label: "Loop" },
         ].map((btn) => (
           <button
             key={btn.label}
@@ -810,13 +831,14 @@ const Deck = forwardRef(function Deck(
               borderRadius: 10,
               border: "none",
               background: btn.active ? `${color}33` : "rgba(255,255,255,0.05)",
-              color: btn.active ? color : "#8892b0",
-              fontSize: 16,
               cursor: "pointer",
               boxShadow: btn.active ? `0 0 12px ${color}33` : "none",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
             }}
           >
-            {btn.icon}
+            <Icon name={btn.icon} size={18} color={btn.active ? color : "#8892b0"} />
           </button>
         ))}
       </div>
@@ -904,7 +926,7 @@ const Deck = forwardRef(function Deck(
           style={{
             flex: 1,
             background: bassDropActive
-              ? `linear-gradient(135deg, ${color}, #7b2fbe)`
+              ? `linear-gradient(135deg, ${color}, ${color}88)`
               : `linear-gradient(135deg, ${color}22, ${color}11)`,
             border: `1px solid ${bassDropActive ? color : color + "44"}`,
             borderRadius: 10,
@@ -918,9 +940,18 @@ const Deck = forwardRef(function Deck(
             boxShadow: bassDropActive ? `0 0 30px ${color}66` : "none",
             animation: bassDropActive ? "pulse 0.15s infinite alternate" : "none",
             opacity: fileName ? 1 : 0.4,
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            gap: 8,
           }}
         >
-          {bassDropActive ? "⚡ DROPPING ⚡" : "🔊 BASS DROP"}
+          <Icon
+            name={bassDropActive ? "bolt" : "speaker"}
+            size={15}
+            color={bassDropActive ? "#0a0e1a" : color}
+          />
+          {bassDropActive ? "DROPPING" : "BASS DROP"}
         </button>
         <BassDropMenu preset={bassDropPreset} onChange={setBassDropPreset} color={color} />
       </div>

@@ -447,7 +447,7 @@ export default function App() {
           bottom: 0,
           pointerEvents: "none",
           background:
-            "radial-gradient(ellipse at 20% 50%, rgba(0,245,212,0.03) 0%, transparent 60%), radial-gradient(ellipse at 80% 50%, rgba(123,47,190,0.03) 0%, transparent 60%)",
+            "radial-gradient(ellipse at 20% 50%, rgba(0,245,212,0.03) 0%, transparent 60%), radial-gradient(ellipse at 80% 50%, rgba(167,139,250,0.03) 0%, transparent 60%)",
         }}
       />
 
@@ -475,7 +475,7 @@ export default function App() {
           <p
             style={{
               fontSize: 11,
-              color: "#4a5580",
+              color: "#8892b0",
               letterSpacing: 4,
               marginTop: 4,
               textTransform: "uppercase",
@@ -521,6 +521,8 @@ export default function App() {
             isMobile={isMobile}
             curve={crossfadeCurve}
             onCurveChange={setCrossfadeCurve}
+            deckAColor={deckAColor}
+            deckBColor={deckBColor}
           />
 
           <Deck

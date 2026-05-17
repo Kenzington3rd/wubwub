@@ -1,3 +1,5 @@
+import Icon from "./Icon.jsx";
+
 function formatTime(s) {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
@@ -76,14 +78,14 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
             style={{
               background: "transparent",
               border: "none",
-              color: "currentColor",
-              opacity: 0.5,
+              opacity: 0.6,
               cursor: "pointer",
-              fontSize: 11,
               padding: 0,
+              display: "flex",
+              alignItems: "center",
             }}
           >
-            ×
+            <Icon name="close" size={11} color="currentColor" />
           </button>
         </span>
       ))}
