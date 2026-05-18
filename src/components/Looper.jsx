@@ -38,6 +38,9 @@ export default function Looper({
   // State (not a ref) so the Capture button's disabled state re-renders while
   // a capture is in flight.
   const [pendingSlot, setPendingSlot] = useState(null);
+  // D6 — which slot's bars <select> is currently hovered (-1 = none). Native
+  // selects can't carry a CSS :hover from inline styles.
+  const [barsHover, setBarsHover] = useState(-1);
 
   // Ensure a gain node per slot exists and is wired to the output.
   const ensureGain = useCallback(
@@ -246,13 +249,27 @@ export default function Looper({
                 <select
                   value={slot.bars}
                   onChange={(e) => setSlot(i, { bars: parseInt(e.target.value, 10) })}
+                  onPointerEnter={() => setBarsHover(i)}
+                  onPointerLeave={() => setBarsHover((h) => (h === i ? -1 : h))}
+                  aria-label={`Loop ${i + 1} bar count`}
                   style={{
-                    background: "rgba(15,18,35,0.6)",
-                    border: "1px solid rgba(255,255,255,0.1)",
+                    background:
+                      barsHover === i
+                        ? "rgba(255,255,255,0.1)"
+                        : "rgba(15,18,35,0.6)",
+                    border: `1px solid rgba(255,255,255,${
+                      barsHover === i ? "0.25" : "0.1"
+                    })`,
                     borderRadius: 4,
                     color: "#8892b0",
                     fontSize: 10,
-                    padding: "1px 4px",
+                    // D6 — the slot header is a tight inline row next to the
+                    // L# label; 30px is the largest height that pairs cleanly
+                    // with the label without bloating the slot card header.
+                    minHeight: 30,
+                    padding: "1px 6px",
+                    cursor: "pointer",
+                    transition: "background 0.15s ease, border-color 0.15s ease",
                   }}
                 >
                   {LOOPER_BAR_OPTIONS.map((b) => (

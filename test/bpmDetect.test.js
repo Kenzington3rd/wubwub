@@ -69,6 +69,19 @@ describe("detectBpm — US40", () => {
     expect(Number.isFinite(bpm)).toBe(true);
   });
 
+  it("@us US40: a steady 120 BPM signal detects ~120, not double-time ~240", async () => {
+    // A3 — the autocorrelation must normalize each lag by its pair count
+    // (mean, not raw sum). The raw sum is biased toward short lags because
+    // `cap = downLen - lag` shrinks as lag grows, which pulls the detected
+    // BPM toward the double-time value. With the mean fix a clean 120-BPM
+    // kick pattern resolves at the fundamental, not its 2× harmonic.
+    const buf = buildKickBuffer(120, 16);
+    const { bpm } = await detectBpm(buf);
+    expect(Math.abs(bpm - 120)).toBeLessThanOrEqual(2);
+    // Explicitly: it must NOT have locked onto the double-time peak.
+    expect(bpm).toBeLessThan(200);
+  });
+
   it("@us US40: a buffer too short for the autocorrelation lag returns a finite default, confidence 0", async () => {
     // A tiny buffer cannot hold even one minLag-spaced pair in the ~200 Hz
     // envelope — detectBpm must return an explicit finite default, never

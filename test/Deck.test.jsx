@@ -460,6 +460,54 @@ describe("Deck — integration tests across many user stories", () => {
     expect(api.deckRef.current.isReady()).toBe(false);
   });
 
+  it("@us US40: a stale auto-detect bails after the buffer is swapped mid-detection (Q2)", async () => {
+    // Q2 — runAutoBpm captures bufferRef.current at detection start. If a new
+    // track is loaded (e.g. a crate quick-load) while detection is in flight,
+    // the stale result must NOT apply — even its key — to the new track.
+    const sr = 11025;
+    const len = sr * 12;
+    // Buffer 1: a loud C-major triad → keyDetect would resolve 8B.
+    const cmaj = new MockAudioBuffer(1, len, sr);
+    const cData = cmaj.getChannelData(0);
+    for (let i = 0; i < len; i++) {
+      const t = i / sr;
+      let s = 0;
+      for (const f of [261.63, 329.63, 392.0]) s += Math.sin(2 * Math.PI * f * t);
+      cData[i] = s / 3;
+    }
+    // Buffer 2: silence — the replacement track. keyDetect on it is low-conf.
+    const swapped = new MockAudioBuffer(1, sr * 3, sr);
+
+    let api;
+    const liftedKeys = [];
+    render(
+      <Harness
+        onMount={(a) => { api = a; }}
+        onKeyDetected={(k) => liftedKeys.push(k)}
+      />
+    );
+    // Load the C-major buffer onto the deck via the imperative loadBuffer.
+    await act(async () => {
+      await api.deckRef.current.loadBuffer(cmaj, "cmaj.mp3");
+    });
+    liftedKeys.length = 0; // discard the load-time null reset
+
+    const auto = screen.getByRole("button", { name: /Auto-detect BPM and key/i });
+    // Kick off auto-detect, then swap the buffer before detection resolves —
+    // all inside one act() so the swap lands during the in-flight Promise.all.
+    await act(async () => {
+      fireEvent.click(auto);
+      await api.deckRef.current.loadBuffer(swapped, "swapped.mp3");
+      // Let the stale detection's Promise.all settle.
+      await new Promise((r) => setTimeout(r, 0));
+    });
+
+    // The stale C-major detection must NOT have lifted 8B for the new track.
+    expect(liftedKeys).not.toContain("8B");
+    // The deck shows the new track, not a stale detected-key chip.
+    expect(screen.getByText("swapped.mp3")).toBeInTheDocument();
+  });
+
   it("@us US24: bass-drop re-entry guard — double-fire does not throw", async () => {
     // Load a buffer via drop so the deck chain is built and BASS DROP enables.
     const { container } = render(<Harness />);

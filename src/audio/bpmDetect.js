@@ -72,13 +72,23 @@ export async function detectBpm(audioBuffer, { minBpm = 70, maxBpm = 180 } = {})
     let sum = 0;
     const cap = downLen - lag;
     for (let i = 0; i < cap; i++) sum += env[i] * env[i + lag];
-    if (sum > bestCorr) {
-      bestCorr = sum;
+    // Normalize by the pair count: `cap` shrinks as `lag` grows, so the raw
+    // sum is systematically larger for short lags (fast BPM) — a double-time
+    // bias. Comparing the MEAN correlation (sum / cap) instead removes that
+    // bias so a steady 120-BPM signal detects ~120, not ~240.
+    const corr = cap > 0 ? sum / cap : 0;
+    if (corr > bestCorr) {
+      bestCorr = corr;
       bestLag = lag;
     }
   }
 
   const bpm = Math.round((60 / bestLag) * targetSr);
-  const confidence = energy > 0 ? Math.max(0, Math.min(1, bestCorr / energy)) : 0;
+  // Confidence: the best mean correlation relative to the signal's mean
+  // energy (energy / downLen), keeping the [0,1] semantics intact after the
+  // switch from raw sum to mean.
+  const meanEnergy = energy / Math.max(1, downLen);
+  const confidence =
+    meanEnergy > 0 ? Math.max(0, Math.min(1, bestCorr / meanEnergy)) : 0;
   return { bpm, confidence };
 }

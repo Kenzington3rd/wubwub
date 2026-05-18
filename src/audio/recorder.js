@@ -35,6 +35,13 @@ export function createMasterRecorder(audioContext, sourceNode) {
     if (e.data && e.data.size > 0) chunks.push(e.data);
   };
 
+  // Q1 — dispose must disconnect the MediaStreamDestination tap exactly once.
+  // If the component unmounts while the stop path is mid-await, both the
+  // unmount cleanup and the stop path call dispose() on the same recorder;
+  // this latch makes the second call a no-op so the tap is never
+  // double-disconnected (and a partial first call can't leave it leaked).
+  let disposed = false;
+
   return {
     mime,
     start: () => {
@@ -52,6 +59,8 @@ export function createMasterRecorder(audioContext, sourceNode) {
       }),
     state: () => rec.state,
     dispose: () => {
+      if (disposed) return;
+      disposed = true;
       try {
         if (rec.state !== "inactive") rec.stop();
       } catch {}

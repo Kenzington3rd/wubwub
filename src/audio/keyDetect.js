@@ -2,9 +2,13 @@
 //
 // Algorithm:
 //   1. Take the first ~30 s of the track at channel 0 (skip the intro hash).
-//   2. For each of 12 pitch classes × 3 octaves (C3..B5), run the Goertzel
-//      single-frequency DFT to get the energy at that pitch.
-//   3. Sum across octaves per pitch class → 12-dim chroma vector. Normalize.
+//   2. Window the signal into overlapping frames (4096 samples, 50% hop). For
+//      each frame, for each of 12 pitch classes × 3 octaves (C3..B5), run the
+//      Goertzel single-frequency DFT. Framing keeps melodic content alive: a
+//      single pass over the whole ~25 s buffer is dominated by whatever pitch
+//      sustains longest, washing out the melody.
+//   3. Accumulate energy per pitch class across all frames → 12-dim chroma
+//      vector. Normalize.
 //   4. Correlate against 24 Krumhansl-Schmuckler key profiles (12 major +
 //      12 minor). Highest correlation = detected key.
 //   5. Map to Camelot. Return { key, camelot, confidence } where confidence
@@ -98,14 +102,33 @@ export async function detectKey(audioBuffer, { sampleSec = 30 } = {}) {
 
   // C3 = 130.81 Hz. Take 3 octaves: C3..B5.
   const C3 = 130.81278265;
-  const chroma = new Float32Array(12);
+  // Precompute the 36 target frequencies (12 pitch classes × 3 octaves).
+  const freqs = [];
   for (let p = 0; p < 12; p++) {
     const baseFreq = C3 * Math.pow(2, p / 12);
-    let energy = 0;
     for (let oct = 0; oct < 3; oct++) {
-      energy += goertzelEnergy(samples, targetSr, baseFreq * Math.pow(2, oct));
+      freqs.push({ p, freq: baseFreq * Math.pow(2, oct) });
     }
-    chroma[p] = energy;
+  }
+
+  // Window into overlapping frames and run the Goertzel per frame, then
+  // accumulate per pitch class. A single whole-buffer pass would let a long
+  // sustained tone dominate; framing samples the melodic content evenly.
+  // 4096-sample frame, 50% hop. A buffer shorter than one frame is analysed
+  // as a single frame (the synthetic-tone tests use steady-state buffers, so
+  // per-frame energy is stable and a pure tone's detected key is unchanged).
+  const FRAME = 4096;
+  const HOP = FRAME / 2;
+  const chroma = new Float32Array(12);
+  const N = samples.length;
+  // Last valid frame start: the highest HOP multiple that still leaves a full
+  // frame. For a sub-frame buffer this is 0 — one short frame covers it all.
+  const lastStart = N <= FRAME ? 0 : N - FRAME;
+  for (let start = 0; start <= lastStart; start += HOP) {
+    const frame = samples.subarray(start, Math.min(start + FRAME, N));
+    for (let f = 0; f < freqs.length; f++) {
+      chroma[freqs[f].p] += goertzelEnergy(frame, targetSr, freqs[f].freq);
+    }
   }
 
   // Normalize chroma (so absolute energy doesn't dominate correlation).

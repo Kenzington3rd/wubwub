@@ -2,6 +2,12 @@ import { useState } from "react";
 import { CAMELOT_WHEEL, GENRE_BPM, TIPS, KEYBOARD_HINTS } from "../data.js";
 import Icon from "./Icon.jsx";
 
+// Fixed identity accent for the TheoryPanel — orange, the registered shared-
+// panel accent distinct from Looper-purple, SamplePad-cyan and Crate-green
+// (DESIGN_GUIDE §4). Used for HEADING / tab text and the active-tab state
+// only; the panel body stays neutral slate.
+const PANEL_ACCENT = "#fb923c";
+
 export default function TheoryPanel({
   deckKeys = { A: null, B: null },
   focusedDeck = null,
@@ -65,9 +71,11 @@ export default function TheoryPanel({
                 fontFamily: "'Exo 2', sans-serif",
                 fontSize: 11,
                 letterSpacing: 1,
-                background: active ? "rgba(0,245,212,0.08)" : "transparent",
-                color: active ? "#00f5d4" : "#8892b0",
-                borderBottom: active ? "2px solid #00f5d4" : "2px solid transparent",
+                background: active ? `${PANEL_ACCENT}14` : "transparent",
+                color: active ? PANEL_ACCENT : "#8892b0",
+                borderBottom: active
+                  ? `2px solid ${PANEL_ACCENT}`
+                  : "2px solid transparent",
                 transition: "all 0.2s",
                 display: "flex",
                 alignItems: "center",
@@ -75,7 +83,7 @@ export default function TheoryPanel({
                 gap: 6,
               }}
             >
-              <Icon name={tab.icon} size={13} color={active ? "#00f5d4" : "#8892b0"} />
+              <Icon name={tab.icon} size={13} color={active ? PANEL_ACCENT : "#8892b0"} />
               {tab.label}
             </button>
           );
@@ -130,19 +138,19 @@ export default function TheoryPanel({
                 const isHighlighted =
                   isSelected || isLiveKey || isCompat || isLiveCompat;
                 if (isSelected) {
-                  borderColor = "#00f5d4";
-                  background = "#00f5d422";
-                  color = "#00f5d4";
-                  boxShadow = "0 0 10px rgba(0,245,212,0.2)";
+                  borderColor = PANEL_ACCENT;
+                  background = `${PANEL_ACCENT}22`;
+                  color = PANEL_ACCENT;
+                  boxShadow = `0 0 10px ${PANEL_ACCENT}33`;
                 } else if (isLiveKey) {
                   borderColor = liveColor;
                   background = `${liveColor}26`;
                   color = liveColor;
                   boxShadow = `0 0 10px ${liveColor}3a`;
                 } else if (isCompat) {
-                  borderColor = "#00f5d466";
-                  background = "#00f5d40e";
-                  color = "#00f5d4cc";
+                  borderColor = `${PANEL_ACCENT}66`;
+                  background = `${PANEL_ACCENT}0e`;
+                  color = `${PANEL_ACCENT}cc`;
                 } else if (isLiveCompat) {
                   borderColor = `${liveColor}66`;
                   background = `${liveColor}12`;
@@ -188,12 +196,12 @@ export default function TheoryPanel({
               <div
                 style={{
                   padding: 12,
-                  background: "rgba(0,245,212,0.06)",
+                  background: `${PANEL_ACCENT}10`,
                   borderRadius: 10,
-                  border: "1px solid rgba(0,245,212,0.15)",
+                  border: `1px solid ${PANEL_ACCENT}26`,
                 }}
               >
-                <span style={{ fontSize: 12, color: "#00f5d4", fontWeight: 700 }}>
+                <span style={{ fontSize: 12, color: PANEL_ACCENT, fontWeight: 700 }}>
                   {selectedKeyData.camelot} — {selectedKeyData.key}
                 </span>
                 <p style={{ fontSize: 11, color: "#8892b0", margin: "6px 0 0" }}>
@@ -275,11 +283,11 @@ export default function TheoryPanel({
             <button
               onClick={() => setTipIdx((i) => (i + 1) % TIPS.length)}
               style={{
-                background: "rgba(0,245,212,0.1)",
-                border: "1px solid rgba(0,245,212,0.2)",
+                background: `${PANEL_ACCENT}1a`,
+                border: `1px solid ${PANEL_ACCENT}33`,
                 borderRadius: 8,
                 padding: "6px 16px",
-                color: "#00f5d4",
+                color: PANEL_ACCENT,
                 fontSize: 11,
                 cursor: "pointer",
                 fontFamily: "'Exo 2', sans-serif",
@@ -289,7 +297,7 @@ export default function TheoryPanel({
               }}
             >
               Next Tip
-              <Icon name="chevron" size={12} color="#00f5d4" />
+              <Icon name="chevron" size={12} color={PANEL_ACCENT} />
             </button>
           </div>
         )}

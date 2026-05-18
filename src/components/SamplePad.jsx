@@ -166,10 +166,18 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
                 const file = e.dataTransfer.files?.[0];
                 if (file) loadPad(i, file);
               }}
+              // The SamplePad heading carries the panel's cyan identity accent,
+              // but the pad BODY is neutral slate — matching the Crate panel's
+              // entry chrome (DESIGN_GUIDE §4). The loaded state reads as a
+              // brighter neutral tint, not a cyan tint.
               style={{
                 padding: 10,
-                background: loaded ? "rgba(0,245,212,0.08)" : "rgba(255,255,255,0.02)",
-                border: `1px dashed ${loaded ? "rgba(0,245,212,0.4)" : "rgba(255,255,255,0.08)"}`,
+                background: loaded
+                  ? "rgba(255,255,255,0.06)"
+                  : "rgba(255,255,255,0.02)",
+                border: `1px dashed ${
+                  loaded ? "rgba(255,255,255,0.2)" : "rgba(255,255,255,0.08)"
+                }`,
                 borderRadius: 10,
                 display: "flex",
                 flexDirection: "column",
@@ -180,7 +188,7 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
                 <kbd
                   style={{
                     background: "rgba(255,255,255,0.08)",
-                    color: "#a78bfa",
+                    color: "#8892b0",
                     border: "1px solid rgba(255,255,255,0.12)",
                     padding: "0 6px",
                     borderRadius: 4,
@@ -233,10 +241,15 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
                 aria-label={
                   loaded ? `Play sample pad ${i + 1}` : `Load sample pad ${i + 1}`
                 }
+                // Neutral-slate body control — no cyan tint on the pad chrome.
                 style={{
-                  background: loaded ? "rgba(0,245,212,0.18)" : "rgba(255,255,255,0.04)",
-                  border: `1px solid ${loaded ? "rgba(0,245,212,0.5)" : "rgba(255,255,255,0.1)"}`,
-                  color: loaded ? "#00f5d4" : "#8892b0",
+                  background: loaded
+                    ? "rgba(255,255,255,0.1)"
+                    : "rgba(255,255,255,0.04)",
+                  border: `1px solid ${
+                    loaded ? "rgba(255,255,255,0.22)" : "rgba(255,255,255,0.1)"
+                  }`,
+                  color: loaded ? "#ccd6f6" : "#8892b0",
                   borderRadius: 8,
                   padding: "10px 8px",
                   cursor: "pointer",
@@ -257,7 +270,7 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
                 min={0}
                 max={1}
                 step={0.01}
-                color="#00f5d4"
+                color="#8892b0"
                 ariaLabel={`Pad ${i + 1} volume`}
               />
             </div>

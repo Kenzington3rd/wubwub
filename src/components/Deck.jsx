@@ -200,7 +200,9 @@ const Deck = forwardRef(function Deck(
     if (!chain || !ctx) return;
     clearTimeout(reverbSizeDebounceRef.current);
     reverbSizeDebounceRef.current = setTimeout(() => {
-      chain.reverbConv.buffer = buildReverbIR(ctx, effects.reverb.size, 3.0);
+      // A5 — decay omitted so it scales with SIZE: a larger IR genuinely
+      // sustains longer instead of decaying at the same fixed rate.
+      chain.reverbConv.buffer = buildReverbIR(ctx, effects.reverb.size);
     }, 200);
     return () => clearTimeout(reverbSizeDebounceRef.current);
   }, [effects.reverb.size, audioCtxRef, chainTick]);
@@ -466,10 +468,31 @@ const Deck = forwardRef(function Deck(
   // bendRef — it never touches the persisted `speed` state, so releasing the
   // button returns the deck to exactly the speed the user set on the slider.
   const applyBend = useCallback((offset) => {
-    bendRef.current = offset;
     const src = sourceRef.current;
     const ctx = audioCtxRef.current;
-    if (!src || !ctx) return;
+    if (!src || !ctx) {
+      bendRef.current = offset;
+      return;
+    }
+    // A2 — the play-position interval anchors elapsed time on
+    //   elapsed = (ctx.currentTime - startTimeRef) * speedRef.current
+    // which assumes the playbackRate equals the base `speed`. While a NUDGE
+    // bend is held the real rate is `speed + bend`, so the anchor must be
+    // recomputed whenever the effective rate changes (bend start AND end).
+    // Snapshot the position the OLD effective rate has advanced to, then
+    // re-anchor startTimeRef as if the NEW base speed had produced it. This
+    // keeps the time display and cue math accurate across the bend; without
+    // it a cue jump after a held bend lands off by the accumulated drift.
+    if (isPlayingRef.current) {
+      const prevRate = clamp(speedRef.current + bendRef.current, 0.5, 2.0);
+      const pos = (ctx.currentTime - startTimeRef.current) * prevRate;
+      const d = durationRef.current;
+      const known =
+        isLoopingRef.current && d > 0 ? ((pos % d) + d) % d : Math.max(0, pos);
+      currentTimeRef.current = known;
+      startTimeRef.current = ctx.currentTime - known / speedRef.current;
+    }
+    bendRef.current = offset;
     const target = clamp(speedRef.current + offset, 0.5, 2.0);
     // setTargetAtTime (not a hard .value write) avoids an audible click as the
     // pitch slides in/out.
@@ -598,14 +621,23 @@ const Deck = forwardRef(function Deck(
     // while detection is in flight, the live bpm will differ from this — in
     // that case we honour the user's manual change and skip the auto result.
     const bpmAtStart = bpmRef.current;
+    // Q2 — capture the buffer being analysed. A crate quick-load (or any new
+    // track) replaces bufferRef.current mid-detection; if the new track
+    // happens to share the old BPM, the `bpmRef === bpmAtStart` guard alone
+    // would still let the stale key result apply to the wrong track. Bail on
+    // any result if the buffer is no longer the one we started analysing.
+    const bufferAtStart = bufferRef.current;
     // Run BPM + key detection in parallel — both read the same buffer offline.
     try {
       const [bpmResult, keyResult] = await Promise.all([
         // Widen the detection range so low-BPM tracks (lo-fi, half-time
         // dubstep ~70) and very fast genres aren't misdetected.
-        detectBpm(bufferRef.current, { minBpm: 60, maxBpm: 200 }).catch(() => null),
-        detectKey(bufferRef.current).catch(() => null),
+        detectBpm(bufferAtStart, { minBpm: 60, maxBpm: 200 }).catch(() => null),
+        detectKey(bufferAtStart).catch(() => null),
       ]);
+      // The track was swapped while detection was in flight — discard the
+      // whole (now stale) result rather than applying it to a new buffer.
+      if (bufferRef.current !== bufferAtStart) return;
       let applied = false;
       if (bpmResult && bpmRef.current === bpmAtStart) {
         setBpm(bpmResult.bpm);

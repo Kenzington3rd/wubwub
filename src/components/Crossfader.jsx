@@ -1,3 +1,4 @@
+import { useState } from "react";
 import Slider from "./Slider.jsx";
 import { CROSSFADE_CURVES } from "../data.js";
 
@@ -15,6 +16,8 @@ export default function Crossfader({
   deckAColor = NEUTRAL,
   deckBColor = NEUTRAL,
 }) {
+  // D6 — hover state for the native curve <select>.
+  const [curveHover, setCurveHover] = useState(false);
   return (
     <div
       className="wc-crossfader-column"
@@ -87,18 +90,26 @@ export default function Crossfader({
       <select
         value={curve}
         onChange={(e) => onCurveChange(e.target.value)}
+        onPointerEnter={() => setCurveHover(true)}
+        onPointerLeave={() => setCurveHover(false)}
         title="Crossfade curve"
         aria-label="Crossfade curve"
         style={{
-          background: "rgba(15,18,35,0.6)",
+          background: curveHover
+            ? "rgba(255,255,255,0.08)"
+            : "rgba(15,18,35,0.6)",
           color: NEUTRAL,
-          border: "1px solid rgba(136,146,176,0.25)",
+          border: `1px solid rgba(136,146,176,${curveHover ? "0.5" : "0.25"})`,
           borderRadius: 6,
           fontSize: 9,
-          padding: "2px 4px",
+          // D6 — the crossfader column has vertical room, so the curve select
+          // can meet the 38px control-floor.
+          minHeight: 38,
+          padding: "2px 6px",
           fontFamily: "'Exo 2', sans-serif",
           cursor: "pointer",
           marginTop: isMobile ? 0 : 4,
+          transition: "background 0.15s ease, border-color 0.15s ease",
         }}
       >
         {Object.entries(CROSSFADE_CURVES).map(([id, c]) => (

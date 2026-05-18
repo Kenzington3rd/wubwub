@@ -63,6 +63,9 @@ export default function App() {
   // ── Refs ──
   const audioCtxRef = useRef(null);
   const masterCompressorRef = useRef(null);
+  // A1 — fixed trim GainNode between the limiter and the master gain; gives
+  // the brickwall limiter extra headroom so the destination never clips.
+  const masterTrimRef = useRef(null);
   const masterGainRef = useRef(null);
   // W1.7 — parallel pre-limiter sum node. Every deck's analyser fans out into
   // this in addition to the master compressor; it carries the summed deck
@@ -128,17 +131,35 @@ export default function App() {
     const ctx = audioCtxRef.current;
 
     if (!masterCompressorRef.current) {
+      // A1 — true brickwall safety-net limiter. Both decks + bass drop + 4
+      // looper slots + 8 sample pads all sum into this single compressor; the
+      // old gentle settings (threshold -6 dB, ratio 4) let the summed signal
+      // run far past full scale and clip at the destination. Brickwall config:
+      //   threshold -9 dB  — start limiting before the sum reaches 0 dBFS
+      //   ratio     20     — near-infinite ratio = hard ceiling, not a knee
+      //   knee      0      — abrupt onset (a true limiter, not a soft comp)
+      //   attack    0.003  — fast enough to catch transients
+      //   release   0.1    — quick recovery without audible pumping
       const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -6;
-      comp.knee.value = 4;
-      comp.ratio.value = 4;
+      comp.threshold.value = -9;
+      comp.knee.value = 0;
+      comp.ratio.value = 20;
       comp.attack.value = 0.003;
-      comp.release.value = 0.05;
+      comp.release.value = 0.1;
+      // A1 — fixed make-up trim *down* between the limiter and the master
+      // gain. Even a brickwall limiter passes a peak slightly above threshold
+      // during its short attack window; a 0.65 trim guarantees the signal
+      // reaching the destination stays below full scale under worst-case
+      // simultaneous playback. The user's master volume is applied after this.
+      const trim = ctx.createGain();
+      trim.gain.value = 0.65;
       const gain = ctx.createGain();
       gain.gain.value = masterVolRef.current;
-      comp.connect(gain);
+      comp.connect(trim);
+      trim.connect(gain);
       gain.connect(ctx.destination);
       masterCompressorRef.current = comp;
+      masterTrimRef.current = trim;
       masterGainRef.current = gain;
 
       // W1.7 — parallel pre-limiter record tap. Decks fan their analyser
@@ -379,6 +400,13 @@ export default function App() {
         const rec = recorderRef.current;
         if (!rec) return;
         const mime = rec.mime;
+        // Q1 — keep recorderRef.current pointed at `rec` across the entire
+        // stop+dispose sequence. If the component unmounts during the
+        // `await rec.stop()` below, the unmount cleanup still sees a non-null
+        // recorderRef and disposes the recorder (releasing the MediaStream
+        // tap). dispose() is idempotent, so the dispose() call here is then a
+        // safe no-op — the tap is freed exactly once either way. Only null
+        // the ref AFTER both stop() and dispose() have completed.
         const blob = await rec.stop();
         rec.dispose();
         recorderRef.current = null;
@@ -563,7 +591,9 @@ export default function App() {
       if (!ctx) throw new Error("audio engine unavailable");
       const audioBuf = await ctx.decodeAudioData(await file.arrayBuffer());
       const id = ++crateIdRef.current;
-      crateBuffersRef.current.set(id, audioBuf);
+      // Q3 — store the name alongside the buffer so onCrateLoadToDeck can read
+      // it without depending on `crate` state (keeps the load buttons stable).
+      crateBuffersRef.current.set(id, { buffer: audioBuf, name: file.name });
       setCrate((c) => [...c, { id, name: file.name, bpm: null, camelot: null }]);
     },
     [ensureMasterCtx]
@@ -583,14 +613,16 @@ export default function App() {
   }, []);
 
   // Quick-load a crate entry onto a deck via the deck's loadBuffer imperative
-  // method — hands over the already-decoded buffer (no re-decode).
+  // method — hands over the already-decoded buffer (no re-decode). Q3 — reads
+  // the track name from crateBuffersRef ({ buffer, name }) rather than the
+  // `crate` state, so this callback has stable identity and the per-entry
+  // load buttons don't churn when the crate list changes.
   const onCrateLoadToDeck = useCallback((deckId, entryId) => {
-    const buffer = crateBuffersRef.current.get(entryId);
-    if (!buffer) return;
-    const entry = crate.find((e) => e.id === entryId);
+    const stored = crateBuffersRef.current.get(entryId);
+    if (!stored) return;
     const deckRef = deckId === "A" ? deckARef : deckBRef;
-    deckRef.current?.loadBuffer?.(buffer, entry?.name || "crate track");
-  }, [crate]);
+    deckRef.current?.loadBuffer?.(stored.buffer, stored.name || "crate track");
+  }, []);
 
   // ── W1.4 — settings export / import ──
   // Serialize the current config to a versioned JSON file and download it via
@@ -641,10 +673,12 @@ export default function App() {
       try { clipAnalyserRef.current?.disconnect(); } catch {}
       clipAnalyserRef.current = null;
       try { masterCompressorRef.current?.disconnect(); } catch {}
+      try { masterTrimRef.current?.disconnect(); } catch {}
       try { masterGainRef.current?.disconnect(); } catch {}
       try { audioCtxRef.current?.close(); } catch {}
       audioCtxRef.current = null;
       masterCompressorRef.current = null;
+      masterTrimRef.current = null;
       masterGainRef.current = null;
     };
   }, []);

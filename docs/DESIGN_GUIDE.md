@@ -20,7 +20,17 @@ and STYLE_GUIDE.md (code).
 
 - App shell: max-width 1180px, centered, `16px` horizontal padding.
 - Cards: `border-radius: 16px`, `20px` padding (deck cards `16px`),
-  `1px solid {accent}22` border, `backdrop-filter: blur(10px)`.
+  `backdrop-filter: blur(10px)`.
+- **Card borders.** Two rules by card type:
+  - **Deck cards** use an **accent border** derived from the deck's
+    user-selected color: `1px solid {accent}22` at rest, brightening to
+    `{accent}88` when focused and to the full accent on drag-over.
+  - **Shared, non-deck panels** (MasterBus, Looper, SamplePad, Crate,
+    MidiPanel, TheoryPanel) use a **neutral** `1px solid rgba(255,255,255,0.04)`
+    border — they carry their identity accent on the heading only, never on
+    the panel border (see §4). A panel's drag-over / active state brightens
+    that neutral border (e.g. the Crate's `rgba(255,255,255,0.35)`), it does
+    not switch to an accent.
 - Deck row: two decks flanking a center crossfader column. Gap `12px`.
 - **Responsive breakpoint: 720px.** Below it, decks stack vertically and the
   crossfader switches from a vertical native slider to a horizontal one. Driven
@@ -89,11 +99,29 @@ and STYLE_GUIDE.md (code).
   - **Looper** — purple `#a78bfa`
   - **SamplePad** — cyan `#00f5d4`
   - **Crate** — green `#4ade80`
+  - **TheoryPanel** — orange `#fb923c` (heading + tabs + active-tab state +
+    the click-selected Camelot-key highlight; the panel body is otherwise
+    neutral slate)
   Any new shared panel picks one fixed accent from the registered palette,
   distinct from the others, for its heading. This is independent of the
   deck-color system: deck-scoped components (Deck and its children, plus the
   Crate's deck-load buttons) still thread the `color` prop and never use a
   fixed accent. The MasterBus is gold per the rule above.
+  - **SamplePad body is neutral slate.** Only the SAMPLES heading carries the
+    cyan identity accent. Each pad's body — loaded-state background, border,
+    trigger button, volume slider, key-binding hint — uses the neutral slate
+    scale (`#8892b0` text, `rgba(255,255,255,…)` tints), the same treatment
+    the Crate panel uses for its entries.
+  - **Sanctioned exception — the Looper slot palette.** The Looper's 4 slots
+    are colored with a fixed 4-color palette (`SLOT_COLORS`: cyan `#00f5d4`,
+    purple `#a78bfa`, gold `#f0c040`, pink `#f472b6`) applied to each slot's
+    body — capture button, play button, border, volume slider. This is an
+    **intentional functional palette**: like the 8-color cue-point palette
+    (BRANDING_GUIDE §3), the colors exist to make the four otherwise-identical
+    slots individually identifiable at a glance. It is an explicit, sanctioned
+    exception to the neutral-body rule above — the Looper slot bodies are
+    deliberately NOT neutral slate, and `Looper.jsx` must not be repainted to
+    the neutral scale. The LOOPER heading still uses the registered purple.
 - **The crossfader is a shared control, not Deck B.** Its body (slider track,
   "X-FADE" label, curve selector) is neutral slate (`#8892b0`). Only its `A` and
   `B` end-labels are tinted — with the respective deck's current accent color,

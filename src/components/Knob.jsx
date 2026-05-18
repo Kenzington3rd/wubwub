@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useState } from "react";
 
 export default function Knob({
   value,
@@ -13,6 +13,10 @@ export default function Knob({
 }) {
   const knobRef = useRef(null);
   const dragRef = useRef({ active: false, startY: 0, startVal: 0 });
+  // D5 — hover state. Knob styling is inline (dynamic accent color), so the
+  // hover lift can't live in CSS; it is tracked here and only applied when the
+  // knob is enabled, giving the control a distinct default/hover/active state.
+  const [hover, setHover] = useState(false);
 
   const range = max - min;
   const norm = (value - min) / range;
@@ -95,17 +99,25 @@ export default function Knob({
         aria-disabled={disabled || undefined}
         onPointerDown={handlePointerDown}
         onKeyDown={handleKeyDown}
+        onPointerEnter={() => !disabled && setHover(true)}
+        onPointerLeave={() => setHover(false)}
         style={{
           width: size,
           height: size,
           borderRadius: "50%",
           background: "radial-gradient(circle at 40% 35%, #2a2f45, #12152a)",
-          border: `2px solid ${color}55`,
+          // D5 — hover lifts the border + glow so the knob has a clear hover
+          // state, distinct from default; disabled never shows the lift.
+          border: `2px solid ${color}${hover && !disabled ? "99" : "55"}`,
           cursor: disabled ? "not-allowed" : "grab",
           position: "relative",
-          boxShadow: `0 0 12px ${color}22, inset 0 1px 2px rgba(255,255,255,0.05)`,
+          boxShadow:
+            hover && !disabled
+              ? `0 0 18px ${color}44, inset 0 1px 2px rgba(255,255,255,0.08)`
+              : `0 0 12px ${color}22, inset 0 1px 2px rgba(255,255,255,0.05)`,
           touchAction: "none",
           opacity: disabled ? 0.4 : 1,
+          transition: "border-color 0.15s ease, box-shadow 0.15s ease",
         }}
       >
         <div

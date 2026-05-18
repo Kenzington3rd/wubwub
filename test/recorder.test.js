@@ -78,6 +78,47 @@ describe("createMasterRecorder — US37", () => {
       rec.dispose();
     }).not.toThrow();
   });
+
+  it("@us US37: dispose() releases the audio tap exactly once even if called twice (Q1)", () => {
+    // Q1 — if the component unmounts while the stop path is mid-await, BOTH
+    // the unmount cleanup and the stop path call dispose() on the same
+    // recorder. The MediaStreamDestination tap must be disconnected once and
+    // only once: the second dispose() is a no-op latched inside the recorder.
+    const ctx = new AudioContext();
+    const source = ctx.createGain();
+    let disconnectCalls = 0;
+    const originalDisconnect = source.disconnect.bind(source);
+    source.disconnect = (target) => {
+      disconnectCalls++;
+      return originalDisconnect(target);
+    };
+    const rec = createMasterRecorder(ctx, source);
+    // The tap connection was made on createMasterRecorder.
+    expect(source.connections.length).toBe(1);
+    rec.dispose();
+    rec.dispose(); // racing second call — must not disconnect again
+    expect(disconnectCalls).toBe(1);
+    expect(source.connections.length).toBe(0);
+  });
+
+  it("@us US37: dispose() after a completed stop still runs exactly once (Q1)", async () => {
+    // Mirrors the App stop path: await rec.stop(), then dispose(). A racing
+    // unmount-cleanup dispose() before/after must not double-release the tap.
+    const ctx = new AudioContext();
+    const source = ctx.createGain();
+    let disconnectCalls = 0;
+    const originalDisconnect = source.disconnect.bind(source);
+    source.disconnect = (target) => {
+      disconnectCalls++;
+      return originalDisconnect(target);
+    };
+    const rec = createMasterRecorder(ctx, source);
+    rec.start();
+    await rec.stop();
+    rec.dispose(); // stop-path dispose
+    rec.dispose(); // unmount-cleanup dispose racing in
+    expect(disconnectCalls).toBe(1);
+  });
 });
 
 describe("buildCueSheet — US60 (W1.3)", () => {

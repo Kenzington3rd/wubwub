@@ -41,7 +41,9 @@ export function buildDeckChain(ctx, outputNode, recordTap) {
 
   // ─── Reverb ───
   const reverbConv = ctx.createConvolver();
-  reverbConv.buffer = buildReverbIR(ctx, 2.0, 3.0);
+  // Decay omitted — derived from duration so SIZE genuinely lengthens the
+  // tail (A5).
+  reverbConv.buffer = buildReverbIR(ctx, 2.0);
   const reverbDry = ctx.createGain();
   const reverbWet = ctx.createGain();
   const reverbOut = ctx.createGain();
