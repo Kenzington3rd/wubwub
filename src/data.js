@@ -25,6 +25,24 @@ export const CAMELOT_WHEEL = [
   { key: "E maj", camelot: "12B", compatible: ["12B", "12A", "11B", "1B"] },
 ];
 
+// Harmonically-safe mixing targets for a Camelot code `NX` (N = 1–12, X = A|B):
+//   - relative major/minor: same number, opposite letter (`N` flips A↔B)
+//   - energy boost:         `N+1`, same letter
+//   - energy drop:          `N-1`, same letter
+// The number wraps 12 ↔ 1. Returns the three distinct neighbours in that
+// order (relative, +1, -1) — the order surfaced in the deck "mix → …" hint.
+// Returns [] for anything that isn't a valid Camelot code.
+export function camelotCompatible(camelot) {
+  const m = /^([0-9]{1,2})([AB])$/i.exec(String(camelot || "").trim());
+  if (!m) return [];
+  const n = parseInt(m[1], 10);
+  if (n < 1 || n > 12) return [];
+  const letter = m[2].toUpperCase();
+  const wrap = (x) => ((x - 1 + 12) % 12) + 1;
+  const other = letter === "A" ? "B" : "A";
+  return [`${n}${other}`, `${wrap(n + 1)}${letter}`, `${wrap(n - 1)}${letter}`];
+}
+
 export const GENRE_BPM = [
   { genre: "Dubstep", bpm: "138–142", feel: "Half-time at ~70" },
   { genre: "Drum & Bass", bpm: "170–180", feel: "High energy" },

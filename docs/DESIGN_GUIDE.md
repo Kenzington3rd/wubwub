@@ -46,9 +46,18 @@ and STYLE_GUIDE.md (code).
     is a real `<button>` with an `aria-label` and keyboard focus. This is the
     only sanctioned exemption from the 38×38 rule.
 - **Icon** — see BRANDING_GUIDE §5. Size 10–18px depending on context.
+- **Segmented two-option toggle** — a pair of joined buttons sharing one
+  rounded border (e.g. the MasterBus recorder Clean/Radio tap toggle). The
+  active segment is tinted with the **host surface's accent** (gold on the
+  MasterBus), not a deck color; the inactive segment stays neutral slate.
+- **CLIP meter** — the MasterBus clip indicator is a **non-announcing,
+  visual-only** status indicator: a dot that lights `--danger` when the master
+  signal clips, with a `title` for pointer users. It carries no `role="status"`
+  / live region — a hot signal toggles many times a second and would flood a
+  polite announcer.
 - **Cards / panels** — two container tiers by radius, three by background alpha:
-  - **Content cards** — decks, Looper, SamplePad, TheoryPanel — use a **16px**
-    radius.
+  - **Content cards** — decks, Looper, SamplePad, TheoryPanel, Crate — use a
+    **16px** radius.
   - **Bars / collapsible panels** — MasterBus, MidiPanel — are slimmer
     container chrome and use a **12px** radius to read as a bar rather than a
     full content card.
@@ -56,7 +65,7 @@ and STYLE_GUIDE.md (code).
     three-tier α to layer depth:
     - **0.7** — decks. The most opaque; they are the primary surface and sit
       over the app gradient with `backdrop-filter: blur(10px)`.
-    - **0.6** — secondary content cards (Looper, SamplePad, TheoryPanel,
+    - **0.6** — secondary content cards (Looper, SamplePad, TheoryPanel, Crate,
       MidiPanel body).
     - **0.5** — the MasterBus bar. The most translucent, so the bar recedes
       and reads as chrome rather than content.
@@ -67,6 +76,11 @@ and STYLE_GUIDE.md (code).
   control inside a deck derives from the `color` prop. Never hard-code cyan or
   purple inside Deck or its children; thread the prop.
 - The master bus is gold (`#f0c040`).
+- Shared, non-deck panels use **neutral slate chrome** — the Crate, like Looper
+  and SamplePad, takes neutral-slate panel borders / glow / empty-state
+  affordances, never a deck accent. (The Crate's per-entry "→ A" / "→ B" load
+  buttons are the exception: they are deck-scoped and tint with each deck's
+  current accent, threaded in as `deckAColor` / `deckBColor` props.)
 - **The crossfader is a shared control, not Deck B.** Its body (slider track,
   "X-FADE" label, curve selector) is neutral slate (`#8892b0`). Only its `A` and
   `B` end-labels are tinted — with the respective deck's current accent color,

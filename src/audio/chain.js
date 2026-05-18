@@ -10,10 +10,15 @@ import { buildReverbIR, buildDistortionCurve } from "./effects.js";
  *     → distortion(dry/wet, parallel) → distortionOut
  *     → analyser → outputNode (caller-provided; typically master compressor)
  *
+ * If `recordTap` is supplied, the analyser ALSO fans out to it — a parallel
+ * pre-limiter sum point used by the "Clean" recorder tap (W1.7). This is a
+ * pure parallel branch: it does not alter the audible signal path, which
+ * still runs analyser → outputNode unchanged.
+ *
  * All effects start fully bypassed (wet=0, dry=1). Toggle via rampGain on
  * wet/dry pairs — never disconnect, to avoid clicks.
  */
-export function buildDeckChain(ctx, outputNode) {
+export function buildDeckChain(ctx, outputNode, recordTap) {
   const gain = ctx.createGain();
 
   const eqLow = ctx.createBiquadFilter();
@@ -104,6 +109,9 @@ export function buildDeckChain(ctx, outputNode) {
   // Final: distortion → analyser → master output (compressor)
   distortionOut.connect(analyser);
   analyser.connect(outputNode);
+  // Parallel pre-limiter record tap (W1.7) — the summed deck signal *before*
+  // the shared master compressor. Audible path above is untouched.
+  if (recordTap) analyser.connect(recordTap);
 
   return {
     gain,

@@ -7,13 +7,16 @@ import TheoryPanel from "./components/TheoryPanel.jsx";
 import Looper from "./components/Looper.jsx";
 import SamplePad from "./components/SamplePad.jsx";
 import MidiPanel from "./components/MidiPanel.jsx";
+import Crate from "./components/Crate.jsx";
 import { crossfadeGains } from "./audio/crossfade.js";
 import {
   createMasterRecorder,
   downloadBlob,
   extensionForMime,
+  buildCueSheet,
 } from "./audio/recorder.js";
 import { enableMidi, mapCcToValue, MIDI_SUPPORTED } from "./midi/midiMap.js";
+import { serializeSettings } from "./settings.js";
 import { SAMPLE_PAD_KEYS } from "./data.js";
 
 const DEFAULT_DECK_A_COLOR = "#00f5d4";
@@ -31,22 +34,47 @@ export default function App() {
   const [deckAColor, setDeckAColor] = useState(DEFAULT_DECK_A_COLOR);
   const [deckBColor, setDeckBColor] = useState(DEFAULT_DECK_B_COLOR);
   const [focusedDeck, setFocusedDeck] = useState(null);
+  // Detected Camelot key per deck — lifted from each Deck via onKeyDetected so
+  // the TheoryPanel Camelot wheel can highlight the focused deck's key live.
+  const [deckKeys, setDeckKeys] = useState({ A: null, B: null });
   const [isRecording, setIsRecording] = useState(false);
   const [recordStartedAt, setRecordStartedAt] = useState(null);
   const [recordSupported, setRecordSupported] = useState(true);
+  // W1.7 — which point the MediaRecorder taps. "post" = after the shared
+  // master compressor (radio-style, current behavior); "pre" = the summed
+  // pre-limiter signal (clean). Only changeable while idle.
+  const [recordTapMode, setRecordTapMode] = useState("post");
+  // W1.3 — count of cue markers dropped during the current recording. Live
+  // UI only; the timestamps themselves live in markersRef (in-memory).
+  const [markerCount, setMarkerCount] = useState(0);
   const [workletReady, setWorkletReady] = useState(false);
   const [midiEnabled, setMidiEnabled] = useState(false);
   const [midiError, setMidiError] = useState("");
   const [midiInputName, setMidiInputName] = useState("");
   const [midiMappings, setMidiMappings] = useState({});
   const [learnTarget, setLearnTarget] = useState(null);
+  // W1.5 — session crate. An in-memory list of decoded tracks: each entry is
+  // { id, name, bpm, camelot, _buffer }. The decoded AudioBuffer is kept off
+  // the rendered object (`crateBuffersRef`) so it never accidentally ends up
+  // in serialized state. The crate is empty on every fresh load and is NEVER
+  // persisted to disk / localStorage / IndexedDB.
+  const [crate, setCrate] = useState([]);
 
   // ── Refs ──
   const audioCtxRef = useRef(null);
   const masterCompressorRef = useRef(null);
   const masterGainRef = useRef(null);
+  // W1.7 — parallel pre-limiter sum node. Every deck's analyser fans out into
+  // this in addition to the master compressor; it carries the summed deck
+  // signal *before* the compressor for the "Clean" recorder tap.
+  const recordTapRef = useRef(null);
+  // W1.7 — AnalyserNode on the master output, used by the clip meter.
+  const clipAnalyserRef = useRef(null);
   const workletNodeRef = useRef(null);
   const recorderRef = useRef(null);
+  // W1.3 — cue markers for the in-progress recording: array of { elapsedMs }.
+  // In memory only; never persisted. Reset when a new recording starts.
+  const markersRef = useRef([]);
   const midiUnsubRef = useRef(null);
   const deckARef = useRef(null);
   const deckBRef = useRef(null);
@@ -55,9 +83,18 @@ export default function App() {
   const effectiveBpmRef = useRef(128);
   const mappingsRef = useRef({});
   const learnTargetRef = useRef(null);
+  // W1.5 — decoded AudioBuffers for crate entries, keyed by entry id. Held in
+  // a ref (not state) so the buffers stay out of render data and are dropped
+  // for GC the moment an entry is removed / the crate is cleared.
+  const crateBuffersRef = useRef(new Map());
+  // Monotonic id source for crate entries.
+  const crateIdRef = useRef(0);
   const masterVolRef = useRef(0.85);
   const workletLoadingRef = useRef(null);
   const recordTogglingRef = useRef(false);
+  // Stable handle to the latest onDropMarker so the keydown handler (deps: [])
+  // can call it without re-binding the window listener on every render.
+  const dropMarkerRef = useRef(() => {});
   // True while mounted. Used to bail out of async work (e.g. record toggle)
   // if the component unmounts mid-await — otherwise a recorder + MediaStream
   // tap created after unmount leaks (no JS reference, still tapping master).
@@ -98,6 +135,22 @@ export default function App() {
       gain.connect(ctx.destination);
       masterCompressorRef.current = comp;
       masterGainRef.current = gain;
+
+      // W1.7 — parallel pre-limiter record tap. Decks fan their analyser
+      // output into this as well as the compressor; it sums the deck signal
+      // before the limiter. It has no downstream connection (it is only a
+      // tap source for createMediaStreamDestination), so it never reaches
+      // ctx.destination and cannot double the audible signal.
+      recordTapRef.current = ctx.createGain();
+      recordTapRef.current.gain.value = 1;
+
+      // W1.7 — clip meter analyser on the master output. Reads peak sample
+      // level for the clip indicator. fftSize kept small — peak detection
+      // doesn't need resolution.
+      const clipAnalyser = ctx.createAnalyser();
+      clipAnalyser.fftSize = 1024;
+      gain.connect(clipAnalyser);
+      clipAnalyserRef.current = clipAnalyser;
     }
 
     if (ctx.state === "suspended") {
@@ -197,6 +250,16 @@ export default function App() {
     setFocusedDeck("B");
   }, []);
 
+  // ── Detected key per deck ──
+  const onKeyDetectedA = useCallback(
+    (camelot) => setDeckKeys((k) => (k.A === camelot ? k : { ...k, A: camelot })),
+    []
+  );
+  const onKeyDetectedB = useCallback(
+    (camelot) => setDeckKeys((k) => (k.B === camelot ? k : { ...k, B: camelot })),
+    []
+  );
+
   // ── Sync ──
   const onSyncDeck = useCallback((id) => {
     const own = id === "A" ? deckARef : deckBRef;
@@ -281,6 +344,14 @@ export default function App() {
         ownRef?.current?.setCue?.();
         return;
       }
+      // W1.3 — `M` drops a recording cue marker. Not deck-scoped (it marks the
+      // master mix), not a sample-pad key, so it works regardless of focus.
+      // No-op unless a recording is in progress (guarded inside onDropMarker).
+      if (lower === "m" && !e.repeat && !e.ctrlKey && !e.metaKey) {
+        e.preventDefault();
+        dropMarkerRef.current();
+        return;
+      }
       if (/^[1-8]$/.test(e.key)) {
         e.preventDefault();
         ownRef?.current?.jumpCue?.(parseInt(e.key, 10) - 1);
@@ -308,6 +379,10 @@ export default function App() {
         recorderRef.current = null;
         setIsRecording(false);
         setRecordStartedAt(null);
+        // Snapshot markers, then clear them — a new recording starts fresh.
+        const markers = markersRef.current;
+        markersRef.current = [];
+        setMarkerCount(0);
         if (blob && blob.size > 0) {
           const ext = extensionForMime(mime);
           const ts = new Date()
@@ -315,7 +390,17 @@ export default function App() {
             .replace(/[:.]/g, "-")
             .replace("T", "_")
             .slice(0, 19);
-          downloadBlob(blob, `wavecraft-mix-${ts}.${ext}`);
+          const base = `wavecraft-mix-${ts}`;
+          downloadBlob(blob, `${base}.${ext}`);
+          // W1.3 — if the user dropped any markers, export a cue sheet that
+          // shares the audio file's base name so the two pair up on disk.
+          if (markers.length > 0) {
+            const cueText = buildCueSheet(markers, `${base}.${ext}`);
+            downloadBlob(
+              new Blob([cueText], { type: "text/plain" }),
+              `${base}.cue.txt`
+            );
+          }
         }
         return;
       }
@@ -324,19 +409,44 @@ export default function App() {
       // recorder + MediaStreamDestination tap below would leak.
       if (!mountedRef.current) return;
       if (!ctx || !masterCompressorRef.current) return;
-      const rec = createMasterRecorder(ctx, masterCompressorRef.current);
+      // W1.7 — tap the chosen node. "pre" = the parallel pre-limiter sum;
+      // "post" = the master compressor (radio). Fall back to post if the
+      // pre-limiter node somehow isn't ready.
+      const tapNode =
+        recordTapMode === "pre" && recordTapRef.current
+          ? recordTapRef.current
+          : masterCompressorRef.current;
+      const rec = createMasterRecorder(ctx, tapNode);
       if (!rec) {
         setRecordSupported(false);
         return;
       }
       recorderRef.current = rec;
+      // Fresh recording — discard any markers from a previous take.
+      markersRef.current = [];
+      setMarkerCount(0);
       rec.start();
       setIsRecording(true);
       setRecordStartedAt(Date.now());
     } finally {
       recordTogglingRef.current = false;
     }
-  }, [isRecording, ensureMasterCtx]);
+  }, [isRecording, recordTapMode, ensureMasterCtx]);
+
+  // ── W1.3 — drop a cue marker at the current recording elapsed time ──
+  // No-op unless a recording is in progress. Stores the elapsed ms relative
+  // to the recording-start timestamp; in memory only, never persisted.
+  const onDropMarker = useCallback(() => {
+    if (!isRecording || !recordStartedAt) return;
+    markersRef.current = [
+      ...markersRef.current,
+      { elapsedMs: Date.now() - recordStartedAt },
+    ];
+    setMarkerCount(markersRef.current.length);
+  }, [isRecording, recordStartedAt]);
+
+  // Keep the stable ref pointed at the latest onDropMarker.
+  useEffect(() => { dropMarkerRef.current = onDropMarker; }, [onDropMarker]);
 
   // ── MIDI ──
   useEffect(() => { mappingsRef.current = midiMappings; }, [midiMappings]);
@@ -426,15 +536,93 @@ export default function App() {
     });
   };
 
+  // ── W1.5 — session crate ──
+  // Decode a picked/dropped file once and add it as a crate entry. The decoded
+  // AudioBuffer is stashed in crateBuffersRef (off render data). Rejects on a
+  // decode failure so Crate.jsx can surface an inline error. In memory only.
+  const onCrateAdd = useCallback(
+    async (file) => {
+      const ctx = await ensureMasterCtx();
+      if (!ctx) throw new Error("audio engine unavailable");
+      const audioBuf = await ctx.decodeAudioData(await file.arrayBuffer());
+      const id = ++crateIdRef.current;
+      crateBuffersRef.current.set(id, audioBuf);
+      setCrate((c) => [...c, { id, name: file.name, bpm: null, camelot: null }]);
+    },
+    [ensureMasterCtx]
+  );
+
+  // Remove one entry — drop the buffer reference so it can be GC'd. A deck
+  // already playing that buffer keeps its own reference and is unaffected.
+  const onCrateRemove = useCallback((id) => {
+    crateBuffersRef.current.delete(id);
+    setCrate((c) => c.filter((e) => e.id !== id));
+  }, []);
+
+  // Clear the whole crate — drop every buffer reference.
+  const onCrateClear = useCallback(() => {
+    crateBuffersRef.current.clear();
+    setCrate([]);
+  }, []);
+
+  // Quick-load a crate entry onto a deck via the deck's loadBuffer imperative
+  // method — hands over the already-decoded buffer (no re-decode).
+  const onCrateLoadToDeck = useCallback((deckId, entryId) => {
+    const buffer = crateBuffersRef.current.get(entryId);
+    if (!buffer) return;
+    const entry = crate.find((e) => e.id === entryId);
+    const deckRef = deckId === "A" ? deckARef : deckBRef;
+    deckRef.current?.loadBuffer?.(buffer, entry?.name || "crate track");
+  }, [crate]);
+
+  // ── W1.4 — settings export / import ──
+  // Serialize the current config to a versioned JSON file and download it via
+  // the existing downloadBlob helper. Config only — no audio.
+  const onExportSettings = useCallback(() => {
+    const json = serializeSettings({
+      deckAColor,
+      deckBColor,
+      crossfadeCurve,
+      midiMappings,
+      recordTapMode,
+    });
+    const ts = new Date()
+      .toISOString()
+      .replace(/[:.]/g, "-")
+      .replace("T", "_")
+      .slice(0, 19);
+    downloadBlob(
+      new Blob([json], { type: "application/json" }),
+      `wavecraft-settings-${ts}.json`
+    );
+  }, [deckAColor, deckBColor, crossfadeCurve, midiMappings, recordTapMode]);
+
+  // Apply a validated config object (from parseSettings) to live state. Only
+  // the fields present are applied — parseSettings has already dropped any
+  // unknown / malformed fields, so this never throws on bad input.
+  const onImportSettings = useCallback((config) => {
+    if (!config) return;
+    if (config.deckAColor) setDeckAColor(config.deckAColor);
+    if (config.deckBColor) setDeckBColor(config.deckBColor);
+    if (config.crossfadeCurve) setCrossfadeCurve(config.crossfadeCurve);
+    if (config.recordTapMode) setRecordTapMode(config.recordTapMode);
+    if (config.midiMappings) setMidiMappings(config.midiMappings);
+  }, []);
+
   // ── Cleanup ──
   useEffect(() => {
     return () => {
       mountedRef.current = false;
+      crateBuffersRef.current.clear();
       midiUnsubRef.current?.();
       recorderRef.current?.dispose?.();
       recorderRef.current = null;
       try { workletNodeRef.current?.disconnect(); } catch {}
       workletNodeRef.current = null;
+      try { recordTapRef.current?.disconnect(); } catch {}
+      recordTapRef.current = null;
+      try { clipAnalyserRef.current?.disconnect(); } catch {}
+      clipAnalyserRef.current = null;
       try { masterCompressorRef.current?.disconnect(); } catch {}
       try { masterGainRef.current?.disconnect(); } catch {}
       try { audioCtxRef.current?.close(); } catch {}
@@ -513,6 +701,13 @@ export default function App() {
           onToggleRecord={onToggleRecord}
           recordSupported={recordSupported}
           recordStartedAt={recordStartedAt}
+          recordTapMode={recordTapMode}
+          onRecordTapModeChange={setRecordTapMode}
+          markerCount={markerCount}
+          onDropMarker={onDropMarker}
+          clipAnalyserRef={clipAnalyserRef}
+          onExportSettings={onExportSettings}
+          onImportSettings={onImportSettings}
         />
 
         <div
@@ -525,11 +720,13 @@ export default function App() {
             color={deckAColor}
             audioCtxRef={audioCtxRef}
             masterCompressorRef={masterCompressorRef}
+            recordTapRef={recordTapRef}
             ensureMasterCtx={ensureMasterCtx}
             crossfadeGain={gainA}
             focused={focusedDeck === "A"}
             onFocus={focusA}
             onSync={() => onSyncDeck("A")}
+            onKeyDetected={onKeyDetectedA}
           />
 
           <Crossfader
@@ -548,13 +745,25 @@ export default function App() {
             color={deckBColor}
             audioCtxRef={audioCtxRef}
             masterCompressorRef={masterCompressorRef}
+            recordTapRef={recordTapRef}
             ensureMasterCtx={ensureMasterCtx}
             crossfadeGain={gainB}
             focused={focusedDeck === "B"}
             onFocus={focusB}
             onSync={() => onSyncDeck("B")}
+            onKeyDetected={onKeyDetectedB}
           />
         </div>
+
+        <Crate
+          entries={crate}
+          onAdd={onCrateAdd}
+          onRemove={onCrateRemove}
+          onClear={onCrateClear}
+          onLoadToDeck={onCrateLoadToDeck}
+          deckAColor={deckAColor}
+          deckBColor={deckBColor}
+        />
 
         <Looper
           audioCtxRef={audioCtxRef}
@@ -571,7 +780,12 @@ export default function App() {
           ensureMasterCtx={ensureMasterCtx}
         />
 
-        <TheoryPanel />
+        <TheoryPanel
+          deckKeys={deckKeys}
+          focusedDeck={focusedDeck}
+          deckAColor={deckAColor}
+          deckBColor={deckBColor}
+        />
 
         <MidiPanel
           enabled={midiEnabled}

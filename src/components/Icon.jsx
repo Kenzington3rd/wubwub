@@ -31,6 +31,12 @@ const STROKE_PATHS = {
   keyboard:
     "M3.5 7h17a1 1 0 0 1 1 1v8a1 1 0 0 1-1 1h-17a1 1 0 0 1-1-1V8a1 1 0 0 1 1-1z M7 11h0 M11 11h0 M15 11h0 M8 14h8",
   speaker: "M11 5 6.5 9H3v6h3.5L11 19z M15 9.2a4 4 0 0 1 0 5.6 M17.8 6.4a8 8 0 0 1 0 11.2",
+  // pennant on a pole — reads as "marker / cue point"
+  flag: "M6 21V3 M6 4h11l-2.5 4L17 12H6",
+  // tray with a down arrow — reads as "download / export to disk"
+  download: "M12 3v11 M8 10l4 4 4-4 M4 19h16",
+  // tray with an up arrow — reads as "upload / import from disk"
+  upload: "M12 14V3 M8 7l4-4 4 4 M4 19h16",
 };
 
 export default function Icon({ name, size = 16, color = "currentColor", title }) {

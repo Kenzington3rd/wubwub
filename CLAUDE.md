@@ -34,7 +34,9 @@ AudioBufferSource → Gain (volume × crossfade)
   → AudioContext.destination
 ```
 
-The master compressor is **shared** across decks (acts as a safety-net limiter against summed clipping). It also serves as the **tap point** for the looper AudioWorklet and the MediaRecorder.
+The master compressor is **shared** across decks (acts as a safety-net limiter against summed clipping). It serves as the **tap point** for the looper AudioWorklet and is the default ("Radio") tap for the MediaRecorder.
+
+A parallel **record tap** GainNode also exists: every deck's analyser fans out into it *in addition to* the master compressor. It carries the summed deck signal **before** the limiter and has no downstream connection (it is only a source for the recorder's `MediaStreamDestination`). The recorder tap toggle ("Clean" pre-limiter / "Radio" post-limiter) selects which node the recorder connects from; it is locked while a recording is in progress. A small `AnalyserNode` on the master gain feeds the clip meter.
 
 ### File layout
 
@@ -44,6 +46,7 @@ src/
 ├── App.jsx                   # Orchestrator
 ├── index.css                 # @font-face, resets, keyframes, mobile media query
 ├── data.js                   # CAMELOT_WHEEL, GENRE_BPM, TIPS, themes, presets, keys
+├── settings.js               # config export/import — versioned JSON serialize + validate
 ├── hooks/useMatchMedia.js
 ├── audio/
 │   ├── chain.js              # buildDeckChain + disconnectChain
@@ -68,6 +71,7 @@ src/
     ├── Looper.jsx            # 4 slots, captures from master worklet tap
     ├── SamplePad.jsx         # 8 pads, drag-drop or click-to-load, keys QWER/ASDF
     ├── MidiPanel.jsx         # learn-mode mapping UI
+    ├── Crate.jsx             # session crate — in-memory decoded-track list, quick-load to a deck
     └── TheoryPanel.jsx       # camelot wheel + genre BPM + tips + shortcuts
 
 public/
@@ -82,7 +86,8 @@ public/
 - **Audio nodes**: `useRef` (no re-renders on audio state)
 - **Per-deck graph**: built once via `buildDeckChain(ctx, masterCompressor)`, stored in `chainRef`
 - **UI state**: `useState` (volume, EQ, speed, transport, cues, effects)
-- **Imperative API**: each Deck uses `forwardRef` + `useImperativeHandle` to expose `togglePlay`, `setVolume`, `syncTo`, `setCue`, `jumpCue`, etc. for keyboard shortcuts and MIDI
+- **Imperative API**: each Deck uses `forwardRef` + `useImperativeHandle` to expose `togglePlay`, `setVolume`, `syncTo`, `setCue`, `jumpCue`, `loadBuffer`, etc. for keyboard shortcuts, MIDI, and crate quick-load
+- `Deck.loadBuffer(audioBuffer, name)` — adopt a pre-decoded `AudioBuffer` directly (used by the session crate). `loadFile` decodes a raw `File`, then both share the internal `adoptBuffer` (resets transport/cues/detected metadata for the new track)
 
 ## Conventions
 - Functional React components with hooks; no class components
@@ -105,6 +110,7 @@ public/
 | `S` | Sync focused deck to the other (see note below) |
 | `C` | Set cue at current position |
 | `1`–`8` | Jump to cue N on focused deck |
+| `M` | Drop a recording cue marker (no-op unless recording) |
 | `Q W E R A S D F` | Trigger sample pad 1–8 |
 
 > **`S` collision:** `S` is both sample pad 6 and the deck-sync shortcut.
@@ -132,6 +138,7 @@ public/
 - [x] **P1b** — Effects rack (reverb/delay/distortion + master compressor), cue points (up to 8), beat sync button, keyboard shortcuts with focus model
 - [x] **P2** — Looper (4 slots, 4/8/16-bar capture from master), sample pad (8 pads w/ key bindings), bass drop presets (Standard/Heavy/Wobble), crossfade curve selector, deck color themes
 - [x] **P3** — Mix recording (MediaRecorder, local download), PWA with offline precache, MIDI controller mapping with Learn mode (Chrome/Edge/Opera), autocorrelation auto-BPM, single-file build target (`npm run build:single`)
+- [x] **W1** — Reactive harmonic key suggestions (per-deck `mix → …` compatible-key hint + live Camelot-wheel highlight; deck key lifted to App via the `onKeyDetected` prop, fed to `TheoryPanel`), momentary pitch-bend NUDGE −/+ controls (held pointer applies a ±4% offset on top of base speed, never mutating the speed state). Camelot compatibility helper: `camelotCompatible()` in `src/data.js`. **W1.3** — recording cue markers (`M` key or MARKER button drop timestamped markers during a recording; on stop a `<base>.cue.txt` cue sheet downloads alongside the audio). **W1.4** — settings export/import (versioned JSON of deck themes, crossfade curve, MIDI mappings, recorder tap mode; downloaded / read from the user's own disk — config only, no audio; malformed input is rejected with an inline error, never throws; also lets MIDI maps survive a reload). **W1.5** — session crate panel (`Crate.jsx`): an in-memory list of decoded tracks, drag-drop or file-pick to add, one-click quick-load to either deck via the new `Deck.loadBuffer` imperative method; never persisted. **W1.7** — recorder pre/post-limiter tap toggle (Clean/Radio, idle-only) + master clip meter.
 
 ### Deferred
 - Electron wrapper (separate distribution concern; web app is complete)

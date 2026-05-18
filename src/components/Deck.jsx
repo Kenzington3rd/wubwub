@@ -17,7 +17,11 @@ import { buildDeckChain, disconnectChain } from "../audio/chain.js";
 import { buildReverbIR, buildDistortionCurve, clamp, rampGain } from "../audio/effects.js";
 import { detectBpm } from "../audio/bpmDetect.js";
 import { detectKey } from "../audio/keyDetect.js";
-import { BASS_DROP_PRESETS } from "../data.js";
+import { BASS_DROP_PRESETS, camelotCompatible } from "../data.js";
+
+// Momentary pitch-bend offset applied on top of the deck's base speed while a
+// NUDGE button is held. ±4% is enough to slide a track into phase by ear.
+const NUDGE_OFFSET = 0.04;
 
 const MAX_CUES = 8;
 
@@ -48,11 +52,13 @@ const Deck = forwardRef(function Deck(
     color,
     audioCtxRef,
     masterCompressorRef,
+    recordTapRef,
     ensureMasterCtx,
     crossfadeGain,
     focused,
     onFocus,
     onSync,
+    onKeyDetected,
   },
   ref
 ) {
@@ -97,6 +103,9 @@ const Deck = forwardRef(function Deck(
   const startTimeRef = useRef(0);
   const offsetRef = useRef(0);
   const speedRef = useRef(speed);
+  // Temporary pitch-bend offset (NUDGE buttons). Added on top of `speed`;
+  // never persisted to the speed state. 0 when no nudge is held.
+  const bendRef = useRef(0);
   const isLoopingRef = useRef(isLooping);
   const isPlayingRef = useRef(false);
   const durationRef = useRef(0);
@@ -134,14 +143,18 @@ const Deck = forwardRef(function Deck(
   const buildChain = useCallback(async () => {
     const ctx = await ensureMasterCtx();
     if (!chainRef.current) {
-      chainRef.current = buildDeckChain(ctx, masterCompressorRef.current);
+      chainRef.current = buildDeckChain(
+        ctx,
+        masterCompressorRef.current,
+        recordTapRef?.current
+      );
       // Signal the chain-mutating useEffects to re-run with the live chain
       // so any state set before now (effects toggled, EQ tweaked, etc.)
       // gets applied.
       setChainTick((t) => t + 1);
     }
     return chainRef.current;
-  }, [ensureMasterCtx, masterCompressorRef]);
+  }, [ensureMasterCtx, masterCompressorRef, recordTapRef]);
 
   // ─── Apply gain (volume × crossfade) ───
   useEffect(() => {
@@ -259,7 +272,9 @@ const Deck = forwardRef(function Deck(
       const src = ctx.createBufferSource();
       src.buffer = buffer;
       src.loop = isLoopingRef.current;
-      src.playbackRate.value = speedRef.current;
+      // Honour an in-progress pitch-bend so a seek mid-nudge doesn't snap the
+      // pitch. bendRef is 0 unless a NUDGE button is currently held.
+      src.playbackRate.value = clamp(speedRef.current + bendRef.current, 0.5, 2.0);
       src.connect(chain.gain);
       src.start(0, target);
       sourceRef.current = src;
@@ -296,7 +311,48 @@ const Deck = forwardRef(function Deck(
   );
 
   // ─── File loading ───
-  // Shared between <input> change and drag-drop on the deck.
+  // Adopt an already-decoded AudioBuffer as this deck's track. Shared by the
+  // File-decode path (loadFile) and the crate quick-load path (loadBuffer):
+  // it resets transport, cues and detected metadata for the new track. It
+  // does NOT decode and never touches the network.
+  const adoptBuffer = useCallback(
+    (audioBuf, name) => {
+      stopAndDisconnectSource();
+      isPlayingRef.current = false;
+      setIsPlaying(false);
+      clearInterval(timeIntervalRef.current);
+
+      bufferRef.current = audioBuf;
+      setLoadError(null);
+      setFileName(name);
+      setDuration(audioBuf.duration);
+      durationRef.current = audioBuf.duration;
+      setCurrentTime(0);
+      currentTimeRef.current = 0;
+      offsetRef.current = 0;
+      setCues([]);
+      cuesRef.current = [];
+      setBpmConfidence(null);
+      setDetectedKey(null);
+      onKeyDetected?.(null);
+    },
+    [stopAndDisconnectSource, onKeyDetected]
+  );
+
+  // Load this deck from a pre-decoded AudioBuffer (crate quick-load, W1.5).
+  // Builds the deck chain if needed, then adopts the buffer — no re-decode.
+  const loadBuffer = useCallback(
+    async (audioBuf, name) => {
+      if (!audioBuf) return;
+      await ensureMasterCtx();
+      await buildChain();
+      adoptBuffer(audioBuf, name || "crate track");
+    },
+    [ensureMasterCtx, buildChain, adoptBuffer]
+  );
+
+  // Load this deck from a raw File. Shared between the <input> change and
+  // drag-drop on the deck card. Decodes once, then hands off to adoptBuffer.
   const loadFile = useCallback(
     async (file) => {
       if (!file) return;
@@ -311,31 +367,19 @@ const Deck = forwardRef(function Deck(
       }
       const ctx = await ensureMasterCtx();
       await buildChain();
-      stopAndDisconnectSource();
-      isPlayingRef.current = false;
-      setIsPlaying(false);
-      clearInterval(timeIntervalRef.current);
 
       const arrayBuf = await file.arrayBuffer();
       try {
         const audioBuf = await ctx.decodeAudioData(arrayBuf);
-        bufferRef.current = audioBuf;
-        setLoadError(null);
-        setFileName(file.name);
-        setDuration(audioBuf.duration);
-        durationRef.current = audioBuf.duration;
-        setCurrentTime(0);
-        currentTimeRef.current = 0;
-        offsetRef.current = 0;
-        setCues([]);
-        cuesRef.current = [];
-        setBpmConfidence(null);
-        setDetectedKey(null);
+        adoptBuffer(audioBuf, file.name);
       } catch {
-        alert("Could not decode audio file. Try WAV, MP3, OGG, or FLAC.");
+        // A decode failure is routine user feedback — show it inline (cleared
+        // on the next successful load by adoptBuffer) rather than blocking
+        // with alert(). Mirrors the wrong-file-type branch above and Crate.
+        setLoadError("Could not decode this audio file. Try WAV, MP3, OGG, or FLAC.");
       }
     },
-    [buildChain, ensureMasterCtx, stopAndDisconnectSource]
+    [buildChain, ensureMasterCtx, adoptBuffer]
   );
 
   const handleFile = async (e) => {
@@ -409,11 +453,43 @@ const Deck = forwardRef(function Deck(
   // ─── Re-anchor on speed change ───
   useEffect(() => {
     if (sourceRef.current && isPlayingRef.current) {
-      sourceRef.current.playbackRate.value = speed;
+      // Keep any held pitch-bend layered on top of the new base speed.
+      sourceRef.current.playbackRate.value = clamp(speed + bendRef.current, 0.5, 2.0);
       const c = audioCtxRef.current;
       if (c) startTimeRef.current = c.currentTime - currentTimeRef.current / speed;
     }
   }, [speed, audioCtxRef]);
+
+  // ─── Pitch-bend nudge (momentary) ───
+  // Smoothly ramp the live playbackRate to base speed + bend offset, clamping
+  // the *effective* rate to [0.5, 2.0]. The bend is a transient offset held in
+  // bendRef — it never touches the persisted `speed` state, so releasing the
+  // button returns the deck to exactly the speed the user set on the slider.
+  const applyBend = useCallback((offset) => {
+    bendRef.current = offset;
+    const src = sourceRef.current;
+    const ctx = audioCtxRef.current;
+    if (!src || !ctx) return;
+    const target = clamp(speedRef.current + offset, 0.5, 2.0);
+    // setTargetAtTime (not a hard .value write) avoids an audible click as the
+    // pitch slides in/out.
+    src.playbackRate.setTargetAtTime(target, ctx.currentTime, 0.015);
+  }, [audioCtxRef]);
+
+  const [bendActive, setBendActive] = useState(0); // -1 | 0 | +1, for UI state
+  const startNudge = useCallback(
+    (dir) => {
+      if (!bufferRef.current) return;
+      setBendActive(dir);
+      applyBend(dir * NUDGE_OFFSET);
+    },
+    [applyBend]
+  );
+  const endNudge = useCallback(() => {
+    if (bendRef.current === 0) return;
+    setBendActive(0);
+    applyBend(0);
+  }, [applyBend]);
 
   // ─── Bass drop (preset-aware) ───
   const triggerBassDrop = useCallback(() => {
@@ -539,6 +615,7 @@ const Deck = forwardRef(function Deck(
       let announcedKey = null;
       if (keyResult && keyResult.confidence > 0.3) {
         setDetectedKey(keyResult);
+        onKeyDetected?.(keyResult.camelot);
         announcedKey = keyResult;
       }
       // Announce the auto-detect outcome for screen readers (this is the only
@@ -604,6 +681,8 @@ const Deck = forwardRef(function Deck(
       play,
       pause,
       stop,
+      // W1.5 — load this deck from a pre-decoded AudioBuffer (crate quick-load).
+      loadBuffer,
       isReady: () => !!bufferRef.current,
       isPlaying: () => isPlayingRef.current,
       getBpm: () => bpmRef.current,
@@ -619,7 +698,7 @@ const Deck = forwardRef(function Deck(
         setSpeedState((s) => clamp(s * (otherBpm / Math.max(40, bpmRef.current)), 0.5, 2.0));
       },
     }),
-    [play, pause, stop, cues]
+    [play, pause, stop, loadBuffer, cues]
   );
 
   // ─── Render ───
@@ -817,6 +896,21 @@ const Deck = forwardRef(function Deck(
                 {detectedKey.camelot}
               </span>
             )}
+            {detectedKey && camelotCompatible(detectedKey.camelot).length > 0 && (
+              <span
+                title="Harmonically compatible keys — mixing into these sounds smooth"
+                style={{
+                  fontSize: 9,
+                  color: "#8892b0",
+                  fontFamily: "'Exo 2', sans-serif",
+                  letterSpacing: 0.5,
+                  whiteSpace: "nowrap",
+                }}
+              >
+                mix{" → "}
+                {camelotCompatible(detectedKey.camelot).join(" · ")}
+              </span>
+            )}
             {bpmConfidence != null && (
               <span style={{ fontSize: 9, color }} aria-label="BPM detection confidence">
                 {Math.round(bpmConfidence * 100)}%
@@ -938,6 +1032,70 @@ const Deck = forwardRef(function Deck(
             <Icon name={btn.icon} size={18} color={btn.active ? color : "#8892b0"} />
           </button>
         ))}
+      </div>
+
+      {/* Pitch-bend nudge — momentary ±4% speed offset while held */}
+      <div
+        style={{ display: "flex", justifyContent: "center", gap: 6, alignItems: "center" }}
+        role="group"
+        aria-label={`Deck ${id} pitch bend`}
+      >
+        {[
+          { dir: -1, label: "NUDGE −", icon: "chevron", rotate: 180, aria: `Pitch bend down deck ${id}` },
+          { dir: 1, label: "NUDGE +", icon: "chevron", rotate: 0, aria: `Pitch bend up deck ${id}` },
+        ].map((btn) => {
+          const held = bendActive === btn.dir;
+          return (
+            <button
+              key={btn.dir}
+              type="button"
+              disabled={!fileName}
+              onPointerDown={(e) => {
+                if (!fileName) return;
+                e.preventDefault();
+                e.currentTarget.setPointerCapture?.(e.pointerId);
+                startNudge(btn.dir);
+              }}
+              onPointerUp={endNudge}
+              onPointerLeave={endNudge}
+              onPointerCancel={endNudge}
+              title="Hold to nudge the track into phase (temporary ±4% pitch bend)"
+              aria-label={btn.aria}
+              aria-pressed={held}
+              className={held ? undefined : "wc-btn-hover"}
+              style={{
+                flex: 1,
+                minHeight: 30,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+                gap: 6,
+                borderRadius: 8,
+                border: `1px solid ${held ? color : color + "33"}`,
+                background: held ? `${color}33` : "rgba(255,255,255,0.05)",
+                color: fileName ? (held ? color : "#8892b0") : "#4a5580",
+                fontSize: 10,
+                letterSpacing: 1,
+                fontFamily: "'Exo 2', sans-serif",
+                cursor: fileName ? "pointer" : "not-allowed",
+                opacity: fileName ? 1 : 0.5,
+                boxShadow: held ? `0 0 12px ${color}44` : "none",
+                touchAction: "none",
+                userSelect: "none",
+              }}
+            >
+              <span
+                style={{
+                  display: "inline-flex",
+                  transform: btn.rotate ? `rotate(${btn.rotate}deg)` : undefined,
+                }}
+              >
+                <Icon name={btn.icon} size={11} color={fileName ? (held ? color : "#8892b0") : "#4a5580"} />
+              </span>
+              {btn.label}
+            </button>
+          );
+        })}
       </div>
 
       {/* Volume / Speed / Filter */}

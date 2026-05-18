@@ -25,8 +25,10 @@ ever leaves your device.
 | TAP | Tap in time with the music 4+ times to set BPM by ear. |
 | AUTO | Auto-detects BPM **and** musical key from the loaded track. |
 | ÷2 / ×2 | Halve or double the BPM — fixes half-time / double-time detection. |
-| SYNC | Matches this deck's speed to the other deck's BPM. |
+| SYNC | One-tap tempo match — sets this deck's speed to land on the other deck's BPM. |
+| NUDGE − / NUDGE + | **Hold** to momentarily bend the pitch ±4% — slide a track into phase by ear. Releasing returns to your set speed; the speed slider is untouched. |
 | Camelot badge | After AUTO, shows the detected key as a Camelot code (e.g. 8B). |
+| mix → … | Next to the badge: the three harmonically compatible keys to mix into (relative key, +1, −1). |
 
 ## Cue points
 
@@ -70,10 +72,59 @@ to loop it. The volume slider sets the loop's level.
 Eight pads. Drag an audio file onto a pad (or click **+ Load**). Trigger pads by
 clicking, or with the keys `Q W E R` (top row) and `A S D F` (bottom row).
 
+## Session crate
+
+The **CRATE** panel is a quick-access shelf for the tracks you're working with.
+Drop one or more audio files onto the panel — or click **Add tracks** — and each
+one is decoded and added to the list. Then, on any crate row:
+
+- **→ A** loads that track onto Deck A.
+- **→ B** loads it onto Deck B.
+
+Because the crate already decoded the file, loading it to a deck is instant — no
+waiting. Remove a single track with its **×**, or empty the whole shelf with
+**Clear**. Removing a track that a deck is currently playing is fine — the deck
+keeps playing; only the crate's copy is dropped.
+
+The crate is **session-only**: it lives in memory and is empty every time you
+reload. Nothing in it is ever saved to disk. (Each row has BPM and key columns;
+they fill in only if that data is already known.)
+
 ## Recording your mix
 
 Click **RECORD** in the master bar. Mix as long as you like, then click it again —
 the recording downloads to your computer as an audio file. It is never uploaded.
+
+### Clean / Radio tap
+
+Next to the record controls is a two-position toggle that picks *where* the
+recorder taps the audio:
+
+- **Radio** (default) — records the signal **after** the master limiter, the
+  same loud, punchy sound you hear. Good for a ready-to-share mix.
+- **Clean** — records the summed deck signal **before** the limiter, with more
+  dynamic range and headroom. Good if you want to master the mix yourself later.
+
+The toggle is locked while a recording is running — you can't switch the tap
+mid-record. Choose it before you hit RECORD.
+
+### Cue markers and the cue sheet
+
+While recording, the **MARKER** button (and the `M` key) drops a timestamped
+marker — use it to flag a drop, a transition, or a track change. A small count
+next to the button shows how many you've dropped. Markers live in memory only
+and reset when you start a new recording.
+
+When you stop, if you dropped any markers, a plain-text **cue sheet** downloads
+alongside the audio file — same base name, `.cue.txt` extension (e.g.
+`wavecraft-mix-….webm` + `wavecraft-mix-….cue.txt`). It lists each marker as a
+`MM:SS — Marker N` line so you can find your moments again.
+
+### Clip meter
+
+The **CLIP** dot in the master bar lights red whenever the master signal is
+clipping (peaking too hot). It's live whenever audio is playing, not only while
+recording. If it lights up, pull down a deck or the master volume.
 
 ## Keyboard shortcuts
 
@@ -88,6 +139,7 @@ Click a deck first to "focus" it (it gets a brighter glow).
 | `S` | Sync the focused deck to the other |
 | `C` | Set a cue on the focused deck |
 | `1`–`8` | Jump to cue N on the focused deck |
+| `M` | Drop a recording cue marker (only while recording) |
 | `Q W E R` / `A S D F` | Trigger sample pads 1–8 |
 
 `S` does double duty: with a deck focused it syncs that deck; with no deck
@@ -99,13 +151,39 @@ pad. The other pad keys always trigger their pad.
 Open the **MIDI** panel at the bottom (Chrome / Edge / Opera). Click **Enable
 MIDI**, then **Learn** next to a target and twist a knob/fader on your hardware
 to map it. Supported: crossfader, master volume, and per-deck volume / filter /
-speed. Mappings reset on reload.
+speed. Mappings reset on reload — but you can keep them with **Export Settings**
+(see below).
+
+## Saving your settings
+
+In the master bar, **Export** and **Import** let you save and restore your
+*setup* — deck accent colors, the crossfade curve, your MIDI mappings, and the
+recorder Clean/Radio tap mode.
+
+- **Export** downloads a small `wavecraft-settings-<timestamp>.json` file to your
+  computer.
+- **Import** opens that file back up and applies it.
+
+This is config only — it never includes your audio, track names, or cue points,
+and nothing is uploaded; the file is written to and read from your own disk by
+your choice. If you pick a file that isn't a valid WAVECRAFT settings file, a
+short error appears and nothing changes.
+
+Handy side effect: since MIDI mappings reset every reload, exporting your
+settings once means you can re-import them after a reload (or on another
+machine) instead of re-learning every control.
 
 ## Harmonic mixing
 
 The **Harmonic Mixing** tab shows the Camelot Wheel. Click a key to highlight the
-keys that mix well with it. Combine with the AUTO key badge on each deck to mix
-in key.
+keys that mix well with it.
+
+The wheel is also **live**: once you run AUTO on a deck, the focused deck's
+detected key — and its compatible neighbours — light up on the wheel in that
+deck's accent color, with a caption naming the deck and key. Click a deck to
+switch which deck's key the wheel tracks. On the deck itself, the detected-key
+badge is followed by a `mix → 8A · 9B · 7B` hint listing the safe targets, so
+you can pick your next track without leaving the decks.
 
 ## Install it (PWA)
 

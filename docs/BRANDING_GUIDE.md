@@ -81,7 +81,10 @@ list.
   (`src/components/Icon.jsx`).
 - Icons are hand-drawn inline SVG on a 24×24 viewBox, no icon font, no network.
 - Two styles: **fill** (play, pause, stop, bolt, record) and **stroke**
-  (loop, close, plus, chevron, music, bulb, keyboard, speaker), 2px round strokes.
+  (loop, close, plus, chevron, music, bulb, keyboard, speaker, flag, download,
+  upload), 2px round strokes. `flag` is a pennant-on-a-pole used for the
+  recording cue-marker button. `download` / `upload` are tray-with-arrow
+  glyphs used by the settings export / import buttons.
 - Add a new icon by extending `FILL_PATHS` / `STROKE_PATHS` in `Icon.jsx`. Update
   `ICON_NAMES` and the icon test automatically covers it.
 - Decorative icons next to a text label: omit `title`, the SVG is `aria-hidden`.

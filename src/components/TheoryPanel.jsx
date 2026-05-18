@@ -2,12 +2,26 @@ import { useState } from "react";
 import { CAMELOT_WHEEL, GENRE_BPM, TIPS, KEYBOARD_HINTS } from "../data.js";
 import Icon from "./Icon.jsx";
 
-export default function TheoryPanel() {
+export default function TheoryPanel({
+  deckKeys = { A: null, B: null },
+  focusedDeck = null,
+  deckAColor = "#00f5d4",
+  deckBColor = "#a78bfa",
+}) {
   const [activeTab, setActiveTab] = useState("theory");
   const [tipIdx, setTipIdx] = useState(0);
   const [selectedKey, setSelectedKey] = useState(null);
 
   const selectedKeyData = selectedKey != null ? CAMELOT_WHEEL[selectedKey] : null;
+
+  // The focused deck's auto-detected key drives a live highlight on the wheel.
+  // Falls back to whichever deck has a key when none is focused.
+  const liveDeck = focusedDeck || (deckKeys.A ? "A" : deckKeys.B ? "B" : null);
+  const liveKey = liveDeck ? deckKeys[liveDeck] : null;
+  const liveColor = liveDeck === "B" ? deckBColor : deckAColor;
+  const liveKeyData = liveKey
+    ? CAMELOT_WHEEL.find((w) => w.camelot === liveKey) || null
+    : null;
 
   return (
     <div
@@ -77,39 +91,77 @@ export default function TheoryPanel() {
               Mixing between compatible keys creates smooth, professional-sounding
               transitions.
             </p>
+            {liveKeyData && (
+              <p
+                style={{
+                  fontSize: 11,
+                  color: liveColor,
+                  marginBottom: 10,
+                  fontFamily: "'Exo 2', sans-serif",
+                }}
+              >
+                Deck {liveDeck} detected{" "}
+                <strong>
+                  {liveKeyData.camelot} ({liveKeyData.key})
+                </strong>{" "}
+                — its key and compatible neighbours are highlighted below.
+              </p>
+            )}
             <div style={{ display: "flex", flexWrap: "wrap", gap: 4, marginBottom: 12 }}>
               {CAMELOT_WHEEL.map((item, i) => {
                 const isSelected = selectedKey === i;
                 const isCompat = selectedKeyData?.compatible.includes(item.camelot);
+                // Live deck-key highlight layer, independent of click selection.
+                const isLiveKey = liveKeyData?.camelot === item.camelot;
+                const isLiveCompat =
+                  !isLiveKey && liveKeyData?.compatible.includes(item.camelot);
+                let borderColor = "rgba(255,255,255,0.08)";
+                let background = "rgba(255,255,255,0.02)";
+                let color = "#4a5580";
+                let boxShadow = "none";
+                if (isSelected) {
+                  borderColor = "#00f5d4";
+                  background = "#00f5d422";
+                  color = "#00f5d4";
+                  boxShadow = "0 0 10px rgba(0,245,212,0.2)";
+                } else if (isLiveKey) {
+                  borderColor = liveColor;
+                  background = `${liveColor}26`;
+                  color = liveColor;
+                  boxShadow = `0 0 10px ${liveColor}3a`;
+                } else if (isCompat) {
+                  borderColor = "#00f5d466";
+                  background = "#00f5d40e";
+                  color = "#00f5d4cc";
+                } else if (isLiveCompat) {
+                  borderColor = `${liveColor}66`;
+                  background = `${liveColor}12`;
+                  color = `${liveColor}cc`;
+                }
                 return (
                   <button
                     key={item.camelot}
                     onClick={() => setSelectedKey(isSelected ? null : i)}
                     aria-pressed={isSelected}
+                    title={
+                      isLiveKey
+                        ? `Deck ${liveDeck} detected key`
+                        : isLiveCompat
+                        ? `Compatible with Deck ${liveDeck}'s key`
+                        : undefined
+                    }
                     style={{
                       padding: "4px 8px",
                       borderRadius: 6,
                       border: "1px solid",
-                      borderColor: isSelected
-                        ? "#00f5d4"
-                        : isCompat
-                        ? "#00f5d466"
-                        : "rgba(255,255,255,0.08)",
-                      background: isSelected
-                        ? "#00f5d422"
-                        : isCompat
-                        ? "#00f5d40e"
-                        : "rgba(255,255,255,0.02)",
-                      color: isSelected
-                        ? "#00f5d4"
-                        : isCompat
-                        ? "#00f5d4cc"
-                        : "#4a5580",
+                      borderColor,
+                      background,
+                      color,
                       fontSize: 10,
                       cursor: "pointer",
                       fontFamily: "'Exo 2', sans-serif",
                       transition: "all 0.15s",
-                      boxShadow: isSelected ? "0 0 10px rgba(0,245,212,0.2)" : "none",
+                      boxShadow,
                     }}
                   >
                     <span style={{ fontWeight: 700 }}>{item.camelot}</span> {item.key}

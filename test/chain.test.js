@@ -91,6 +91,25 @@ describe("buildDeckChain — US55, US18–US20", () => {
     expect(chain.delay.connections).toContain(chain.delayFb);
     expect(chain.delayFb.connections).toContain(chain.delay);
   });
+
+  it("@us US61 (W1.7): analyser fans out to the pre-limiter record tap when supplied", () => {
+    const ctx = new AudioContext();
+    const out = ctx.createDynamicsCompressor();
+    const recordTap = ctx.createGain();
+    const chain = buildDeckChain(ctx, out, recordTap);
+    // Audible path is intact AND the parallel tap branch exists.
+    expect(chain.analyser.connections).toContain(out);
+    expect(chain.analyser.connections).toContain(recordTap);
+  });
+
+  it("@us US61 (W1.7): omitting the record tap leaves the audible path unchanged", () => {
+    const ctx = new AudioContext();
+    const out = ctx.createGain();
+    const chain = buildDeckChain(ctx, out);
+    expect(chain.analyser.connections).toContain(out);
+    // Only the single audible connection — no stray parallel branch.
+    expect(chain.analyser.connections).toHaveLength(1);
+  });
 });
 
 describe("disconnectChain", () => {

@@ -74,7 +74,7 @@ qa-engineer agents enforce this.
 - Pure logic → unit test. Components → RTL render test. Cross-component flows →
   integration test with the Web Audio mock (`test/mocks/webAudioMock.js`).
 - `npm test` must be green before any commit. `npm run build` must succeed and
-  stay under the 150 KB gzip budget.
+  `npm run size` must pass (see section 11).
 
 ## 8. Naming
 
@@ -93,5 +93,23 @@ qa-engineer agents enforce this.
 ## 10. Commits
 
 - Imperative subject line; body explains the why. Group logically.
-- `npm test` + `npm run build` green before committing.
+- `npm test` + `npm run build` + `npm run size` green before committing.
 - Never commit `node_modules/`, `dist/`, `dist-single/` (gitignored).
+
+## 11. Bundle-size budget
+
+WAVECRAFT ships as an offline-precached PWA and as a single portable HTML file,
+so build size is a real product constraint. `npm run size` runs a production
+`vite build`, then `scripts/check-bundle-size.mjs` measures the build and fails
+(exit 1) when a budget is exceeded.
+
+| Check | Budget | Current (2026-05) |
+|---|---|---|
+| Main JS bundle, gzipped (`dist/assets/*.js`) | 90 KB | ~65.5 KB |
+| Total `dist/` precache, raw (all PWA-precached assets) | 400 KB | ~284 KB |
+
+Budgets are constants at the top of `scripts/check-bundle-size.mjs`. They sit
+above current sizes with headroom to absorb normal growth while still catching
+real regressions. If a change pushes past a budget, first trim the build; raise
+a budget constant only when the growth is intentional and justified, and note
+why in the commit. The script uses Node built-ins only — no new dependencies.

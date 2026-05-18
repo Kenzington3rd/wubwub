@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import Deck from "../src/components/Deck.jsx";
 import { MockAudioBuffer } from "./mocks/webAudioMock.js";
 
-function Harness({ id = "A", onMount, color = "#00f5d4" }) {
+function Harness({ id = "A", onMount, color = "#00f5d4", onKeyDetected }) {
   const audioCtxRef = useRef(null);
   const masterCompressorRef = useRef(null);
   const deckRef = useRef(null);
@@ -39,6 +39,7 @@ function Harness({ id = "A", onMount, color = "#00f5d4" }) {
       focused={false}
       onFocus={() => {}}
       onSync={() => {}}
+      onKeyDetected={onKeyDetected}
     />
   );
 }
@@ -251,6 +252,174 @@ describe("Deck — integration tests across many user stories", () => {
     expect(before).toHaveLength(1);
     // The button is disabled while the drop is active (re-entry blocked).
     expect(bassDrop).toBeDisabled();
+  });
+
+  it("@us US58: no compatible-keys hint before a key is auto-detected", () => {
+    render(<Harness />);
+    expect(screen.queryByText(/mix →/i)).toBeNull();
+  });
+
+  it("@us US58: AUTO surfaces compatible keys and lifts the key via onKeyDetected", async () => {
+    // Build a loud C-major triad so keyDetect resolves to 8B with confidence.
+    const sr = 11025;
+    const len = sr * 12;
+    const cmaj = new MockAudioBuffer(1, len, sr);
+    const data = cmaj.getChannelData(0);
+    const freqs = [261.63, 329.63, 392.0];
+    for (let i = 0; i < len; i++) {
+      const t = i / sr;
+      let s = 0;
+      for (const f of freqs) s += Math.sin(2 * Math.PI * f * t);
+      data[i] = s / freqs.length;
+    }
+
+    let api;
+    const liftedKeys = [];
+    const { container } = render(
+      <Harness
+        onMount={(a) => { api = a; }}
+        onKeyDetected={(k) => liftedKeys.push(k)}
+      />
+    );
+    // Stub decode so the deck's loaded buffer is our C-major chord.
+    api.audioCtxRef.current = new AudioContext();
+    api.audioCtxRef.current.decodeAudioData = () => Promise.resolve(cmaj);
+
+    const deckDiv = container.querySelector('[role="region"]');
+    const fakeAudio = new File([new Uint8Array([0, 1, 2])], "cmaj.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckDiv, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckDiv, {
+        dataTransfer: { files: [fakeAudio], items: [{ kind: "file" }] },
+      });
+    });
+    // loadFile pushes a `null` reset through onKeyDetected.
+    expect(liftedKeys).toContain(null);
+
+    const auto = screen.getByRole("button", { name: /Auto-detect BPM and key/i });
+    await act(async () => fireEvent.click(auto));
+
+    await waitFor(() => {
+      // 8B detected → compatible mix targets 8A · 9B · 7B shown on the deck.
+      expect(screen.getByText(/mix →/i)).toBeInTheDocument();
+    });
+    const hint = screen.getByText(/mix →/i);
+    expect(hint.textContent).toMatch(/8A/);
+    expect(hint.textContent).toMatch(/9B/);
+    expect(hint.textContent).toMatch(/7B/);
+    // The detected key was lifted to the parent.
+    expect(liftedKeys).toContain("8B");
+  });
+
+  it("@us US59: NUDGE − / NUDGE + buttons are disabled with no file loaded", () => {
+    render(<Harness />);
+    const down = screen.getByRole("button", { name: /Pitch bend down deck A/i });
+    const up = screen.getByRole("button", { name: /Pitch bend up deck A/i });
+    expect(down).toBeDisabled();
+    expect(up).toBeDisabled();
+  });
+
+  it("@us US59: holding NUDGE + applies a temporary +4% offset and reverts on release", async () => {
+    let api;
+    const { container } = render(<Harness onMount={(a) => { api = a; }} />);
+    const deckDiv = container.querySelector('[role="region"]');
+    const fakeAudio = new File([new Uint8Array([0, 1, 2])], "track.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckDiv, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckDiv, {
+        dataTransfer: { files: [fakeAudio], items: [{ kind: "file" }] },
+      });
+    });
+
+    // Start playback so a live BufferSource exists to bend.
+    await act(async () => api.deckRef.current.play());
+    const ctx = api.audioCtxRef.current;
+    // Grab the live source: it's the most-recently-started buffer source.
+    const src = ctx._lastStartedSource;
+    expect(src).toBeTruthy();
+    const baseRate = src.playbackRate.value; // base speed (1.0)
+
+    const up = screen.getByRole("button", { name: /Pitch bend up deck A/i });
+
+    // Hold the button: pointerdown → effective rate slides to base + 0.04.
+    await act(async () => {
+      fireEvent.pointerDown(up, { pointerId: 1 });
+    });
+    expect(src.playbackRate.value).toBeCloseTo(baseRate + 0.04, 5);
+    // It ramps via setTargetAtTime (no click), not a hard value write.
+    const last = src.playbackRate.scheduledValues.at(-1);
+    expect(last.type).toBe("setTarget");
+
+    // Release: the bend reverts to the persisted base speed.
+    await act(async () => {
+      fireEvent.pointerUp(up, { pointerId: 1 });
+    });
+    expect(src.playbackRate.value).toBeCloseTo(baseRate, 5);
+  });
+
+  it("@us US59: pointerleave while held also reverts the pitch bend", async () => {
+    let api;
+    const { container } = render(<Harness onMount={(a) => { api = a; }} />);
+    const deckDiv = container.querySelector('[role="region"]');
+    const fakeAudio = new File([new Uint8Array([0, 1, 2])], "track.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckDiv, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckDiv, {
+        dataTransfer: { files: [fakeAudio], items: [{ kind: "file" }] },
+      });
+    });
+    await act(async () => api.deckRef.current.play());
+    const src = api.audioCtxRef.current._lastStartedSource;
+    const baseRate = src.playbackRate.value;
+
+    const down = screen.getByRole("button", { name: /Pitch bend down deck A/i });
+    await act(async () => fireEvent.pointerDown(down, { pointerId: 2 }));
+    expect(src.playbackRate.value).toBeCloseTo(baseRate - 0.04, 5);
+    // Pointer slides off the button without a pointerup — must still revert.
+    await act(async () => fireEvent.pointerLeave(down, { pointerId: 2 }));
+    expect(src.playbackRate.value).toBeCloseTo(baseRate, 5);
+  });
+
+  it("@us US63: deck exposes a loadBuffer imperative method", () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    expect(typeof api.deckRef.current.loadBuffer).toBe("function");
+  });
+
+  it("@us US63: loadBuffer adopts a pre-decoded AudioBuffer without re-decoding", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    // Pre-decode a buffer ourselves (simulating a crate entry).
+    const sr = 11025;
+    const preDecoded = new MockAudioBuffer(1, sr * 3, sr); // 3 s track
+    // decodeAudioData must NOT be called by the loadBuffer path.
+    const ctx = new AudioContext();
+    api.audioCtxRef.current = ctx;
+    const decodeSpy = vi.spyOn(ctx, "decodeAudioData");
+
+    await act(async () => {
+      await api.deckRef.current.loadBuffer(preDecoded, "from-crate.mp3");
+    });
+
+    expect(decodeSpy).not.toHaveBeenCalled();
+    // The deck is now ready (a buffer is loaded) and the file name shows.
+    expect(api.deckRef.current.isReady()).toBe(true);
+    expect(screen.getByText("from-crate.mp3")).toBeInTheDocument();
+  });
+
+  it("@us US63: loadBuffer is a no-op when handed no buffer", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    await act(async () => {
+      await api.deckRef.current.loadBuffer(null, "nothing");
+    });
+    expect(api.deckRef.current.isReady()).toBe(false);
   });
 
   it("@us US24: bass-drop re-entry guard — double-fire does not throw", async () => {

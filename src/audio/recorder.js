@@ -62,6 +62,34 @@ export function createMasterRecorder(audioContext, sourceNode) {
   };
 }
 
+// Format elapsed milliseconds as MM:SS for cue-sheet lines.
+function fmtCueTime(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}`;
+}
+
+// Build a plain-text cue sheet from a list of marker objects.
+// Each marker is `{ elapsedMs }` — the time, relative to record start, at
+// which the user dropped the marker. `mixName` is the shared base filename so
+// the cue sheet self-identifies which audio file it belongs to.
+// Returns a readable string; never touches the network.
+export function buildCueSheet(markers, mixName) {
+  const stamp = new Date().toLocaleString();
+  const lines = [
+    "WAVECRAFT MIX CUE SHEET",
+    `Mix: ${mixName}`,
+    `Exported: ${stamp}`,
+    `Markers: ${markers.length}`,
+    "",
+  ];
+  markers.forEach((m, i) => {
+    lines.push(`${fmtCueTime(m.elapsedMs)} — Marker ${i + 1}`);
+  });
+  return lines.join("\n") + "\n";
+}
+
 export function extensionForMime(mime) {
   if (!mime) return "bin";
   if (mime.includes("mp4")) return "m4a";

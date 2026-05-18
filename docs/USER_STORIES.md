@@ -97,6 +97,17 @@ Persona: bedroom DJ who mixes local files in the browser. Sometimes streams, som
 | US49 | CSP enforced at meta level | E | manual (DevTools network check) |
 | US50 | Screen readers can navigate via ARIA labels | C | spot-checked across component tests |
 
+## W1 — Harmonic aid, pitch-bend & recording
+
+| ID | Story | Coverage | Test file |
+|---|---|---|---|
+| US58 | Reactive harmonic key suggestions — deck shows `mix → …` compatible keys; Camelot wheel highlights the focused deck's detected key + neighbours | U + C + I | `test/data.test.js`, `test/TheoryPanel.test.jsx`, `test/Deck.test.jsx` |
+| US59 | Momentary pitch-bend NUDGE −/+ — held button applies a temporary ±4% offset, reverts on release; disabled with no file | I | `test/Deck.test.jsx` |
+| US60 | Recording cue markers → cue-sheet export — `M` key / MARKER button drops timestamped markers while recording; live count shown; on stop a `<base>.cue.txt` cue sheet (MM:SS — Marker N) downloads alongside the audio; markers reset between recordings (W1.3) | U + C + I | `test/recorder.test.js`, `test/MasterBus.test.jsx`, `test/App.test.jsx` |
+| US61 | Recorder pre/post-limiter tap toggle + clip meter — Clean (pre-limiter parallel tap) vs Radio (post-limiter) selector, locked while recording; master clip indicator lights in `--danger` above the ~0.99 clip threshold (W1.7) | C + I | `test/chain.test.js`, `test/MasterBus.test.jsx`, `test/App.test.jsx` |
+| US62 | Settings export / import — Export downloads a versioned `wavecraft-settings-<ts>.json` (deck themes, crossfade curve, MIDI mappings, recorder tap mode — config only, no audio); Import parses + validates it (checks the `app: "WAVECRAFT"` marker + `version`, drops unknown/malformed fields, never throws, shows an inline `--danger` error on bad input) and applies the valid config to state. Also lets MIDI maps survive a reload (W1.4) | U + C + I | `test/settings.test.js`, `test/App.test.jsx` |
+| US63 | Session crate panel — in-memory list of decoded tracks; add via drag-drop onto the panel or a file-picker (decoded once, validated, decode errors caught inline); each entry quick-loads to Deck A/B via the deck's `loadBuffer` imperative method (pre-decoded buffer, no re-decode); entries removable individually + a Clear-all; never persisted, empty on every fresh load. BPM/key columns rendered but auto-analysis deferred (W1.5) | C + I | `test/Crate.test.jsx`, `test/Deck.test.jsx`, `test/App.test.jsx` |
+
 ## Useful utilities
 
 | ID | Story | Coverage | Test file |

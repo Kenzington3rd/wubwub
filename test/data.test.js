@@ -9,6 +9,7 @@ import {
   KEYBOARD_HINTS,
   SAMPLE_PAD_KEYS,
   LOOPER_BAR_OPTIONS,
+  camelotCompatible,
 } from "../src/data.js";
 
 describe("CAMELOT_WHEEL — US11", () => {
@@ -39,6 +40,56 @@ describe("CAMELOT_WHEEL — US11", () => {
     for (const k of CAMELOT_WHEEL) {
       expect(k.compatible).toContain(k.camelot);
     }
+  });
+});
+
+describe("camelotCompatible — US58 (reactive harmonic key suggestions)", () => {
+  it("@us US58: returns the relative key, +1, and -1 in that order", () => {
+    // 8A (A min) → 8B relative, 9A up, 7A down.
+    expect(camelotCompatible("8A")).toEqual(["8B", "9A", "7A"]);
+    // 8B (C maj) → 8A relative, 9B up, 7B down.
+    expect(camelotCompatible("8B")).toEqual(["8A", "9B", "7B"]);
+  });
+
+  it("@us US58: wraps 12 → 1 going up", () => {
+    expect(camelotCompatible("12A")).toEqual(["12B", "1A", "11A"]);
+    expect(camelotCompatible("12B")).toEqual(["12A", "1B", "11B"]);
+  });
+
+  it("@us US58: wraps 1 → 12 going down", () => {
+    expect(camelotCompatible("1A")).toEqual(["1B", "2A", "12A"]);
+    expect(camelotCompatible("1B")).toEqual(["1A", "2B", "12B"]);
+  });
+
+  it("@us US58: every result is a real Camelot code on the wheel", () => {
+    const all = new Set(CAMELOT_WHEEL.map((w) => w.camelot));
+    for (const k of CAMELOT_WHEEL) {
+      for (const c of camelotCompatible(k.camelot)) {
+        expect(all.has(c)).toBe(true);
+      }
+    }
+  });
+
+  it("@us US58: agrees with the CAMELOT_WHEEL.compatible set (order aside)", () => {
+    for (const k of CAMELOT_WHEEL) {
+      const computed = camelotCompatible(k.camelot);
+      // wheel `compatible` is [self, relative, -1, +1]; drop self, compare sets.
+      const wheelNeighbours = k.compatible.filter((c) => c !== k.camelot);
+      expect(new Set(computed)).toEqual(new Set(wheelNeighbours));
+    }
+  });
+
+  it("@us US58: returns [] for invalid input", () => {
+    expect(camelotCompatible("")).toEqual([]);
+    expect(camelotCompatible(null)).toEqual([]);
+    expect(camelotCompatible("13A")).toEqual([]);
+    expect(camelotCompatible("0B")).toEqual([]);
+    expect(camelotCompatible("8C")).toEqual([]);
+    expect(camelotCompatible("garbage")).toEqual([]);
+  });
+
+  it("@us US58: accepts lowercase letter codes", () => {
+    expect(camelotCompatible("8a")).toEqual(["8B", "9A", "7A"]);
   });
 });
 

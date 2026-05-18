@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "vite build",
     "build:single": "vite build --mode single --outDir dist-single",
+    "size": "vite build && node scripts/check-bundle-size.mjs",
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest"
