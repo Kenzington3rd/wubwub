@@ -29,6 +29,10 @@ export default function EffectCard({ title, color, settings, onChange, params })
         onClick={() => setOn(!settings.on)}
         aria-pressed={settings.on}
         aria-label={`${title} effect ${settings.on ? "on" : "off"}`}
+        // Standard hover step. Applied only when the effect is off — an active
+        // toggle keeps its accent-tinted background, which wc-btn-hover's
+        // !important rule would otherwise stomp (matches TheoryPanel's tabs).
+        className={settings.on ? undefined : "wc-btn-hover"}
         style={{
           background: settings.on ? `${color}33` : "rgba(255,255,255,0.04)",
           border: `1px solid ${settings.on ? color : "rgba(255,255,255,0.08)"}`,

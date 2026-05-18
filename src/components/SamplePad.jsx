@@ -9,6 +9,10 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
   const [pads, setPads] = useState(() =>
     Array.from({ length: PAD_COUNT }, () => ({ name: null, volume: 0.8 }))
   );
+  // A decode failure is routine user feedback — surface it inline (cleared on
+  // the next successful load) rather than blocking with alert(), matching the
+  // loadError pattern in Deck.jsx and Crate.jsx.
+  const [loadError, setLoadError] = useState(null);
   const bufferRefs = useRef(Array(PAD_COUNT).fill(null));
   const gainRefs = useRef(Array(PAD_COUNT).fill(null));
   const fileInputRefs = useRef(Array(PAD_COUNT).fill(null));
@@ -51,11 +55,14 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
       try {
         const buf = await ctx.decodeAudioData(await file.arrayBuffer());
         bufferRefs.current[i] = buf;
+        setLoadError(null);
         setPads((p) =>
           p.map((row, idx) => (idx === i ? { ...row, name: file.name } : row))
         );
       } catch {
-        alert(`Couldn't decode "${file.name}". Try WAV, MP3, OGG, or FLAC.`);
+        setLoadError(
+          `Couldn't decode "${file.name}". Try WAV, MP3, OGG, or FLAC.`
+        );
       }
     },
     [audioCtxRef, ensureMasterCtx]
@@ -145,6 +152,19 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
           Drop or click to load · trigger with Q W E R / A S D F
         </span>
       </div>
+      {loadError && (
+        <div
+          role="alert"
+          style={{
+            color: "#f87171",
+            fontSize: 11,
+            fontFamily: "'Exo 2', sans-serif",
+            marginBottom: 8,
+          }}
+        >
+          {loadError}
+        </div>
+      )}
       <div
         style={{
           display: "grid",

@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import App from "../src/App.jsx";
+import { MockAudioContext } from "./mocks/webAudioMock.js";
 
 // Helper: dispatch a keydown on window (which is what App's handler listens on).
 function pressKey(key, opts = {}) {
@@ -255,6 +256,109 @@ describe("App recording markers — US60 (W1.3)", () => {
     });
     expect(screen.getByRole("button", { name: /Clean/i })).toBeDisabled();
     expect(screen.getByRole("button", { name: /Radio/i })).toBeDisabled();
+  });
+});
+
+describe("App master trim topology — US21 (A1)", () => {
+  // Capture every AudioContext the app constructs so the master chain built
+  // inside ensureMasterCtx can be inspected via the mock's connection tracking
+  // (same approach chain.test.js uses for the per-deck chain).
+  function trackContexts() {
+    const made = [];
+    const original = window.AudioContext;
+    class Tracked extends MockAudioContext {
+      constructor(...args) {
+        super(...args);
+        made.push(this);
+      }
+    }
+    window.AudioContext = Tracked;
+    window.webkitAudioContext = Tracked;
+    return {
+      contexts: made,
+      restore: () => {
+        window.AudioContext = original;
+        window.webkitAudioContext = original;
+      },
+    };
+  }
+
+  it("@us US21: the Round 8 master trim GainNode exists at gain 0.65", async () => {
+    const { contexts, restore } = trackContexts();
+    try {
+      render(<App />);
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: /Record the master mix/i })
+        );
+      });
+      const ctx = contexts[0];
+      // The trim is the gain node sitting between the limiter and masterGain.
+      const comp = ctx._nodes.find((n) => n.nodeType === "DynamicsCompressorNode");
+      expect(comp).toBeTruthy();
+      const trim = comp.connections.find((n) => n.nodeType === "GainNode");
+      expect(trim).toBeTruthy();
+      // A1 — fixed make-up trim *down* guarding against post-limiter overshoot.
+      expect(trim.gain.value).toBe(0.65);
+    } finally {
+      restore();
+    }
+  });
+
+  it("@us US21: the master chain is wired compressor → trim → masterGain → destination", async () => {
+    const { contexts, restore } = trackContexts();
+    try {
+      render(<App />);
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: /Record the master mix/i })
+        );
+      });
+      const ctx = contexts[0];
+      const comp = ctx._nodes.find((n) => n.nodeType === "DynamicsCompressorNode");
+      // compressor → trim
+      const trim = comp.connections.find((n) => n.nodeType === "GainNode");
+      expect(trim).toBeTruthy();
+      // trim → masterGain (a GainNode that in turn reaches destination)
+      const masterGain = trim.connections.find(
+        (n) => n.nodeType === "GainNode" && n.connections.includes(ctx.destination)
+      );
+      expect(masterGain).toBeTruthy();
+      // masterGain → destination closes the chain.
+      expect(masterGain.connections).toContain(ctx.destination);
+    } finally {
+      restore();
+    }
+  });
+
+  it("@us US61: recordTapMode 'pre' taps the pre-limiter recordTap, not the compressor", async () => {
+    const { contexts, restore } = trackContexts();
+    try {
+      render(<App />);
+      // Switch the recorder to the "Clean" (pre-limiter) tap before recording.
+      await act(async () => {
+        fireEvent.click(screen.getByRole("button", { name: /Clean/i }));
+      });
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: /Record the master mix/i })
+        );
+      });
+      const ctx = contexts[0];
+      const dest = ctx._nodes.find(
+        (n) => n.nodeType === "MediaStreamAudioDestinationNode"
+      );
+      expect(dest).toBeTruthy();
+      const comp = ctx._nodes.find((n) => n.nodeType === "DynamicsCompressorNode");
+      // "pre" mode → the recorder taps a GainNode (recordTap), NOT the limiter.
+      expect(comp.connections).not.toContain(dest);
+      const tap = ctx._nodes.find(
+        (n) => n.nodeType === "GainNode" && n.connections.includes(dest)
+      );
+      expect(tap).toBeTruthy();
+    } finally {
+      restore();
+    }
   });
 });
 

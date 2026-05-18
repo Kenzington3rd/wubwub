@@ -59,6 +59,69 @@ describe("SamplePad — US31, US32, US33", () => {
     expect(loadButtons.length).toBe(8);
   });
 
+  it("@us US33: an undecodable file shows an inline role=alert error, not alert()", async () => {
+    // Make the decode fail for this pad load.
+    let refs;
+    const { container } = render(
+      <Harness onRefs={(r) => { refs = r; }} />
+    );
+    refs.audioCtxRef.current.decodeAudioData = () =>
+      Promise.reject(new Error("bad audio"));
+    // Spy on window.alert — the old behavior used a blocking alert(); the
+    // inline-error pattern must never call it.
+    const alertSpy = vi.spyOn(window, "alert").mockImplementation(() => {});
+    try {
+      const padDiv = screen.getByText("Q").closest("div").parentElement;
+      const badFile = new File([new Uint8Array([9, 9, 9])], "broken.xyz", {
+        type: "audio/wav",
+      });
+      await act(async () => {
+        fireEvent.drop(padDiv, {
+          dataTransfer: { files: [badFile], items: [{ kind: "file" }] },
+        });
+      });
+      // Inline error surfaces with role="alert" and names the file.
+      const err = await screen.findByRole("alert");
+      expect(err).toHaveTextContent(/broken\.xyz/);
+      // No blocking alert() — routine feedback stays inline.
+      expect(alertSpy).not.toHaveBeenCalled();
+    } finally {
+      alertSpy.mockRestore();
+    }
+  });
+
+  it("@us US33: a successful load clears a prior inline decode error", async () => {
+    let refs;
+    render(<Harness onRefs={(r) => { refs = r; }} />);
+    const ctx = refs.audioCtxRef.current;
+    const padDiv = screen.getByText("Q").closest("div").parentElement;
+    // First: a failing decode → inline error shows.
+    ctx.decodeAudioData = () => Promise.reject(new Error("bad audio"));
+    await act(async () => {
+      fireEvent.drop(padDiv, {
+        dataTransfer: {
+          files: [new File([new Uint8Array([1])], "bad.wav", { type: "audio/wav" })],
+          items: [{ kind: "file" }],
+        },
+      });
+    });
+    await screen.findByRole("alert");
+    // Then: a successful decode on the same pad → error clears.
+    ctx.decodeAudioData = () =>
+      Promise.resolve(ctx.createBuffer(1, ctx.sampleRate, ctx.sampleRate));
+    await act(async () => {
+      fireEvent.drop(padDiv, {
+        dataTransfer: {
+          files: [new File([new Uint8Array([2])], "good.wav", { type: "audio/wav" })],
+          items: [{ kind: "file" }],
+        },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.queryByRole("alert")).not.toBeInTheDocument();
+    });
+  });
+
   it("@us US61: a triggered pad fans its output into the pre-limiter record tap", async () => {
     // The "Clean" (pre-limiter) recorder tap must carry sample-pad audio, not
     // just the decks. Load a pad, trigger it, and verify the pad's gain node

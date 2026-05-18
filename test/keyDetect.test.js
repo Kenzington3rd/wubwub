@@ -54,4 +54,34 @@ describe("detectKey — US41", () => {
     const { camelot } = await detectKey(buf);
     expect(camelot).toMatch(/^([1-9]|1[0-2])[AB]$/);
   });
+
+  // Build a buffer where the three triad notes play *sequentially* as an
+  // arpeggio rather than simultaneously. A steady chord puts identical energy
+  // in every frame, so the per-frame hop loop is never really exercised — a
+  // framing/hop regression would still pass. An arpeggio spreads each note's
+  // energy across different frames, so the detector only lands the right key
+  // if the hop loop accumulates chroma across all frames correctly.
+  function buildArpeggioBuffer(freqs, seconds = 16, sampleRate = 11025) {
+    const length = Math.floor(sampleRate * seconds);
+    const buf = new MockAudioBuffer(1, length, sampleRate);
+    const data = buf.getChannelData(0);
+    const noteLen = Math.floor(length / freqs.length);
+    for (let i = 0; i < length; i++) {
+      const t = i / sampleRate;
+      const noteIdx = Math.min(freqs.length - 1, Math.floor(i / noteLen));
+      data[i] = Math.sin(2 * Math.PI * freqs[noteIdx] * t);
+    }
+    return buf;
+  }
+
+  it("@us US41: detects C major from a multi-frame C-E-G arpeggio", async () => {
+    // 16 s @ 11025 Hz → ~176k samples → well over 40 four-thousand-sample
+    // frames at a 2048-sample hop, with each note isolated to its own span.
+    const buf = buildArpeggioBuffer([261.63, 329.63, 392.0]);
+    const result = await detectKey(buf);
+    expect(result.camelot).toBe("8B");
+    // Sane confidence — a real correlation, not a degenerate 0/1.
+    expect(result.confidence).toBeGreaterThan(0.3);
+    expect(result.confidence).toBeLessThanOrEqual(1);
+  });
 });

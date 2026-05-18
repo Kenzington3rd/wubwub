@@ -240,7 +240,7 @@ export default function TheoryPanel({
                   style={{
                     fontFamily: "'Audiowide', sans-serif",
                     fontSize: 12,
-                    color: "#a78bfa",
+                    color: "#8892b0",
                   }}
                 >
                   {g.genre}
@@ -330,7 +330,7 @@ export default function TheoryPanel({
                     borderRadius: 6,
                     minWidth: 80,
                     textAlign: "center",
-                    color: "#a78bfa",
+                    color: "#8892b0",
                     fontFamily: "'Exo 2', sans-serif",
                     fontWeight: 600,
                   }}

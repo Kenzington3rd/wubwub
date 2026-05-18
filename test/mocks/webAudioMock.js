@@ -249,20 +249,24 @@ class MockAudioContextBase {
     this.destination = new MockAudioNode(this, "AudioDestinationNode");
     this.audioWorklet = new MockAudioWorklet();
     this._lastStartedSource = null;
+    // Every node created on this context, in creation order. Lets tests
+    // inspect graphs (e.g. the master chain) built inline by app code.
+    this._nodes = [];
   }
   get currentTime() { return this._currentTime; }
   advance(seconds) { this._currentTime += seconds; }
-  createGain() { return new MockGainNode(this); }
-  createBiquadFilter() { return new MockBiquadFilterNode(this); }
-  createBufferSource() { return new MockBufferSourceNode(this); }
-  createConvolver() { return new MockConvolverNode(this); }
-  createDelay(maxDelay = 1) { return new MockDelayNode(this, maxDelay); }
-  createWaveShaper() { return new MockWaveShaperNode(this); }
-  createDynamicsCompressor() { return new MockDynamicsCompressorNode(this); }
-  createAnalyser() { return new MockAnalyserNode(this); }
-  createOscillator() { return new MockOscillatorNode(this); }
+  _track(node) { this._nodes.push(node); return node; }
+  createGain() { return this._track(new MockGainNode(this)); }
+  createBiquadFilter() { return this._track(new MockBiquadFilterNode(this)); }
+  createBufferSource() { return this._track(new MockBufferSourceNode(this)); }
+  createConvolver() { return this._track(new MockConvolverNode(this)); }
+  createDelay(maxDelay = 1) { return this._track(new MockDelayNode(this, maxDelay)); }
+  createWaveShaper() { return this._track(new MockWaveShaperNode(this)); }
+  createDynamicsCompressor() { return this._track(new MockDynamicsCompressorNode(this)); }
+  createAnalyser() { return this._track(new MockAnalyserNode(this)); }
+  createOscillator() { return this._track(new MockOscillatorNode(this)); }
   createMediaStreamDestination() {
-    return new MockMediaStreamAudioDestinationNode(this);
+    return this._track(new MockMediaStreamAudioDestinationNode(this));
   }
   createBuffer(channels, length, sr) {
     return new MockAudioBuffer(channels, length, sr);
