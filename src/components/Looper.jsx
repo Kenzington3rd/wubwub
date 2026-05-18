@@ -45,10 +45,14 @@ export default function Looper({
       if (!ctx) return null;
       let g = gainRefs.current[i];
       if (!g) {
+        const output = outputNodeRef.current;
+        // If the master bus isn't built yet, do NOT cache the gain — an
+        // unconnected node would leave the slot silent forever. Leave the ref
+        // null so a later call retries once the output node exists.
+        if (!output) return null;
         g = ctx.createGain();
         g.gain.value = slots[i].volume;
-        const output = outputNodeRef.current;
-        if (output) g.connect(output);
+        g.connect(output);
         gainRefs.current[i] = g;
       }
       return g;
@@ -88,7 +92,9 @@ export default function Looper({
     if (!node || pendingSlot === slot) return;
     const bars = slots[slot].bars;
     const bpm = effectiveBpmRef.current || DEFAULT_BPM;
-    const seconds = (bars * 4 * 60) / Math.max(40, bpm);
+    // Clamp to the worklet ring-buffer duration (60 s) so long loops at low
+    // BPMs aren't silently truncated. 60 s covers 16 bars down to 64 BPM.
+    const seconds = Math.min(60, (bars * 4 * 60) / Math.max(40, bpm));
     setPendingSlot(slot);
     node.port.postMessage({ type: "capture", slot, seconds });
   };
@@ -193,9 +199,9 @@ export default function Looper({
         >
           LOOPER
         </h3>
-        <span style={{ fontSize: 10, color: "#4a5580" }}>
+        <span style={{ fontSize: 10, color: "#8892b0" }}>
           {workletReady
-            ? "Captures from master bus — taps last N bars at current BPM"
+            ? "Captures from master bus — a fixed window sized from bars × BPM at capture time"
             : "Initializing audio worklet…"}
         </span>
       </div>
@@ -288,6 +294,7 @@ export default function Looper({
                     border: `1px solid ${slot.isPlaying ? color : "rgba(255,255,255,0.1)"}`,
                     borderRadius: 6,
                     padding: "4px 6px",
+                    minHeight: 38,
                     cursor: slot.hasBuffer ? "pointer" : "not-allowed",
                     display: "flex",
                     alignItems: "center",
@@ -300,24 +307,30 @@ export default function Looper({
                     color={slot.isPlaying ? color : "#8892b0"}
                   />
                 </button>
-                <button
-                  onClick={() => clearSlot(i)}
-                  disabled={!slot.hasBuffer}
-                  title="Clear loop"
-                  aria-label={`Clear loop ${i + 1}`}
-                  style={{
-                    background: "transparent",
-                    border: "1px solid rgba(255,255,255,0.08)",
-                    borderRadius: 6,
-                    padding: "4px 6px",
-                    cursor: slot.hasBuffer ? "pointer" : "not-allowed",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "center",
-                  }}
-                >
-                  <Icon name="close" size={12} color="#4a5580" />
-                </button>
+                {/* Only render the clear button once a loop is captured —
+                    an always-visible disabled X reads as a dead affordance.
+                    Matches MidiPanel's conditional clear and SamplePad. */}
+                {slot.hasBuffer && (
+                  <button
+                    onClick={() => clearSlot(i)}
+                    title="Clear loop"
+                    aria-label={`Clear loop ${i + 1}`}
+                    style={{
+                      background: "transparent",
+                      border: "1px solid rgba(255,255,255,0.08)",
+                      borderRadius: 6,
+                      padding: "4px 6px",
+                      minWidth: 38,
+                      minHeight: 38,
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                    }}
+                  >
+                    <Icon name="close" size={12} color="#4a5580" />
+                  </button>
+                )}
               </div>
               <Slider
                 value={slot.volume}
@@ -326,6 +339,7 @@ export default function Looper({
                 max={1}
                 step={0.01}
                 color={color}
+                ariaLabel={`Loop ${i + 1} volume`}
               />
             </div>
           );

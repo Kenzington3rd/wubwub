@@ -109,4 +109,16 @@ describe("disconnectChain", () => {
     expect(() => disconnectChain(null)).not.toThrow();
     expect(() => disconnectChain(undefined)).not.toThrow();
   });
+
+  it("is idempotent — calling it twice on the same chain does not throw", () => {
+    const ctx = new AudioContext();
+    const chain = buildDeckChain(ctx, ctx.createGain());
+    expect(() => {
+      disconnectChain(chain);
+      disconnectChain(chain);
+    }).not.toThrow();
+    for (const node of Object.values(chain)) {
+      expect(node.connections).toHaveLength(0);
+    }
+  });
 });

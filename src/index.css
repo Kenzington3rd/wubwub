@@ -26,6 +26,22 @@
   box-sizing: border-box;
 }
 
+/* Keyboard focus ring — visible on every focusable control when navigating
+   by keyboard (not shown for mouse clicks). */
+*:focus-visible {
+  outline: 2px solid #00f5d4;
+  outline-offset: 2px;
+}
+
+/* Honor reduced-motion preference — neutralize animations + transitions. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -80,20 +96,18 @@ input[type="range"]::-moz-range-thumb {
   cursor: pointer;
 }
 
+/* Subtle hover lift for buttons whose inline style does not otherwise change
+   on hover (TAP / ÷2 / ×2, deck transport). Default/active/disabled states
+   remain driven by inline styles; this only adds the hover step. */
+.wc-btn-hover:not(:disabled):hover {
+  background: rgba(255, 255, 255, 0.12) !important;
+  border-color: rgba(255, 255, 255, 0.22) !important;
+}
+
 /* Keyframes from the prototype */
 @keyframes pulse {
   from { transform: scale(1); }
   to { transform: scale(1.02); }
-}
-
-@keyframes float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-4px); }
-}
-
-@keyframes glowPulse {
-  0%, 100% { box-shadow: 0 0 20px rgba(0, 245, 212, 0.1); }
-  50% { box-shadow: 0 0 40px rgba(0, 245, 212, 0.2); }
 }
 
 /* Beat indicator — opacity pulse, duration set inline based on BPM */

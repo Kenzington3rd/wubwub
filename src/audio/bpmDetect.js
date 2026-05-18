@@ -59,6 +59,13 @@ export async function detectBpm(audioBuffer, { minBpm = 70, maxBpm = 180 } = {})
   // Autocorrelate over BPM range
   const minLag = Math.max(1, Math.floor((60 / maxBpm) * targetSr));
   const maxLag = Math.min(downLen - 1, Math.ceil((60 / minBpm) * targetSr));
+  // If the downsampled envelope is too short to hold even one minLag-spaced
+  // pair, the autocorrelation loop never runs and bestCorr stays -Infinity,
+  // yielding a meaningless BPM. Return an explicit finite default instead.
+  if (downLen < minLag || maxLag < minLag) {
+    const defaultBpm = Math.round((minBpm + maxBpm) / 2);
+    return { bpm: defaultBpm, confidence: 0 };
+  }
   let bestLag = minLag;
   let bestCorr = -Infinity;
   for (let lag = minLag; lag <= maxLag; lag++) {

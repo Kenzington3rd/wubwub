@@ -50,6 +50,7 @@ src/
 │   ├── effects.js            # reverb IR + distortion curve + rampGain + clamp
 │   ├── crossfade.js          # equal-power / linear / constant-power
 │   ├── bpmDetect.js          # autocorrelation BPM detector
+│   ├── keyDetect.js          # Krumhansl-Schmuckler chroma key detector (Camelot)
 │   └── recorder.js           # MediaRecorder wrapper + downloadBlob
 ├── midi/
 │   └── midiMap.js            # MIDI access + CC mapping
@@ -101,10 +102,15 @@ public/
 | `←/→` | Crossfade ±5% |
 | `Shift+←/→` | Snap crossfader to 0/1 |
 | `↑/↓` | Focused deck volume ±5% |
-| `S` | Sync focused deck to the other |
+| `S` | Sync focused deck to the other (see note below) |
 | `C` | Set cue at current position |
 | `1`–`8` | Jump to cue N on focused deck |
 | `Q W E R A S D F` | Trigger sample pad 1–8 |
+
+> **`S` collision:** `S` is both sample pad 6 and the deck-sync shortcut.
+> Resolution: when a deck is **focused**, `S` syncs that deck; sample pad 6 is
+> reachable by pressing `S` with **no deck focused**. The other pad keys
+> (`Q W E R A D F`) are not deck shortcuts, so they always trigger their pad.
 
 ## Danger Zones
 | Path / Area | Rule |

@@ -6,6 +6,7 @@ export default function BassDropMenu({ preset, onChange, color }) {
       value={preset}
       onChange={(e) => onChange(e.target.value)}
       title="Bass drop preset"
+      aria-label="Bass drop preset"
       style={{
         background: "rgba(15,18,35,0.6)",
         color,

@@ -23,6 +23,19 @@ const MAX_CUES = 8;
 
 const CUE_PALETTE = ["#00f5d4", "#a78bfa", "#f0c040", "#f472b6", "#4ade80", "#fb923c", "#60a5fa", "#fde047"];
 
+// Visually hidden, but still announced by screen readers.
+const SR_ONLY = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
+
 function formatTime(s) {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
@@ -55,9 +68,14 @@ const Deck = forwardRef(function Deck(
   const [currentTime, setCurrentTime] = useState(0);
   const [bassDropActive, setBassDropActive] = useState(false);
   const [bassDropPreset, setBassDropPreset] = useState("standard");
+  const [loadError, setLoadError] = useState(null);
   const [bpm, setBpm] = useState(128);
   const [bpmConfidence, setBpmConfidence] = useState(null);
   const [autoBpmRunning, setAutoBpmRunning] = useState(false);
+  // Screen-reader announcement scoped to auto-detect completion only. TAP
+  // writes the same {bpm} number into the visible UI but must NOT announce,
+  // so the live region is separate from the always-present BPM display.
+  const [bpmAnnounce, setBpmAnnounce] = useState("");
   const [detectedKey, setDetectedKey] = useState(null);
   const [effects, setEffects] = useState({
     reverb: { on: false, mix: 0.3, size: 2.0 },
@@ -95,6 +113,10 @@ const Deck = forwardRef(function Deck(
   // render, so a programmatic / MIDI double-trigger could start two detections
   // before the disabled attribute updates.
   const autoDetectRunningRef = useRef(false);
+  // Same race for the bass drop: `bassDropActive` state lags a render, so a
+  // programmatic / MIDI double-fire could schedule two overlapping automation
+  // envelopes and leak a wobble oscillator. This ref guards synchronously.
+  const bassDropRunningRef = useRef(false);
 
   // Keep refs in sync
   useEffect(() => { speedRef.current = speed; }, [speed]);
@@ -282,7 +304,9 @@ const Deck = forwardRef(function Deck(
         !file.type.startsWith("audio/") &&
         !/\.(mp3|wav|ogg|flac|m4a|aac)$/i.test(file.name)
       ) {
-        alert("Please choose an audio file (MP3, WAV, OGG, FLAC, M4A, AAC).");
+        // Wrong file type is routine user feedback — show it inline (cleared
+        // on the next successful load) rather than blocking with alert().
+        setLoadError("Please choose an audio file (MP3, WAV, OGG, FLAC, M4A, AAC).");
         return;
       }
       const ctx = await ensureMasterCtx();
@@ -296,6 +320,7 @@ const Deck = forwardRef(function Deck(
       try {
         const audioBuf = await ctx.decodeAudioData(arrayBuf);
         bufferRef.current = audioBuf;
+        setLoadError(null);
         setFileName(file.name);
         setDuration(audioBuf.duration);
         durationRef.current = audioBuf.duration;
@@ -395,22 +420,31 @@ const Deck = forwardRef(function Deck(
     const chain = chainRef.current;
     const ctx = audioCtxRef.current;
     if (!chain || !ctx) return;
+    if (bassDropRunningRef.current) return;
+    bassDropRunningRef.current = true;
     const preset = BASS_DROP_PRESETS[bassDropPreset] || BASS_DROP_PRESETS.standard;
     setBassDropActive(true);
     const now = ctx.currentTime;
-    const t1 = now + preset.buildSec; // end of build
-    const t2 = t1 + 0.05; // drop snap
-    const t3 = t2 + preset.decaySec; // end of decay
+    // Clamp every scheduled ramp endpoint to >= now. A very short preset
+    // buildSec can otherwise put `t1 - 0.1` in the past, which the Web Audio
+    // automation API rejects.
+    const at = (t) => Math.max(now, t);
+    const t1 = at(now + preset.buildSec); // end of build
+    const t2 = at(t1 + 0.05); // drop snap
+    const t3 = at(t2 + preset.decaySec); // end of decay
+    // exponentialRampToValueAtTime throws on a target <= 0; floor the LPF
+    // endpoints to a small strictly-positive frequency.
+    const lpfStart = Math.max(1, preset.lpfStart);
 
     chain.filter.frequency.cancelScheduledValues(now);
     chain.filter.frequency.setValueAtTime(20000, now);
-    chain.filter.frequency.exponentialRampToValueAtTime(preset.lpfStart, t1);
-    chain.filter.frequency.setValueAtTime(preset.lpfStart, t1);
+    chain.filter.frequency.exponentialRampToValueAtTime(lpfStart, t1);
+    chain.filter.frequency.setValueAtTime(lpfStart, t1);
     chain.filter.frequency.exponentialRampToValueAtTime(20000, t2);
 
     chain.eqLow.gain.cancelScheduledValues(now);
     chain.eqLow.gain.setValueAtTime(eq.low, now);
-    chain.eqLow.gain.linearRampToValueAtTime(preset.eqLowKill, t1 - 0.1);
+    chain.eqLow.gain.linearRampToValueAtTime(preset.eqLowKill, at(t1 - 0.1));
     chain.eqLow.gain.setValueAtTime(preset.eqLowKill, t1);
     chain.eqLow.gain.linearRampToValueAtTime(preset.eqLowPostDrop, t2);
     chain.eqLow.gain.linearRampToValueAtTime(eq.low, t3);
@@ -441,14 +475,21 @@ const Deck = forwardRef(function Deck(
         // Restore the filter to the user's *current* slider value (read via
         // ref, not the closure, in case it moved during the wobble).
         chain.filter.frequency.setValueAtTime(filterFreqRef.current, ctx.currentTime);
+        bassDropRunningRef.current = false;
       };
     }
 
     clearTimeout(bassDropTimeoutRef.current);
-    bassDropTimeoutRef.current = setTimeout(
-      () => setBassDropActive(false),
-      (preset.buildSec + preset.decaySec) * 1000
-    );
+    bassDropTimeoutRef.current = setTimeout(() => {
+      setBassDropActive(false);
+      // For wobble presets, `osc.onended` is the sole owner of clearing the
+      // re-entry guard. This setTimeout fires ~50 ms *before* `osc.onended`;
+      // clearing the guard here too would open a window where a second
+      // triggerBassDrop passes the guard, overwrites wobbleNodesRef, and the
+      // first oscillator's onended then nulls the ref — orphaning the second
+      // wobble's nodes. Let onended clear it for the wobble path.
+      if (!preset.wobble) bassDropRunningRef.current = false;
+    }, (preset.buildSec + preset.decaySec) * 1000);
   }, [audioCtxRef, bassDropPreset, eq.low]);
 
   // ─── BPM ───
@@ -463,8 +504,13 @@ const Deck = forwardRef(function Deck(
       const intervals = [];
       for (let i = 1; i < taps.length; i++) intervals.push(taps[i] - taps[i - 1]);
       const avg = intervals.reduce((a, b) => a + b, 0) / intervals.length;
-      setBpm(Math.round(60000 / avg));
-      setBpmConfidence(null);
+      // Guard: two taps in the same millisecond → avg === 0 → bpm = Infinity,
+      // which poisons the beat-pulse animation and Looper capture math. Only
+      // commit a finite BPM, clamped to a sane musical range.
+      if (avg > 0) {
+        setBpm(clamp(Math.round(60000 / avg), 40, 220));
+        setBpmConfidence(null);
+      }
     }
   };
 
@@ -472,18 +518,38 @@ const Deck = forwardRef(function Deck(
     if (!bufferRef.current || autoDetectRunningRef.current) return;
     autoDetectRunningRef.current = true;
     setAutoBpmRunning(true);
+    // Capture the BPM at detection start. If the user presses ÷2 / ×2 / TAP
+    // while detection is in flight, the live bpm will differ from this — in
+    // that case we honour the user's manual change and skip the auto result.
+    const bpmAtStart = bpmRef.current;
     // Run BPM + key detection in parallel — both read the same buffer offline.
     try {
       const [bpmResult, keyResult] = await Promise.all([
-        detectBpm(bufferRef.current).catch(() => null),
+        // Widen the detection range so low-BPM tracks (lo-fi, half-time
+        // dubstep ~70) and very fast genres aren't misdetected.
+        detectBpm(bufferRef.current, { minBpm: 60, maxBpm: 200 }).catch(() => null),
         detectKey(bufferRef.current).catch(() => null),
       ]);
-      if (bpmResult) {
+      let applied = false;
+      if (bpmResult && bpmRef.current === bpmAtStart) {
         setBpm(bpmResult.bpm);
         setBpmConfidence(bpmResult.confidence);
+        applied = true;
       }
+      let announcedKey = null;
       if (keyResult && keyResult.confidence > 0.3) {
         setDetectedKey(keyResult);
+        announcedKey = keyResult;
+      }
+      // Announce the auto-detect outcome for screen readers (this is the only
+      // path that updates the dedicated live region — TAP never does).
+      if (applied) {
+        setBpmAnnounce(
+          `Detected ${bpmResult.bpm} BPM` +
+            (announcedKey ? `, key ${announcedKey.camelot}` : "")
+        );
+      } else if (bpmResult) {
+        setBpmAnnounce("Auto-detect complete; manual BPM kept");
       }
     } catch (err) {
       console.warn("auto-detect failed", err);
@@ -629,6 +695,7 @@ const Deck = forwardRef(function Deck(
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button
             onClick={tapBpm}
+            className="wc-btn-hover"
             title="Tap to set BPM by ear"
             aria-label={`Tap BPM for deck ${id}`}
             style={{
@@ -666,6 +733,7 @@ const Deck = forwardRef(function Deck(
           <button
             onClick={runAutoBpm}
             disabled={!fileName || autoBpmRunning}
+            aria-busy={autoBpmRunning}
             title="Auto-detect BPM + key from track"
             aria-label={`Auto-detect BPM and key for deck ${id}`}
             style={{
@@ -685,6 +753,7 @@ const Deck = forwardRef(function Deck(
           <button
             onClick={() => setBpm((b) => Math.max(40, Math.round(b / 2)))}
             disabled={!fileName}
+            className="wc-btn-hover"
             title="Half BPM (fix double-time detection)"
             aria-label={`Halve BPM for deck ${id}`}
             style={{
@@ -704,6 +773,7 @@ const Deck = forwardRef(function Deck(
           <button
             onClick={() => setBpm((b) => Math.min(220, Math.round(b * 2)))}
             disabled={!fileName}
+            className="wc-btn-hover"
             title="Double BPM (fix half-time detection)"
             aria-label={`Double BPM for deck ${id}`}
             style={{
@@ -720,31 +790,44 @@ const Deck = forwardRef(function Deck(
           >
             ×2
           </button>
-          <span style={{ fontFamily: "'Exo 2', sans-serif", fontSize: 14, color, fontWeight: 700 }}>
-            {bpm} BPM
+          {/* Always-present BPM / key display. No role="status" here: TAP
+              writes into this region too, and a polite live region would
+              announce on every rhythmic tap. Auto-detect completion is
+              announced via the dedicated SR-only region below instead. */}
+          <span
+            style={{ display: "flex", alignItems: "center", gap: 6 }}
+          >
+            <span style={{ fontFamily: "'Exo 2', sans-serif", fontSize: 14, color, fontWeight: 700 }}>
+              {bpm} BPM
+            </span>
+            {detectedKey && (
+              <span
+                title={`Detected key: ${detectedKey.key} (Camelot ${detectedKey.camelot})`}
+                style={{
+                  fontSize: 10,
+                  color: color,
+                  fontFamily: "'Exo 2', sans-serif",
+                  background: `${color}11`,
+                  border: `1px solid ${color}33`,
+                  padding: "1px 6px",
+                  borderRadius: 4,
+                  fontWeight: 700,
+                }}
+              >
+                {detectedKey.camelot}
+              </span>
+            )}
+            {bpmConfidence != null && (
+              <span style={{ fontSize: 9, color }} aria-label="BPM detection confidence">
+                {Math.round(bpmConfidence * 100)}%
+              </span>
+            )}
           </span>
-          {detectedKey && (
-            <span
-              title={`Detected key: ${detectedKey.key} (Camelot ${detectedKey.camelot})`}
-              style={{
-                fontSize: 10,
-                color: color,
-                fontFamily: "'Exo 2', sans-serif",
-                background: `${color}11`,
-                border: `1px solid ${color}33`,
-                padding: "1px 6px",
-                borderRadius: 4,
-                fontWeight: 700,
-              }}
-            >
-              {detectedKey.camelot}
-            </span>
-          )}
-          {bpmConfidence != null && (
-            <span style={{ fontSize: 9, color: "#4a5580" }} aria-label="BPM detection confidence">
-              {Math.round(bpmConfidence * 100)}%
-            </span>
-          )}
+          {/* Dedicated live region — updates only on auto-detect completion,
+              never on TAP. Mirrors the recording / MIDI-learn pattern. */}
+          <span role="status" aria-live="polite" style={SR_ONLY}>
+            {bpmAnnounce}
+          </span>
         </div>
       </div>
 
@@ -785,6 +868,19 @@ const Deck = forwardRef(function Deck(
         )}
       </button>
 
+      {loadError && (
+        <div
+          role="alert"
+          style={{
+            color: "#f87171",
+            fontSize: 11,
+            fontFamily: "'Exo 2', sans-serif",
+          }}
+        >
+          {loadError}
+        </div>
+      )}
+
       {/* Waveform */}
       <WaveformCanvas
         chainRef={chainRef}
@@ -821,7 +917,8 @@ const Deck = forwardRef(function Deck(
         ].map((btn) => (
           <button
             key={btn.label}
-            onClick={(e) => { btn.action(); e.currentTarget.blur(); }}
+            onClick={() => btn.action()}
+            className={btn.active ? undefined : "wc-btn-hover"}
             title={btn.label}
             aria-label={`${btn.label} deck ${id}`}
             aria-pressed={btn.active}
@@ -845,9 +942,9 @@ const Deck = forwardRef(function Deck(
 
       {/* Volume / Speed / Filter */}
       {[
-        { label: "VOL", value: volume, onChange: setVolumeState, min: 0, max: 1, step: 0.01, display: Math.round(volume * 100) },
-        { label: "SPD", value: speed, onChange: (v) => setSpeedState(Math.round(v * 100) / 100), min: 0.5, max: 2.0, step: 0.01, display: `${speed.toFixed(2)}x` },
-        { label: "FLT", value: filterFreq, onChange: setFilterFreq, min: 60, max: 20000, step: 10, display: filterFreq >= 1000 ? (filterFreq / 1000).toFixed(1) + "k" : filterFreq },
+        { label: "VOL", ariaLabel: `Deck ${id} volume`, value: volume, onChange: setVolumeState, min: 0, max: 1, step: 0.01, display: Math.round(volume * 100) },
+        { label: "SPD", ariaLabel: `Deck ${id} speed`, value: speed, onChange: (v) => setSpeedState(Math.round(v * 100) / 100), min: 0.5, max: 2.0, step: 0.01, display: `${speed.toFixed(2)}x` },
+        { label: "FLT", ariaLabel: `Deck ${id} filter frequency`, value: filterFreq, onChange: setFilterFreq, min: 60, max: 20000, step: 10, display: filterFreq >= 1000 ? (filterFreq / 1000).toFixed(1) + "k" : filterFreq },
       ].map((row) => (
         <div key={row.label} style={{ display: "flex", alignItems: "center", gap: 8 }}>
           <span style={{ fontSize: 9, color: "#8892b0", textTransform: "uppercase", letterSpacing: 1, width: 32 }}>
@@ -860,6 +957,7 @@ const Deck = forwardRef(function Deck(
             max={row.max}
             step={row.step}
             color={color}
+            ariaLabel={row.ariaLabel}
           />
           <span style={{ fontSize: 11, color, fontFamily: "'Exo 2', sans-serif", width: 36, textAlign: "right" }}>
             {row.display}

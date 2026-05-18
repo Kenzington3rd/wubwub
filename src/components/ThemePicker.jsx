@@ -21,6 +21,7 @@ export default function ThemePicker({ deckId, value, onChange }) {
             onClick={() => onChange(c.value)}
             title={c.name}
             aria-label={`Deck ${deckId} color: ${c.name}`}
+            aria-pressed={active}
             style={{
               width: 16,
               height: 16,

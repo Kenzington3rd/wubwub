@@ -83,6 +83,9 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
               padding: 0,
               display: "flex",
               alignItems: "center",
+              justifyContent: "center",
+              minWidth: 38,
+              minHeight: 38,
             }}
           >
             <Icon name="close" size={11} color="currentColor" />

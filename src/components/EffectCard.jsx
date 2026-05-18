@@ -70,6 +70,7 @@ export default function EffectCard({ title, color, settings, onChange, params })
             color={color}
             size={36}
             format={p.format}
+            disabled={!settings.on}
           />
         ))}
       </div>

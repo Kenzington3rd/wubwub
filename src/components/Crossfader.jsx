@@ -58,6 +58,7 @@ export default function Crossfader({
           vertical={!isMobile}
           height={200}
           color={NEUTRAL}
+          ariaLabel="Crossfade A to B"
           className="wc-crossfader-slider"
         />
       </div>

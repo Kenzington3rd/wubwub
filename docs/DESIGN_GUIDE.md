@@ -33,12 +33,33 @@ and STYLE_GUIDE.md (code).
   rotation range, pointer-drag (vertical) interaction, `touch-action: none`.
 - **Slider** — native range input, `accentColor` set to the deck color, 4px
   track, 14px thumb. Vertical variant for the desktop crossfader only.
-- **Buttons** — `border-radius: 10px`. Icon-only controls are 38–40px square and
-  must carry an `aria-label`. Text buttons use Audiowide for primary actions
-  (BASS DROP), Exo 2 elsewhere.
+- **Buttons** — two-step radius scale: **large** controls (transport pads, file
+  loader, BASS DROP) use `border-radius: 10px`; **small / compact** controls
+  (TAP, SYNC, AUTO, cue chips, looper & sample-pad controls, MIDI buttons) use
+  `6–8px`. Icon-only controls have a minimum 38×38px hit area (via padding or
+  `min-width` / `min-height`) and must carry an `aria-label`. Text buttons use
+  Audiowide for primary actions (BASS DROP), Exo 2 elsewhere.
+  - **Exemption — color-swatch picker.** The `ThemePicker` accent swatches are
+    16×16px and intentionally below the 38×38 minimum: they are a tightly
+    packed swatch grid where a full-size hit area would force the row to wrap
+    or crowd out the MasterBus controls. They remain accessible — each swatch
+    is a real `<button>` with an `aria-label` and keyboard focus. This is the
+    only sanctioned exemption from the 38×38 rule.
 - **Icon** — see BRANDING_GUIDE §5. Size 10–18px depending on context.
-- **Cards / panels** — Looper, SamplePad, TheoryPanel, MidiPanel all share the
-  `rgba(15,18,35,0.6)` panel background and 16px radius.
+- **Cards / panels** — two container tiers by radius, three by background alpha:
+  - **Content cards** — decks, Looper, SamplePad, TheoryPanel — use a **16px**
+    radius.
+  - **Bars / collapsible panels** — MasterBus, MidiPanel — are slimmer
+    container chrome and use a **12px** radius to read as a bar rather than a
+    full content card.
+  - **Panel-background alpha scale** — the `rgba(15,18,35,α)` fill uses a
+    three-tier α to layer depth:
+    - **0.7** — decks. The most opaque; they are the primary surface and sit
+      over the app gradient with `backdrop-filter: blur(10px)`.
+    - **0.6** — secondary content cards (Looper, SamplePad, TheoryPanel,
+      MidiPanel body).
+    - **0.5** — the MasterBus bar. The most translucent, so the bar recedes
+      and reads as chrome rather than content.
 
 ## 4. Color usage
 
@@ -77,9 +98,11 @@ Every interactive control defines: **default, hover, active/engaged, disabled.**
   Focused deck is visually indicated by a stronger border + glow.
 - Form inputs are skipped by the global keydown handler so typing never triggers
   shortcuts.
-- Contrast: body text `#ccd6f6` on `#070a14` passes WCAG AA. Do not put
-  `--text-dim` (`#4a5580`) on the deep background for anything that must be read —
-  it is for de-emphasized hints only.
+- Contrast: body text `#ccd6f6` on `#070a14` passes WCAG AA, and `--text-muted`
+  (`#8892b0`) small copy on `#070a14` also passes AA (≈6.4:1, above the 4.5:1
+  small-text minimum). Do not put `--text-dim` (`#4a5580`) on the deep
+  background for anything that must be read — at ≈2.7:1 it fails AA, so it is
+  for de-emphasized decorative hints only, never live readable copy.
 - **New non-essential animation must honor `prefers-reduced-motion`.** Existing
   pulse animations are short and low-amplitude; anything larger needs a guard.
 

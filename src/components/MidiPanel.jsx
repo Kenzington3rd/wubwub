@@ -1,6 +1,19 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { MIDI_SUPPORTED, MIDI_TARGETS } from "../midi/midiMap.js";
 import Icon from "./Icon.jsx";
+
+// Visually hidden, still announced by screen readers.
+const SR_ONLY = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
 
 export default function MidiPanel({
   enabled,
@@ -15,6 +28,24 @@ export default function MidiPanel({
   error,
 }) {
   const [open, setOpen] = useState(false);
+
+  // Announce MIDI learn transitions for screen readers: entering learn mode,
+  // and when a mapping is captured (learnTarget clears with a mapping now set).
+  const [learnAnnounce, setLearnAnnounce] = useState("");
+  const prevLearnRef = useRef(learnTarget);
+  useEffect(() => {
+    const prev = prevLearnRef.current;
+    const labelFor = (id) => MIDI_TARGETS.find((t) => t.id === id)?.label || id;
+    if (learnTarget && learnTarget !== prev) {
+      setLearnAnnounce(`Learning ${labelFor(learnTarget)} — twist a control`);
+    } else if (!learnTarget && prev) {
+      // Learn mode just ended. If a mapping now exists for the previous
+      // target, it was captured; otherwise it was cancelled.
+      if (mappings[prev]) setLearnAnnounce(`${labelFor(prev)} mapped`);
+    }
+    prevLearnRef.current = learnTarget;
+  }, [learnTarget, mappings]);
+
   return (
     <div
       style={{
@@ -25,8 +56,12 @@ export default function MidiPanel({
         marginTop: 16,
       }}
     >
+      <div role="status" aria-live="polite" style={SR_ONLY}>
+        {learnAnnounce}
+      </div>
       <button
         onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
         style={{
           background: "transparent",
           border: "none",
@@ -50,7 +85,7 @@ export default function MidiPanel({
           <Icon name="chevron" size={12} color="#a78bfa" />
         </span>
         <span>MIDI</span>
-        <span style={{ fontSize: 10, color: "#4a5580", letterSpacing: 0, textTransform: "none" }}>
+        <span style={{ fontSize: 10, color: "#8892b0", letterSpacing: 0, textTransform: "none" }}>
           {!MIDI_SUPPORTED
             ? "(not supported in this browser)"
             : enabled
@@ -69,6 +104,7 @@ export default function MidiPanel({
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button
                 onClick={enabled ? onDisable : onEnable}
+                aria-pressed={enabled}
                 style={{
                   background: enabled ? "#a78bfa22" : "rgba(255,255,255,0.05)",
                   border: `1px solid ${enabled ? "#a78bfa55" : "rgba(255,255,255,0.1)"}`,
@@ -78,6 +114,8 @@ export default function MidiPanel({
                   fontSize: 11,
                   cursor: "pointer",
                   fontFamily: "'Exo 2', sans-serif",
+                  textTransform: "uppercase",
+                  letterSpacing: 1,
                 }}
               >
                 {enabled ? "Disable MIDI" : "Enable MIDI"}
@@ -124,6 +162,7 @@ export default function MidiPanel({
                     )}
                     <button
                       onClick={() => (learning ? onCancelLearn() : onStartLearn(t.id))}
+                      aria-pressed={learning}
                       style={{
                         background: "transparent",
                         border: "1px solid rgba(255,255,255,0.1)",
@@ -131,7 +170,10 @@ export default function MidiPanel({
                         borderRadius: 4,
                         fontSize: 10,
                         padding: "1px 6px",
+                        minHeight: 38,
                         cursor: "pointer",
+                        textTransform: "uppercase",
+                        letterSpacing: 1,
                       }}
                     >
                       {learning ? "Cancel" : "Learn"}
@@ -146,9 +188,12 @@ export default function MidiPanel({
                           border: "1px solid rgba(255,255,255,0.1)",
                           borderRadius: 4,
                           padding: "3px 5px",
+                          minWidth: 38,
+                          minHeight: 38,
                           cursor: "pointer",
                           display: "flex",
                           alignItems: "center",
+                          justifyContent: "center",
                         }}
                       >
                         <Icon name="close" size={10} color="#4a5580" />

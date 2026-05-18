@@ -44,7 +44,8 @@ qa-engineer agents enforce this.
 
 - Inline style objects with template literals for dynamic accent colors.
 - Global CSS (`src/index.css`) holds `@font-face`, resets, `@keyframes`, and the
-  responsive media query only.
+  media queries only (the responsive `max-width` breakpoint and the
+  `prefers-reduced-motion` block).
 - Deck-scoped components receive a `color` prop and derive every tint from it.
   Never hard-code `#00f5d4` / `#a78bfa` inside them.
 - Opacity-suffix tinting (`{color}22`, `{color}66`) is the standard.

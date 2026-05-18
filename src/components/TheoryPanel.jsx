@@ -19,7 +19,11 @@ export default function TheoryPanel() {
         overflow: "hidden",
       }}
     >
-      <div style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.06)" }}>
+      <div
+        role="tablist"
+        aria-label="Theory and reference"
+        style={{ display: "flex", borderBottom: "1px solid rgba(255,255,255,0.06)" }}
+      >
         {[
           { id: "theory", icon: "music", label: "Harmonic Mixing" },
           { id: "bpm", icon: "bolt", label: "Genre BPM Guide" },
@@ -30,8 +34,11 @@ export default function TheoryPanel() {
           return (
             <button
               key={tab.id}
+              id={`theory-tab-${tab.id}`}
+              role="tab"
+              aria-selected={active}
+              aria-controls={`theory-panel-${tab.id}`}
               onClick={() => setActiveTab(tab.id)}
-              aria-pressed={active}
               style={{
                 flex: 1,
                 padding: "10px 8px",
@@ -41,7 +48,7 @@ export default function TheoryPanel() {
                 fontSize: 11,
                 letterSpacing: 1,
                 background: active ? "rgba(0,245,212,0.08)" : "transparent",
-                color: active ? "#00f5d4" : "#4a5580",
+                color: active ? "#00f5d4" : "#8892b0",
                 borderBottom: active ? "2px solid #00f5d4" : "2px solid transparent",
                 transition: "all 0.2s",
                 display: "flex",
@@ -50,14 +57,19 @@ export default function TheoryPanel() {
                 gap: 6,
               }}
             >
-              <Icon name={tab.icon} size={13} color={active ? "#00f5d4" : "#4a5580"} />
+              <Icon name={tab.icon} size={13} color={active ? "#00f5d4" : "#8892b0"} />
               {tab.label}
             </button>
           );
         })}
       </div>
 
-      <div style={{ padding: 16 }}>
+      <div
+        role="tabpanel"
+        id={`theory-panel-${activeTab}`}
+        aria-labelledby={`theory-tab-${activeTab}`}
+        style={{ padding: 16 }}
+      >
         {activeTab === "theory" && (
           <div>
             <p style={{ fontSize: 11, color: "#8892b0", marginBottom: 12 }}>
@@ -73,6 +85,7 @@ export default function TheoryPanel() {
                   <button
                     key={item.camelot}
                     onClick={() => setSelectedKey(isSelected ? null : i)}
+                    aria-pressed={isSelected}
                     style={{
                       padding: "4px 8px",
                       borderRadius: 6,
@@ -167,7 +180,7 @@ export default function TheoryPanel() {
                 >
                   {g.bpm}
                 </div>
-                <div style={{ fontSize: 10, color: "#4a5580" }}>{g.feel}</div>
+                <div style={{ fontSize: 10, color: "#8892b0" }}>{g.feel}</div>
               </div>
             ))}
           </div>
@@ -203,9 +216,13 @@ export default function TheoryPanel() {
                 fontSize: 11,
                 cursor: "pointer",
                 fontFamily: "'Exo 2', sans-serif",
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 6,
               }}
             >
-              Next Tip →
+              Next Tip
+              <Icon name="chevron" size={12} color="#00f5d4" />
             </button>
           </div>
         )}

@@ -58,6 +58,10 @@ export default function App() {
   const masterVolRef = useRef(0.85);
   const workletLoadingRef = useRef(null);
   const recordTogglingRef = useRef(false);
+  // True while mounted. Used to bail out of async work (e.g. record toggle)
+  // if the component unmounts mid-await — otherwise a recorder + MediaStream
+  // tap created after unmount leaks (no JS reference, still tapping master).
+  const mountedRef = useRef(true);
 
   // Keep masterVolRef in sync so ensureMasterCtx doesn't need masterVol in deps.
   useEffect(() => { masterVolRef.current = masterVol; }, [masterVol]);
@@ -116,7 +120,7 @@ export default function App() {
           const node = new AudioWorkletNode(ctx, "looper-processor", {
             numberOfInputs: 1,
             numberOfOutputs: 0,
-            processorOptions: { seconds: 30 },
+            processorOptions: { seconds: 60 },
           });
           masterCompressorRef.current.connect(node);
           workletNodeRef.current = node;
@@ -214,13 +218,20 @@ export default function App() {
       const ownRef = focused === "B" ? deckBRef : focused === "A" ? deckARef : null;
       const otherRef = focused === "A" ? deckBRef : focused === "B" ? deckARef : null;
 
-      // Sample pad keys (always active, no focus required).
+      // Sample pad keys (active when NO deck is focused, no focus required).
       // Skip key-repeat to avoid retriggering during key-hold.
+      //
+      // `S` collides: it is both sample pad 6 and the deck-sync shortcut.
+      // Resolution: when a deck IS focused, `S` syncs that deck (deck-scoped
+      // shortcuts win); sample pad 6 is still reachable by pressing `S` with
+      // no deck focused. The other pad keys (Q W E R A D F) are not deck
+      // shortcuts, so they always trigger their pad.
       if (
         !e.repeat &&
         SAMPLE_PAD_KEYS.includes(e.key.toLowerCase()) &&
         !e.ctrlKey &&
-        !e.metaKey
+        !e.metaKey &&
+        !(focused && e.key.toLowerCase() === "s")
       ) {
         samplePadRef.current?.triggerByKey(e.key.toLowerCase());
         return;
@@ -258,6 +269,8 @@ export default function App() {
       }
       const lower = e.key.toLowerCase();
       if (lower === "s") {
+        // Only reachable when a deck is focused — the sample-pad branch above
+        // intercepts `S` when no deck is focused (sample pad 6).
         e.preventDefault();
         const otherBpm = otherRef?.current?.getBpm?.();
         ownRef?.current?.syncTo?.(otherBpm);
@@ -307,6 +320,9 @@ export default function App() {
         return;
       }
       const ctx = await ensureMasterCtx();
+      // Bail if the component unmounted during the await — otherwise the
+      // recorder + MediaStreamDestination tap below would leak.
+      if (!mountedRef.current) return;
       if (!ctx || !masterCompressorRef.current) return;
       const rec = createMasterRecorder(ctx, masterCompressorRef.current);
       if (!rec) {
@@ -413,6 +429,7 @@ export default function App() {
   // ── Cleanup ──
   useEffect(() => {
     return () => {
+      mountedRef.current = false;
       midiUnsubRef.current?.();
       recorderRef.current?.dispose?.();
       recorderRef.current = null;
@@ -570,7 +587,7 @@ export default function App() {
         />
 
         <footer style={{ textAlign: "center", padding: "20px 0 8px" }}>
-          <p style={{ fontSize: 10, color: "#2a3050", letterSpacing: 2 }}>
+          <p style={{ fontSize: 10, color: "#8892b0", letterSpacing: 2 }}>
             100% FREE · 100% LOCAL · NO DATA LEAVES YOUR DEVICE · MAKE MUSIC, NOT
             PAYMENTS
           </p>

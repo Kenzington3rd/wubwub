@@ -21,14 +21,15 @@ describe("TheoryPanel — US11, US12, US13, US26 (hints tab)", () => {
 
   it("@us US12: BPM tab shows genre BPM ranges", () => {
     render(<TheoryPanel />);
-    fireEvent.click(screen.getByRole("button", { name: /Genre BPM Guide/i }));
+    // Tabs use proper tab semantics (role="tab"), not plain buttons.
+    fireEvent.click(screen.getByRole("tab", { name: /Genre BPM Guide/i }));
     expect(screen.getByText("Dubstep")).toBeInTheDocument();
     expect(screen.getByText("House")).toBeInTheDocument();
   });
 
   it("@us US13: Tips tab shows a tip and a Next button that rotates them", () => {
     render(<TheoryPanel />);
-    fireEvent.click(screen.getByRole("button", { name: /DJ Tips/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /DJ Tips/i }));
     const firstTipQuote = screen.getByText(/^".*"$/);
     const firstText = firstTipQuote.textContent;
     fireEvent.click(screen.getByRole("button", { name: /Next Tip/i }));
@@ -38,7 +39,7 @@ describe("TheoryPanel — US11, US12, US13, US26 (hints tab)", () => {
 
   it("@us US26: Shortcuts tab lists keyboard hints (Space, S, C, 1-8)", () => {
     render(<TheoryPanel />);
-    fireEvent.click(screen.getByRole("button", { name: /Shortcuts/i }));
+    fireEvent.click(screen.getByRole("tab", { name: /Shortcuts/i }));
     // <kbd> elements specifically — disambiguates from action descriptions
     // that also contain digit ranges.
     const kbds = document.querySelectorAll("kbd");

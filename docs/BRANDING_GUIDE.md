@@ -28,22 +28,36 @@ controls (PLAY, BASS DROP, RECORD) and Title Case for navigation/tabs.
 
 The palette is fixed. Do not introduce new hues without updating this guide.
 
-| Token | Hex | Use |
+The `Name` column is a **palette name for reference only** — these are *not* CSS
+custom properties. The codebase has no `:root` variable block; every value below
+appears as a literal hex (or `rgba()`) string inside inline-style template
+literals. This is deliberate: deck accent colors are dynamically user-selected,
+so colors flow as props/state rather than static CSS variables.
+
+| Name | Hex | Use |
 |---|---|---|
-| `--bg-deep` | `#070a14` | Darkest background, theme color |
+| bg-deep | `#070a14` | Darkest background, theme color |
 | Background gradient | `160deg, #070a14 → #0d1225 → #0f0a20 → #080c18` | App shell |
-| `--bg-card` | `rgba(15,18,35,0.7)` | Cards / panels (with `backdrop-filter: blur(10px)`) |
-| `--text-primary` | `#ccd6f6` | Main text |
-| `--text-muted` | `#8892b0` | Labels, secondary text |
-| `--text-dim` | `#4a5580` | Hints, inactive |
-| `--accent-a` | `#00f5d4` (cyan) | Deck A default; primary brand accent |
-| `--accent-b` | `#a78bfa` (purple) | Deck B default |
-| `--accent-master` | `#f0c040` (gold) | Master controls |
-| `--danger` | `#f87171` | Recording state, destructive affordances |
+| bg-card | `rgba(15,18,35,0.7)` | Cards / panels (with `backdrop-filter: blur(10px)`) |
+| text-primary | `#ccd6f6` | Main text |
+| text-muted | `#8892b0` | Labels, secondary text |
+| text-dim | `#4a5580` | Hints, inactive, decorative dividers — **never live copy** |
+| accent-a | `#00f5d4` (cyan) | Deck A default; primary brand accent |
+| accent-b | `#a78bfa` (purple) | Deck B default |
+| accent-master | `#f0c040` (gold) | Master controls |
+| danger | `#f87171` | Recording state, destructive affordances |
 
 Deck accent colors are **user-selectable** (see `COLOR_THEMES` in `src/data.js`):
 cyan, purple, gold, pink (`#f472b6`), green (`#4ade80`), orange (`#fb923c`).
 Any new theme color must be added there *and* listed here.
+
+**Cue marker palette** — cue points cycle through a fixed 8-color palette
+(`CUE_PALETTE` in `src/components/Deck.jsx`) so each cue is visually distinct on
+the waveform. It reuses the six theme accents plus two extras:
+cyan `#00f5d4`, purple `#a78bfa`, gold `#f0c040`, pink `#f472b6`,
+green `#4ade80`, orange `#fb923c`, blue `#60a5fa`, yellow `#fde047`.
+Any change to cue count or marker colors must update both `CUE_PALETTE` and this
+list.
 
 **Opacity suffixes** are the standard way to derive tints from an accent:
 `{accent}11`–`{accent}33` for backgrounds, `{accent}44`–`{accent}88` for borders,
@@ -89,6 +103,8 @@ accent dot.
 - Knob drag: immediate, no transition.
 - Beat indicator: `beatPulse` keyframe, duration = `60 / bpm` seconds.
 - Bass drop: `pulse` keyframe, 0.15s infinite alternate.
+- Record dot: `pulse` keyframe, 0.8s infinite alternate (slower, calmer pulse
+  than the bass-drop button — signals an ongoing recording, not a transient hit).
 - Respect the spirit of `prefers-reduced-motion` for any *new* non-essential
   animation (see DESIGN_GUIDE.md §Accessibility).
 

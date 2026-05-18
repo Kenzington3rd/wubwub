@@ -60,4 +60,22 @@ describe("detectBpm — US40", () => {
     expect(confidence).toBeGreaterThanOrEqual(0);
     expect(confidence).toBeLessThanOrEqual(1);
   });
+
+  it("@us US40: a silent / all-zero buffer returns confidence 0 and a finite bpm", async () => {
+    // Untouched MockAudioBuffer channels are zero-filled — pure silence.
+    const silent = new MockAudioBuffer(1, 44100 * 8, 44100);
+    const { bpm, confidence } = await detectBpm(silent);
+    expect(confidence).toBe(0);
+    expect(Number.isFinite(bpm)).toBe(true);
+  });
+
+  it("@us US40: a buffer too short for the autocorrelation lag returns a finite default, confidence 0", async () => {
+    // A tiny buffer cannot hold even one minLag-spaced pair in the ~200 Hz
+    // envelope — detectBpm must return an explicit finite default, never
+    // -Infinity-derived garbage.
+    const tiny = new MockAudioBuffer(1, 64, 44100);
+    const { bpm, confidence } = await detectBpm(tiny);
+    expect(confidence).toBe(0);
+    expect(Number.isFinite(bpm)).toBe(true);
+  });
 });

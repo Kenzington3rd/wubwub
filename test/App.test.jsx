@@ -39,6 +39,51 @@ describe("App keyboard shortcuts — US26, US27, US32, US43", () => {
     }
   });
 
+  // Helper: dispatch a keydown and return the event so callers can inspect
+  // defaultPrevented. The sync (S) branch calls preventDefault(); the sample
+  // -pad branch does not — so defaultPrevented discriminates which fired.
+  function pressKeyEvent(key, opts = {}) {
+    const event = new KeyboardEvent("keydown", {
+      key,
+      bubbles: true,
+      cancelable: true,
+      ...opts,
+    });
+    Object.defineProperty(event, "target", { value: document.body });
+    act(() => window.dispatchEvent(event));
+    return event;
+  }
+
+  it("@us US32: 'S' triggers deck sync when a deck is focused (not sample pad 6)", () => {
+    render(<App />);
+    // Focus Deck A by pointer-down on its region.
+    const deckA = screen.getByRole("region", { name: /Deck A/i });
+    fireEvent.pointerDown(deckA);
+    // With a deck focused, 'S' is the sync shortcut — the handler calls
+    // preventDefault(). The sample-pad branch never calls preventDefault().
+    const ev = pressKeyEvent("s");
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it("@us US32: 'S' triggers sample pad 6 when no deck is focused", () => {
+    render(<App />);
+    // No deck focused → sample-pad branch handles 'S' and does NOT
+    // preventDefault, and it must not throw.
+    const ev = pressKeyEvent("s");
+    expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it("@us US32: sample pads still trigger when a deck is focused (q w e r a d f)", () => {
+    render(<App />);
+    const deckA = screen.getByRole("region", { name: /Deck A/i });
+    fireEvent.pointerDown(deckA);
+    // Non-colliding pad keys remain reachable with a deck focused.
+    for (const k of ["q", "w", "e", "r", "a", "d", "f"]) {
+      const ev = pressKeyEvent(k);
+      expect(ev.defaultPrevented).toBe(false);
+    }
+  });
+
   it("@us US43: space key with target=button skips re-trigger via blur", () => {
     render(<App />);
     const playBtn = screen.getByRole("button", { name: /Play deck A/i });

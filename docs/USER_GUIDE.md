@@ -59,9 +59,11 @@ The center column. Drag to blend Deck A ↔ Deck B. The dropdown picks the curve
 
 ## Looper
 
-Four slots. Each captures the **last N bars (4 / 8 / 16)** of whatever is playing
-on the master bus. Click **Capture**, then **Play** to loop it. The volume slider
-sets the loop's level.
+Four slots. Pick a bar count (4 / 8 / 16); **Capture** grabs a fixed-length
+window of whatever is playing on the master bus, sized from bars × BPM at the
+moment you press it. Because it's a BPM snapshot, the captured loop won't be
+exactly N bars if the tempo drifts afterward. Click **Capture**, then **Play**
+to loop it. The volume slider sets the loop's level.
 
 ## Sample pad
 
@@ -87,6 +89,10 @@ Click a deck first to "focus" it (it gets a brighter glow).
 | `C` | Set a cue on the focused deck |
 | `1`–`8` | Jump to cue N on the focused deck |
 | `Q W E R` / `A S D F` | Trigger sample pads 1–8 |
+
+`S` does double duty: with a deck focused it syncs that deck; with no deck
+focused it triggers sample pad 6. Click empty space to un-focus if you want the
+pad. The other pad keys always trigger their pad.
 
 ## MIDI controllers
 

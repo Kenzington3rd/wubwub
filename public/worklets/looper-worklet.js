@@ -5,6 +5,19 @@
 // Memory cost: sampleRate * seconds * 2 channels * 4 bytes
 //   At 48 kHz, 60 s stereo → ~23 MB. Tune `seconds` from the caller.
 
+// Ring-buffer wrap math, extracted as a pure function so it is unit-testable
+// without an AudioWorkletGlobalScope. Given the current write position, the
+// number of samples to capture, and the ring-buffer size, returns the index
+// where the capture window starts (handles the wrap-around case).
+export function captureStartIndex(writePos, samples, bufferSize) {
+  return (writePos - samples + bufferSize) % bufferSize;
+}
+
+// `AudioWorkletProcessor` only exists inside an AudioWorkletGlobalScope. Guard
+// the class + registration so importing this file from a test (plain Node /
+// happy-dom) to exercise `captureStartIndex` doesn't throw a ReferenceError.
+if (typeof AudioWorkletProcessor !== "undefined") {
+
 class LooperProcessor extends AudioWorkletProcessor {
   constructor(options) {
     super(options);
@@ -23,7 +36,7 @@ class LooperProcessor extends AudioWorkletProcessor {
       this.bufferSize,
       Math.floor(sampleRate * seconds)
     );
-    const start = (this.writePos - samples + this.bufferSize) % this.bufferSize;
+    const start = captureStartIndex(this.writePos, samples, this.bufferSize);
     const l = new Float32Array(samples);
     const r = new Float32Array(samples);
     for (let i = 0; i < samples; i++) {
@@ -56,3 +69,5 @@ class LooperProcessor extends AudioWorkletProcessor {
 }
 
 registerProcessor("looper-processor", LooperProcessor);
+
+}

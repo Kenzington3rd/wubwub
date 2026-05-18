@@ -26,4 +26,26 @@ describe("ThemePicker — US36, US50", () => {
       screen.getAllByRole("button").every((b) => b.getAttribute("aria-label"))
     ).toBe(true);
   });
+
+  it("@us US50 (a11y): aria-pressed reflects the active swatch", () => {
+    // value === "#a78bfa" → the Purple swatch is the selected theme.
+    render(<ThemePicker deckId="A" value="#a78bfa" onChange={() => {}} />);
+    const activeSwatch = screen.getByRole("button", { name: /Deck A color: Purple/ });
+    expect(activeSwatch).toHaveAttribute("aria-pressed", "true");
+    // Every other swatch must report aria-pressed="false".
+    for (const c of COLOR_THEMES) {
+      if (c.name === "Purple") continue;
+      expect(
+        screen.getByRole("button", { name: `Deck A color: ${c.name}` })
+      ).toHaveAttribute("aria-pressed", "false");
+    }
+  });
+
+  it("@us US50 (a11y): exactly one swatch is aria-pressed at a time", () => {
+    render(<ThemePicker deckId="B" value="#f0c040" onChange={() => {}} />);
+    const pressed = screen
+      .getAllByRole("button")
+      .filter((b) => b.getAttribute("aria-pressed") === "true");
+    expect(pressed).toHaveLength(1);
+  });
 });

@@ -43,7 +43,9 @@ function goertzelEnergy(samples, sr, freq) {
     s2 = s1;
     s1 = s0;
   }
-  return s1 * s1 + s2 * s2 - coeff * s1 * s2;
+  // Clamp to 0: floating-point error in `s1*s1 + s2*s2 - coeff*s1*s2` can
+  // yield small negative values, which would skew the chroma correlation.
+  return Math.max(0, s1 * s1 + s2 * s2 - coeff * s1 * s2);
 }
 
 function pearsonCorrelation(a, b) {

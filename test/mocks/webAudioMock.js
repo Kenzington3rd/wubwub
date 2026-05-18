@@ -206,13 +206,18 @@ class MockAudioWorkletNode extends MockAudioNode {
     this.port = {
       onmessage: null,
       _listeners: new Set(),
+      // Records every postMessage payload so tests can assert what the app
+      // sent to the worklet (e.g. capture seconds clamping).
+      postedMessages: [],
       addEventListener(type, fn) {
         if (type === "message") this._listeners.add(fn);
       },
       removeEventListener(type, fn) {
         if (type === "message") this._listeners.delete(fn);
       },
-      postMessage() {},
+      postMessage(msg) {
+        this.postedMessages.push(msg);
+      },
       start() {},
     };
   }

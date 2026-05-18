@@ -19,11 +19,20 @@ export const MIDI_TARGETS = [
 // function. `onCc` is called with (channel, cc, value127, inputName) for every
 // CC message; status bytes outside CC range (0xB0-0xBF) are dropped.
 export async function enableMidi(onCc) {
-  if (!MIDI_SUPPORTED) throw new Error("Web MIDI not supported in this browser.");
+  // Re-check at call time rather than trusting the import-time constant — the
+  // navigator can be polyfilled/mocked after module load.
+  if (typeof navigator === "undefined" || !navigator.requestMIDIAccess) {
+    throw new Error("Web MIDI not supported in this browser.");
+  }
   const access = await navigator.requestMIDIAccess({ sysex: false });
-  const subscribers = [];
+  // Keyed by input.id so an unplug→replug cycle re-uses the same slot instead of
+  // stacking a second `midimessage` handler (which would fire `onCc` twice).
+  const subscribers = new Map();
 
   const subscribeToInput = (input) => {
+    // Already bound — drop the stale handler before re-binding.
+    const existing = subscribers.get(input.id);
+    if (existing) existing();
     const handler = (e) => {
       const data = e.data;
       if (!data || data.length < 3) return;
@@ -36,20 +45,31 @@ export async function enableMidi(onCc) {
       onCc(channel, cc, value, input.name);
     };
     input.addEventListener("midimessage", handler);
-    subscribers.push(() => input.removeEventListener("midimessage", handler));
+    subscribers.set(input.id, () =>
+      input.removeEventListener("midimessage", handler)
+    );
+  };
+
+  const unsubscribeFromInput = (input) => {
+    const unsub = subscribers.get(input.id);
+    if (unsub) {
+      unsub();
+      subscribers.delete(input.id);
+    }
   };
 
   for (const input of access.inputs.values()) subscribeToInput(input);
 
   const onStateChange = (e) => {
-    if (e.port?.type === "input" && e.port.state === "connected") {
-      subscribeToInput(e.port);
-    }
+    if (e.port?.type !== "input") return;
+    if (e.port.state === "connected") subscribeToInput(e.port);
+    else if (e.port.state === "disconnected") unsubscribeFromInput(e.port);
   };
   access.addEventListener("statechange", onStateChange);
 
   return () => {
     subscribers.forEach((unsub) => unsub());
+    subscribers.clear();
     access.removeEventListener("statechange", onStateChange);
   };
 }

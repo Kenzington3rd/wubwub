@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useImperativeHandle, useRef, useState, forwardRef } from "react";
 import { SAMPLE_PAD_KEYS } from "../data.js";
 import Icon from "./Icon.jsx";
+import Slider from "./Slider.jsx";
 
 const PAD_COUNT = 8;
 
@@ -18,10 +19,14 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, en
       if (!ctx) return null;
       let g = gainRefs.current[i];
       if (!g) {
+        const out = outputNodeRef.current;
+        // If the master bus isn't built yet, do NOT cache the gain — an
+        // unconnected node would leave the pad silent forever. Leave the ref
+        // null so a later call retries once the output node exists.
+        if (!out) return null;
         g = ctx.createGain();
         g.gain.value = pads[i].volume;
-        const out = outputNodeRef.current;
-        if (out) g.connect(out);
+        g.connect(out);
         gainRefs.current[i] = g;
       }
       return g;
@@ -83,12 +88,16 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, en
     setPads((p) => p.map((row, idx) => (idx === i ? { ...row, name: null } : row)));
   };
 
-  useImperativeHandle(ref, () => ({
-    triggerByKey: (key) => {
-      const i = SAMPLE_PAD_KEYS.indexOf(key.toLowerCase());
-      if (i >= 0) trigger(i);
-    },
-  }));
+  useImperativeHandle(
+    ref,
+    () => ({
+      triggerByKey: (key) => {
+        const i = SAMPLE_PAD_KEYS.indexOf(key.toLowerCase());
+        if (i >= 0) trigger(i);
+      },
+    }),
+    [trigger]
+  );
 
   useEffect(() => {
     return () => {
@@ -127,7 +136,7 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, en
         >
           SAMPLES
         </h3>
-        <span style={{ fontSize: 10, color: "#4a5580" }}>
+        <span style={{ fontSize: 10, color: "#8892b0" }}>
           Drop or click to load · trigger with Q W E R / A S D F
         </span>
       </div>
@@ -176,21 +185,29 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, en
                 >
                   {key}
                 </kbd>
-                <button
-                  onClick={() => clearPad(i)}
-                  disabled={!loaded}
-                  title="Clear pad"
-                  aria-label={`Clear sample pad ${i + 1}`}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    cursor: loaded ? "pointer" : "not-allowed",
-                    display: "flex",
-                    alignItems: "center",
-                  }}
-                >
-                  <Icon name="close" size={12} color="#4a5580" />
-                </button>
+                {/* Only render the clear button when there's a loaded
+                    sample to clear — an always-visible disabled X reads as a
+                    dead affordance. Matches MidiPanel's conditional clear. */}
+                {loaded && (
+                  <button
+                    onClick={() => clearPad(i)}
+                    title="Clear pad"
+                    aria-label={`Clear sample pad ${i + 1}`}
+                    style={{
+                      background: "transparent",
+                      border: "none",
+                      cursor: "pointer",
+                      display: "flex",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      minWidth: 38,
+                      minHeight: 38,
+                      margin: -8,
+                    }}
+                  >
+                    <Icon name="close" size={12} color="#4a5580" />
+                  </button>
+                )}
               </div>
               <input
                 ref={(el) => (fileInputRefs.current[i] = el)}
@@ -208,6 +225,9 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, en
                   if (loaded) trigger(i);
                   else fileInputRefs.current[i]?.click();
                 }}
+                aria-label={
+                  loaded ? `Play sample pad ${i + 1}` : `Load sample pad ${i + 1}`
+                }
                 style={{
                   background: loaded ? "rgba(0,245,212,0.18)" : "rgba(255,255,255,0.04)",
                   border: `1px solid ${loaded ? "rgba(0,245,212,0.5)" : "rgba(255,255,255,0.1)"}`,
@@ -226,14 +246,14 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, en
               >
                 {loaded ? pad.name : "+ Load"}
               </button>
-              <input
-                type="range"
+              <Slider
+                value={pad.volume}
+                onChange={(v) => setVolume(i, v)}
                 min={0}
                 max={1}
                 step={0.01}
-                value={pad.volume}
-                onChange={(e) => setVolume(i, parseFloat(e.target.value))}
-                style={{ accentColor: "#00f5d4", width: "100%" }}
+                color="#00f5d4"
+                ariaLabel={`Pad ${i + 1} volume`}
               />
             </div>
           );

@@ -9,6 +9,7 @@ export default function Knob({
   color = "#00f5d4",
   size = 52,
   format,
+  disabled = false,
 }) {
   const knobRef = useRef(null);
   const dragRef = useRef({ active: false, startY: 0, startVal: 0 });
@@ -17,14 +18,25 @@ export default function Knob({
   const norm = (value - min) / range;
   const angle = -135 + norm * 270;
 
+  // Keyboard step: 1 for integer-range knobs (e.g. drive 0–100), otherwise
+  // a hundredth of the range, rounded to match the drag rounding precision.
+  const rawStep = range / 100;
+  const step =
+    Number.isInteger(min) && Number.isInteger(max) && range >= 100
+      ? 1
+      : Math.round(rawStep * 100) / 100 || 0.01;
+
+  // Mirror the drag rounding so keyboard and pointer produce identical values.
+  const commit = (v) => onChange(Math.round(Math.max(min, Math.min(max, v)) * 100) / 100);
+
   const handlePointerDown = (e) => {
+    if (disabled) return;
     e.preventDefault();
     dragRef.current = { active: true, startY: e.clientY, startVal: value };
     const onMove = (ev) => {
       if (!dragRef.current.active) return;
       const delta = (dragRef.current.startY - ev.clientY) * (range / 120);
-      const newVal = Math.max(min, Math.min(max, dragRef.current.startVal + delta));
-      onChange(Math.round(newVal * 100) / 100);
+      commit(dragRef.current.startVal + delta);
     };
     const onUp = () => {
       dragRef.current.active = false;
@@ -33,6 +45,32 @@ export default function Knob({
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
+  };
+
+  const handleKeyDown = (e) => {
+    if (disabled) return;
+    switch (e.key) {
+      case "ArrowUp":
+      case "ArrowRight":
+        e.preventDefault();
+        commit(value + step);
+        break;
+      case "ArrowDown":
+      case "ArrowLeft":
+        e.preventDefault();
+        commit(value - step);
+        break;
+      case "Home":
+        e.preventDefault();
+        commit(min);
+        break;
+      case "End":
+        e.preventDefault();
+        commit(max);
+        break;
+      default:
+        break;
+    }
   };
 
   const display =
@@ -46,17 +84,28 @@ export default function Knob({
     <div style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 2 }}>
       <div
         ref={knobRef}
+        role="slider"
+        aria-orientation="vertical"
+        tabIndex={disabled ? -1 : 0}
+        aria-label={label}
+        aria-valuenow={value}
+        aria-valuetext={display}
+        aria-valuemin={min}
+        aria-valuemax={max}
+        aria-disabled={disabled || undefined}
         onPointerDown={handlePointerDown}
+        onKeyDown={handleKeyDown}
         style={{
           width: size,
           height: size,
           borderRadius: "50%",
           background: "radial-gradient(circle at 40% 35%, #2a2f45, #12152a)",
           border: `2px solid ${color}55`,
-          cursor: "grab",
+          cursor: disabled ? "not-allowed" : "grab",
           position: "relative",
           boxShadow: `0 0 12px ${color}22, inset 0 1px 2px rgba(255,255,255,0.05)`,
           touchAction: "none",
+          opacity: disabled ? 0.4 : 1,
         }}
       >
         <div

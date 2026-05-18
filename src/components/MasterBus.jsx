@@ -1,6 +1,19 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Slider from "./Slider.jsx";
 import ThemePicker from "./ThemePicker.jsx";
+
+// Visually hidden, but still announced by screen readers.
+const SR_ONLY = {
+  position: "absolute",
+  width: 1,
+  height: 1,
+  padding: 0,
+  margin: -1,
+  overflow: "hidden",
+  clip: "rect(0 0 0 0)",
+  whiteSpace: "nowrap",
+  border: 0,
+};
 
 function fmtElapsed(ms) {
   const total = Math.floor(ms / 1000);
@@ -22,6 +35,10 @@ export default function MasterBus({
   recordStartedAt,
 }) {
   const [elapsed, setElapsed] = useState(0);
+  // Announce only the start/stop transition — never the per-250ms timer text,
+  // which would be far too chatty for a live region.
+  const [recordAnnounce, setRecordAnnounce] = useState("");
+  const wasRecordingRef = useRef(isRecording);
 
   useEffect(() => {
     if (!isRecording || !recordStartedAt) {
@@ -31,6 +48,15 @@ export default function MasterBus({
     const id = setInterval(() => setElapsed(Date.now() - recordStartedAt), 250);
     return () => clearInterval(id);
   }, [isRecording, recordStartedAt]);
+
+  useEffect(() => {
+    if (isRecording && !wasRecordingRef.current) {
+      setRecordAnnounce("Recording started");
+    } else if (!isRecording && wasRecordingRef.current) {
+      setRecordAnnounce("Recording stopped, mix saved");
+    }
+    wasRecordingRef.current = isRecording;
+  }, [isRecording]);
 
   return (
     <div
@@ -71,6 +97,8 @@ export default function MasterBus({
       <button
         onClick={onToggleRecord}
         disabled={!recordSupported}
+        aria-pressed={isRecording}
+        aria-label={isRecording ? "Stop recording" : "Record the master mix"}
         title={
           recordSupported
             ? "Record the master mix to a local file"
@@ -105,6 +133,10 @@ export default function MasterBus({
         />
         {isRecording ? `REC ${fmtElapsed(elapsed)}` : "RECORD"}
       </button>
+
+      <div role="status" aria-live="polite" style={SR_ONLY}>
+        {recordAnnounce}
+      </div>
     </div>
   );
 }

@@ -8,6 +8,7 @@ export default function Slider({
   height = 120,
   color = "#00f5d4",
   label,
+  ariaLabel,
   className,
 }) {
   return (
@@ -40,6 +41,7 @@ export default function Slider({
         step={step}
         value={value}
         className={className}
+        aria-label={ariaLabel || label || undefined}
         onChange={(e) => onChange(parseFloat(e.target.value))}
         style={{
           ...(vertical
