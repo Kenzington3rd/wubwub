@@ -81,6 +81,19 @@ and STYLE_GUIDE.md (code).
   affordances, never a deck accent. (The Crate's per-entry "→ A" / "→ B" load
   buttons are the exception: they are deck-scoped and tint with each deck's
   current accent, threaded in as `deckAColor` / `deckBColor` props.)
+- **Panel-heading accent pattern.** Each shared non-deck panel carries **one
+  fixed identity accent, used for its HEADING TEXT only** — it labels the panel
+  at a glance without painting the whole surface. The panel **body** (borders,
+  glow, buttons, icons, empty-state affordances) stays **neutral slate**
+  (`#8892b0` and the neutral chrome scale). The registered headings are:
+  - **Looper** — purple `#a78bfa`
+  - **SamplePad** — cyan `#00f5d4`
+  - **Crate** — green `#4ade80`
+  Any new shared panel picks one fixed accent from the registered palette,
+  distinct from the others, for its heading. This is independent of the
+  deck-color system: deck-scoped components (Deck and its children, plus the
+  Crate's deck-load buttons) still thread the `color` prop and never use a
+  fixed accent. The MasterBus is gold per the rule above.
 - **The crossfader is a shared control, not Deck B.** Its body (slider track,
   "X-FADE" label, curve selector) is neutral slate (`#8892b0`). Only its `A` and
   `B` end-labels are tinted — with the respective deck's current accent color,

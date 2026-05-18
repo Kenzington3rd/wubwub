@@ -204,6 +204,48 @@ describe("App recording markers — US60 (W1.3)", () => {
     expect(freshMarkerBtn).not.toHaveTextContent(/[1-9]/);
   });
 
+  it("@us US60: stopping a recording with markers downloads a .cue.txt alongside the audio", async () => {
+    render(<App />);
+    // Capture every anchor download by filename.
+    const downloads = [];
+    const originalClick = HTMLAnchorElement.prototype.click;
+    HTMLAnchorElement.prototype.click = function () {
+      downloads.push(this.download);
+    };
+    try {
+      const recordBtn = screen.getByRole("button", {
+        name: /Record the master mix/i,
+      });
+      // Start recording, drop a marker, then stop.
+      await act(async () => {
+        fireEvent.click(recordBtn);
+      });
+      const markerBtn = screen.getByRole("button", {
+        name: /Drop a cue marker/i,
+      });
+      await act(async () => {
+        fireEvent.click(markerBtn);
+      });
+      // Stop — rec.stop() resolves on a macrotask, so flush timers/promises.
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: /Stop recording/i })
+        );
+        await new Promise((r) => setTimeout(r, 0));
+      });
+      await screen.findByRole("button", { name: /Record the master mix/i });
+    } finally {
+      HTMLAnchorElement.prototype.click = originalClick;
+    }
+    // Two files: the audio mix and the cue sheet, sharing a base name.
+    const audio = downloads.find((n) => /^wavecraft-mix-.*\.(webm|m4a|ogg)$/.test(n));
+    const cue = downloads.find((n) => /^wavecraft-mix-.*\.cue\.txt$/.test(n));
+    expect(audio).toBeTruthy();
+    expect(cue).toBeTruthy();
+    // The cue sheet pairs with the audio file (same base name).
+    expect(cue).toBe(audio.replace(/\.(webm|m4a|ogg)$/, ".cue.txt"));
+  });
+
   it("@us US61: the tap toggle is disabled while recording is in progress", async () => {
     render(<App />);
     await act(async () => {

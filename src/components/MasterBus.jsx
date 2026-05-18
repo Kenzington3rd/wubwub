@@ -294,7 +294,7 @@ export default function MasterBus({
           <span
             style={{
               background: "#f0c040",
-              color: "#0a0e1a",
+              color: "#070a14",
               borderRadius: 8,
               padding: "0 6px",
               fontSize: 10,

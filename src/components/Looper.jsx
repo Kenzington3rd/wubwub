@@ -20,6 +20,7 @@ export default function Looper({
   audioCtxRef,
   workletNodeRef,
   outputNodeRef,
+  recordTapRef,
   workletReady,
   effectiveBpmRef,
 }) {
@@ -53,11 +54,16 @@ export default function Looper({
         g = ctx.createGain();
         g.gain.value = slots[i].volume;
         g.connect(output);
+        // W1.7 — also fan the slot into the parallel pre-limiter record tap so
+        // the "Clean" recording captures looper audio, not just the decks. The
+        // tap has no downstream connection, so this never doubles the audible
+        // signal. Optional: if the tap isn't ready the slot still plays.
+        if (recordTapRef?.current) g.connect(recordTapRef.current);
         gainRefs.current[i] = g;
       }
       return g;
     },
-    [audioCtxRef, outputNodeRef, slots]
+    [audioCtxRef, outputNodeRef, recordTapRef, slots]
   );
 
   // Listen for worklet capture responses.

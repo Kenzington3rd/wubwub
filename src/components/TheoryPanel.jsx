@@ -53,6 +53,10 @@ export default function TheoryPanel({
               aria-selected={active}
               aria-controls={`theory-panel-${tab.id}`}
               onClick={() => setActiveTab(tab.id)}
+              // Standard hover step. Applied only to inactive tabs — the active
+              // tab keeps its accent-tinted background, which wc-btn-hover's
+              // !important rule would otherwise stomp.
+              className={active ? undefined : "wc-btn-hover"}
               style={{
                 flex: 1,
                 padding: "10px 8px",
@@ -119,6 +123,12 @@ export default function TheoryPanel({
                 let background = "rgba(255,255,255,0.02)";
                 let color = "#4a5580";
                 let boxShadow = "none";
+                // A key in any highlighted state (selected / live / compatible)
+                // already carries an accent background; only a plain neutral
+                // key gets the wc-btn-hover step, so the !important hover rule
+                // doesn't stomp an accent tint.
+                const isHighlighted =
+                  isSelected || isLiveKey || isCompat || isLiveCompat;
                 if (isSelected) {
                   borderColor = "#00f5d4";
                   background = "#00f5d422";
@@ -143,6 +153,7 @@ export default function TheoryPanel({
                     key={item.camelot}
                     onClick={() => setSelectedKey(isSelected ? null : i)}
                     aria-pressed={isSelected}
+                    className={isHighlighted ? undefined : "wc-btn-hover"}
                     title={
                       isLiveKey
                         ? `Deck ${liveDeck} detected key`
@@ -151,7 +162,11 @@ export default function TheoryPanel({
                         : undefined
                     }
                     style={{
-                      padding: "4px 8px",
+                      // 38px minimum hit area — the wheel is a free-flowing
+                      // flex-wrap row, so a taller button just reflows; it
+                      // does not break the layout (DESIGN_GUIDE §3).
+                      padding: "8px 10px",
+                      minHeight: 38,
                       borderRadius: 6,
                       border: "1px solid",
                       borderColor,

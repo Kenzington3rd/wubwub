@@ -386,6 +386,44 @@ describe("Deck — integration tests across many user stories", () => {
     expect(src.playbackRate.value).toBeCloseTo(baseRate, 5);
   });
 
+  it("@us US59: pitch-bend keeps the effective playback rate clamped to [0.5, 2.0]", async () => {
+    let api;
+    const { container } = render(<Harness onMount={(a) => { api = a; }} />);
+    const deckDiv = container.querySelector('[role="region"]');
+    const fakeAudio = new File([new Uint8Array([0, 1, 2])], "track.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckDiv, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckDiv, {
+        dataTransfer: { files: [fakeAudio], items: [{ kind: "file" }] },
+      });
+    });
+    await act(async () => api.deckRef.current.play());
+    const src = api.audioCtxRef.current._lastStartedSource;
+
+    // Push the base speed to the ceiling, then nudge UP: base + 0.04 = 2.04,
+    // which must clamp to the 2.0 maximum, not overshoot.
+    await act(async () => api.deckRef.current.setSpeed(2.0));
+    const up = screen.getByRole("button", { name: /Pitch bend up deck A/i });
+    await act(async () => fireEvent.pointerDown(up, { pointerId: 7 }));
+    expect(src.playbackRate.value).toBeLessThanOrEqual(2.0);
+    expect(src.playbackRate.value).toBeCloseTo(2.0, 5);
+    // Release → reverts cleanly to the persisted base speed.
+    await act(async () => fireEvent.pointerUp(up, { pointerId: 7 }));
+    expect(src.playbackRate.value).toBeCloseTo(2.0, 5);
+
+    // Push the base speed to the floor, then nudge DOWN: 0.5 - 0.04 = 0.46,
+    // which must clamp to the 0.5 minimum.
+    await act(async () => api.deckRef.current.setSpeed(0.5));
+    const down = screen.getByRole("button", { name: /Pitch bend down deck A/i });
+    await act(async () => fireEvent.pointerDown(down, { pointerId: 8 }));
+    expect(src.playbackRate.value).toBeGreaterThanOrEqual(0.5);
+    expect(src.playbackRate.value).toBeCloseTo(0.5, 5);
+    await act(async () => fireEvent.pointerUp(down, { pointerId: 8 }));
+    expect(src.playbackRate.value).toBeCloseTo(0.5, 5);
+  });
+
   it("@us US63: deck exposes a loadBuffer imperative method", () => {
     let api;
     render(<Harness onMount={(a) => { api = a; }} />);

@@ -5,7 +5,7 @@ import Slider from "./Slider.jsx";
 
 const PAD_COUNT = 8;
 
-const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, ensureMasterCtx }, ref) {
+const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, recordTapRef, ensureMasterCtx }, ref) {
   const [pads, setPads] = useState(() =>
     Array.from({ length: PAD_COUNT }, () => ({ name: null, volume: 0.8 }))
   );
@@ -27,11 +27,16 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, en
         g = ctx.createGain();
         g.gain.value = pads[i].volume;
         g.connect(out);
+        // W1.7 — also fan the pad into the parallel pre-limiter record tap so
+        // the "Clean" recording captures sample-pad audio, not just the decks.
+        // The tap has no downstream connection, so this never doubles the
+        // audible signal. Optional: if the tap isn't ready the pad still plays.
+        if (recordTapRef?.current) g.connect(recordTapRef.current);
         gainRefs.current[i] = g;
       }
       return g;
     },
-    [audioCtxRef, outputNodeRef, pads]
+    [audioCtxRef, outputNodeRef, recordTapRef, pads]
   );
 
   const loadPad = useCallback(

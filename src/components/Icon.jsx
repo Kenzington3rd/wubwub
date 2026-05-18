@@ -3,8 +3,8 @@
 //
 // Two render styles:
 //   FILL   — solid shapes (play, pause, stop, bolt, record)
-//   STROKE — outlined, 2px round-capped strokes (loop, close, plus, music,
-//            bulb, keyboard, speaker)
+//   STROKE — outlined, 2px round-capped strokes (loop, close, plus, chevron,
+//            music, bulb, keyboard, speaker, flag, download, upload)
 //
 // Usage: <Icon name="play" size={16} color="#00f5d4" />
 // `title` renders an accessible <title> child; omit it for purely decorative

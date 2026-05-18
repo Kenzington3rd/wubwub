@@ -75,6 +75,11 @@ export default function App() {
   // W1.3 — cue markers for the in-progress recording: array of { elapsedMs }.
   // In memory only; never persisted. Reset when a new recording starts.
   const markersRef = useRef([]);
+  // W1.3 — recording-start timestamp, the source of truth for marker math.
+  // Written synchronously in onToggleRecord the moment the recording starts,
+  // so an `M` keypress in the gap before the recordStartedAt-state effect
+  // flushes still sees a non-null value (the state mirror can lag a render).
+  const recordStartedAtRef = useRef(null);
   const midiUnsubRef = useRef(null);
   const deckARef = useRef(null);
   const deckBRef = useRef(null);
@@ -379,6 +384,7 @@ export default function App() {
         recorderRef.current = null;
         setIsRecording(false);
         setRecordStartedAt(null);
+        recordStartedAtRef.current = null;
         // Snapshot markers, then clear them — a new recording starts fresh.
         const markers = markersRef.current;
         markersRef.current = [];
@@ -426,8 +432,13 @@ export default function App() {
       markersRef.current = [];
       setMarkerCount(0);
       rec.start();
+      // Stamp the start time into a ref synchronously — before the state
+      // update commits — so onDropMarker always has a valid reference even if
+      // an `M` keypress lands before the recordStartedAt-state effect flushes.
+      const startedAt = Date.now();
+      recordStartedAtRef.current = startedAt;
       setIsRecording(true);
-      setRecordStartedAt(Date.now());
+      setRecordStartedAt(startedAt);
     } finally {
       recordTogglingRef.current = false;
     }
@@ -436,14 +447,20 @@ export default function App() {
   // ── W1.3 — drop a cue marker at the current recording elapsed time ──
   // No-op unless a recording is in progress. Stores the elapsed ms relative
   // to the recording-start timestamp; in memory only, never persisted.
+  // Reads recordStartedAtRef (written synchronously when recording starts)
+  // rather than the recordStartedAt *state* — the state mirror can lag a
+  // render after a start/restart, which would drop a marker dropped in that
+  // gap. The ref is the source of truth and also serves as the "is a
+  // recording active" guard (it is null whenever no recording is in flight).
   const onDropMarker = useCallback(() => {
-    if (!isRecording || !recordStartedAt) return;
+    const startedAt = recordStartedAtRef.current;
+    if (!startedAt) return;
     markersRef.current = [
       ...markersRef.current,
-      { elapsedMs: Date.now() - recordStartedAt },
+      { elapsedMs: Date.now() - startedAt },
     ];
     setMarkerCount(markersRef.current.length);
-  }, [isRecording, recordStartedAt]);
+  }, []);
 
   // Keep the stable ref pointed at the latest onDropMarker.
   useEffect(() => { dropMarkerRef.current = onDropMarker; }, [onDropMarker]);
@@ -769,6 +786,7 @@ export default function App() {
           audioCtxRef={audioCtxRef}
           workletNodeRef={workletNodeRef}
           outputNodeRef={masterCompressorRef}
+          recordTapRef={recordTapRef}
           workletReady={workletReady}
           effectiveBpmRef={effectiveBpmRef}
         />
@@ -777,6 +795,7 @@ export default function App() {
           ref={samplePadRef}
           audioCtxRef={audioCtxRef}
           outputNodeRef={masterCompressorRef}
+          recordTapRef={recordTapRef}
           ensureMasterCtx={ensureMasterCtx}
         />
 

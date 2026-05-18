@@ -8,6 +8,18 @@ import Icon from "./Icon.jsx";
 // it is empty on every fresh load and is NEVER written to disk, localStorage,
 // or IndexedDB. Files are decoded once on add and reused; loading a crate
 // entry to a deck hands the deck the already-decoded buffer (no re-decode).
+//
+// Styling — follows the shared-panel heading-accent pattern (DESIGN_GUIDE §4):
+// the Crate carries ONE fixed identity accent (green) on its HEADING TEXT
+// only; the panel body — borders, glow, the "Add tracks" button, the per-entry
+// music icon — stays neutral slate, exactly like Looper (purple heading) and
+// SamplePad (cyan heading). The only accented body controls are the per-entry
+// "→ A" / "→ B" deck-load buttons, which are deck-scoped and tint with each
+// deck's user-selected accent (threaded in as deckAColor / deckBColor).
+
+// Fixed identity accent for the Crate heading — green, distinct from
+// Looper-purple and SamplePad-cyan. Heading text only; never the body.
+const CRATE_ACCENT = "#4ade80";
 
 const AUDIO_EXT = /\.(mp3|wav|ogg|flac|m4a|aac)$/i;
 
@@ -114,7 +126,7 @@ export default function Crate({
           style={{
             fontFamily: "'Audiowide', sans-serif",
             fontSize: 13,
-            color: "#00f5d4",
+            color: CRATE_ACCENT,
             margin: 0,
             letterSpacing: 2,
           }}
@@ -133,6 +145,8 @@ export default function Crate({
           onChange={onPick}
           style={{ display: "none" }}
         />
+        {/* Neutral-slate body control — matches Looper / SamplePad chrome. The
+            heading carries the Crate's identity accent; the body does not. */}
         <button
           type="button"
           onClick={() => fileInputRef.current?.click()}
@@ -140,9 +154,9 @@ export default function Crate({
           aria-label="Add tracks to the crate"
           title="Add audio files to the crate"
           style={{
-            background: "rgba(0,245,212,0.1)",
-            border: "1px solid #00f5d444",
-            color: "#00f5d4",
+            background: "rgba(255,255,255,0.05)",
+            border: "1px solid rgba(255,255,255,0.12)",
+            color: "#8892b0",
             borderRadius: 8,
             padding: "6px 10px",
             fontSize: 10,
@@ -156,7 +170,7 @@ export default function Crate({
             minHeight: 38,
           }}
         >
-          <Icon name="plus" size={11} color="#00f5d4" />
+          <Icon name="plus" size={11} color="#8892b0" />
           Add tracks
         </button>
         {entries.length > 0 && (
@@ -237,7 +251,8 @@ export default function Crate({
                 borderRadius: 8,
               }}
             >
-              <Icon name="music" size={13} color="#00f5d4" />
+              {/* Neutral-slate body icon — the accent lives on the heading. */}
+              <Icon name="music" size={13} color="#8892b0" />
               <span
                 title={entry.name}
                 style={{

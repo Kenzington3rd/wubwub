@@ -109,7 +109,7 @@ export default function WaveformCanvas({
           ctx2d.stroke();
           ctx2d.fillStyle = cue.color || "#f0c040";
           ctx2d.fillRect(cx - 8, 0, 16, 14);
-          ctx2d.fillStyle = "#0a0e1a";
+          ctx2d.fillStyle = "#070a14";
           ctx2d.font = "bold 9px 'Exo 2', sans-serif";
           ctx2d.textAlign = "center";
           ctx2d.textBaseline = "middle";

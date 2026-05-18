@@ -686,6 +686,11 @@ const Deck = forwardRef(function Deck(
       isReady: () => !!bufferRef.current,
       isPlaying: () => isPlayingRef.current,
       getBpm: () => bpmRef.current,
+      // Effective BPM = base BPM × persisted speed. A held pitch-bend (bendRef)
+      // is intentionally excluded: it is a transient, sub-bar offset released
+      // the moment the NUDGE button is let go, so folding it in here would only
+      // jitter the Looper's capture-window math for no real benefit — and the
+      // bend never touches the persisted `speed` the user actually set.
       getEffectiveBpm: () => bpmRef.current * speedRef.current,
       nudgeVolume: (delta) => setVolumeState((v) => clamp(v + delta, 0, 1)),
       setVolume: (v) => setVolumeState(clamp(v, 0, 1)),
@@ -1188,7 +1193,7 @@ const Deck = forwardRef(function Deck(
             borderRadius: 10,
             padding: "10px 16px",
             cursor: fileName ? "pointer" : "not-allowed",
-            color: bassDropActive ? "#0a0e1a" : color,
+            color: bassDropActive ? "#070a14" : color,
             fontFamily: "'Audiowide', sans-serif",
             fontSize: 13,
             letterSpacing: 2,
@@ -1205,7 +1210,7 @@ const Deck = forwardRef(function Deck(
           <Icon
             name={bassDropActive ? "bolt" : "speaker"}
             size={15}
-            color={bassDropActive ? "#0a0e1a" : color}
+            color={bassDropActive ? "#070a14" : color}
           />
           {bassDropActive ? "DROPPING" : "BASS DROP"}
         </button>
