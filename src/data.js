@@ -124,6 +124,7 @@ export const KEYBOARD_HINTS = [
   { key: "S", action: "Sync focused deck to the other" },
   { key: "C", action: "Set cue on focused deck" },
   { key: "1–8", action: "Jump to cue N on focused deck" },
+  { key: "←/→ · Home/End", action: "Seek the focused waveform (±5s / start / end)" },
   { key: "Q W E R / A S D F", action: "Trigger sample pads 1–8" },
   { key: "S (note)", action: "Syncs the focused deck; triggers sample pad 6 only when no deck is focused" },
 ];

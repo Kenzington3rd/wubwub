@@ -56,6 +56,7 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
         >
           <button
             onClick={() => onJump(i)}
+            aria-label={`Jump to cue ${i + 1}`}
             style={{
               background: "transparent",
               border: "none",
