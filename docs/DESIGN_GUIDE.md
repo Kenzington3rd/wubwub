@@ -102,6 +102,8 @@ and STYLE_GUIDE.md (code).
   - **TheoryPanel** — orange `#fb923c` (heading + tabs + active-tab state +
     the click-selected Camelot-key highlight; the panel body is otherwise
     neutral slate)
+  - **MidiPanel** — blue `#60a5fa` (disclosure heading + chevron + the
+    enabled/learning active tints; the mapping grid is otherwise neutral slate)
   Any new shared panel picks one fixed accent from the registered palette,
   distinct from the others, for its heading. This is independent of the
   deck-color system: deck-scoped components (Deck and its children, plus the

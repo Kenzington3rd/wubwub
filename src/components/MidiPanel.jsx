@@ -65,7 +65,7 @@ export default function MidiPanel({
         style={{
           background: "transparent",
           border: "none",
-          color: "#a78bfa",
+          color: "#60a5fa",
           fontFamily: "'Audiowide', sans-serif",
           fontSize: 12,
           letterSpacing: 2,
@@ -82,7 +82,7 @@ export default function MidiPanel({
             transition: "transform 0.15s",
           }}
         >
-          <Icon name="chevron" size={12} color="#a78bfa" />
+          <Icon name="chevron" size={12} color="#60a5fa" />
         </span>
         <span>MIDI</span>
         <span style={{ fontSize: 10, color: "#8892b0", letterSpacing: 0, textTransform: "none" }}>
@@ -106,9 +106,9 @@ export default function MidiPanel({
                 onClick={enabled ? onDisable : onEnable}
                 aria-pressed={enabled}
                 style={{
-                  background: enabled ? "#a78bfa22" : "rgba(255,255,255,0.05)",
-                  border: `1px solid ${enabled ? "#a78bfa55" : "rgba(255,255,255,0.1)"}`,
-                  color: enabled ? "#a78bfa" : "#8892b0",
+                  background: enabled ? "#60a5fa22" : "rgba(255,255,255,0.05)",
+                  border: `1px solid ${enabled ? "#60a5fa55" : "rgba(255,255,255,0.1)"}`,
+                  color: enabled ? "#60a5fa" : "#8892b0",
                   borderRadius: 6,
                   padding: "4px 10px",
                   fontSize: 11,
@@ -143,20 +143,20 @@ export default function MidiPanel({
                       gap: 6,
                       padding: "4px 8px",
                       background: learning
-                        ? "rgba(167,139,250,0.12)"
+                        ? "rgba(96,165,250,0.12)"
                         : "rgba(255,255,255,0.03)",
-                      border: `1px solid ${learning ? "#a78bfa66" : "rgba(255,255,255,0.06)"}`,
+                      border: `1px solid ${learning ? "#60a5fa66" : "rgba(255,255,255,0.06)"}`,
                       borderRadius: 8,
                       fontSize: 11,
                     }}
                   >
                     <span style={{ flex: 1, color: "#8892b0" }}>{t.label}</span>
                     {m ? (
-                      <span style={{ color: "#a78bfa", fontFamily: "'Exo 2', sans-serif" }}>
+                      <span style={{ color: "#60a5fa", fontFamily: "'Exo 2', sans-serif" }}>
                         ch{m.channel + 1} cc{m.cc}
                       </span>
                     ) : learning ? (
-                      <span style={{ color: "#a78bfa", fontStyle: "italic" }}>twist…</span>
+                      <span style={{ color: "#60a5fa", fontStyle: "italic" }}>twist…</span>
                     ) : (
                       <span style={{ color: "#4a5580" }}>—</span>
                     )}

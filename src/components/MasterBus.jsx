@@ -198,7 +198,7 @@ export default function MasterBus({
             width: 10,
             height: 10,
             borderRadius: "50%",
-            background: clipping ? "#f87171" : "#2a3050",
+            background: clipping ? "#f87171" : "#4a5580",
             boxShadow: clipping ? "0 0 8px #f87171aa" : "none",
             transition: "background 0.1s",
           }}
