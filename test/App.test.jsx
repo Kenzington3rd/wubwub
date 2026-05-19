@@ -100,6 +100,49 @@ describe("App keyboard shortcuts — US26, US27, US32, US43", () => {
     expect(() => act(() => window.dispatchEvent(event))).not.toThrow();
   });
 
+  it("@us US64: arrow keys on a focused waveform seek the deck, not the crossfader", async () => {
+    // The waveform canvas is a role=slider once a track is loaded. A keydown
+    // on it must seek that deck and stopPropagation() so the global crossfader
+    // arrow shortcut does NOT also fire on the same press.
+    render(<App />);
+    // Load a track onto Deck A by dropping a file on its region.
+    const deckA = screen.getByRole("region", { name: /Deck A/i });
+    const file = new File([new Uint8Array([0, 1, 2])], "wave.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckA, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckA, {
+        dataTransfer: { files: [file], items: [{ kind: "file" }] },
+      });
+    });
+    // The waveform is now a focusable seek slider.
+    const waveform = await waitFor(() =>
+      screen.getByRole("slider", { name: /Seek position in deck A/i })
+    );
+    // A bubbling keydown originating at the canvas: the canvas handler runs,
+    // calls stopPropagation(), so the window-level App handler never sees it.
+    const ev = new KeyboardEvent("keydown", {
+      key: "ArrowRight",
+      bubbles: true,
+      cancelable: true,
+    });
+    let reachedWindow = false;
+    const probe = () => { reachedWindow = true; };
+    window.addEventListener("keydown", probe);
+    try {
+      await act(async () => {
+        waveform.dispatchEvent(ev);
+      });
+    } finally {
+      window.removeEventListener("keydown", probe);
+    }
+    // The canvas consumed the arrow key — it never bubbled to window, so the
+    // global crossfader-nudge handler did not fire on this press.
+    expect(reachedWindow).toBe(false);
+    expect(ev.defaultPrevented).toBe(true);
+  });
+
   it("@us US26: keys in <input> fields don't trigger app shortcuts", () => {
     render(<App />);
     const inp = document.createElement("input");

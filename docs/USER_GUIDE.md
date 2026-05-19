@@ -19,7 +19,7 @@ ever leaves your device.
 |---|---|
 | Play / Pause / Stop | Transport. Stop resets to the start. |
 | Loop | When lit, the track repeats. The waveform border goes dashed. |
-| Waveform | Live view. **Click anywhere on it to jump** to that point. |
+| Waveform | Live view. **Click anywhere on it to jump** to that point. Or focus it with `Tab` and seek with the keyboard (see Keyboard shortcuts). |
 | VOL / SPD / FLT | Volume, playback speed (0.5×–2.0×), low-pass filter sweep. |
 | LOW / MID / HIGH | 3-band EQ knobs — drag up/down. ±12 dB. |
 | TAP | Tap in time with the music 4+ times to set BPM by ear. |
@@ -145,6 +145,23 @@ Click a deck first to "focus" it (it gets a brighter glow).
 `S` does double duty: with a deck focused it syncs that deck; with no deck
 focused it triggers sample pad 6. Click empty space to un-focus if you want the
 pad. The other pad keys always trigger their pad.
+
+### Seeking the waveform by keyboard
+
+Press `Tab` until a deck's waveform is focused (it gets a focus outline). With
+the waveform focused:
+
+| Key | Action |
+|---|---|
+| `←` / `→` | Seek that track 5 seconds back / forward |
+| `↑` / `↓` | Same as `←` / `→` |
+| `Home` | Jump to the start of the track |
+| `End` | Jump to the end of the track |
+
+While the waveform is focused these keys seek *it* — the crossfader and volume
+arrow shortcuts above are paused so the same press can't do two things. `Tab`
+away from the waveform to use those again. (An empty deck with no track loaded
+isn't focusable — there's nothing to seek.)
 
 ## MIDI controllers
 

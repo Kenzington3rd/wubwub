@@ -1021,6 +1021,7 @@ const Deck = forwardRef(function Deck(
         durationRef={durationRef}
         cuesRef={cuesRef}
         onSeek={fileName ? handleSeek : undefined}
+        ariaLabel={`Seek position in deck ${id} track`}
       />
 
       {/* Time + cues */}

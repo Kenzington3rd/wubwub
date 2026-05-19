@@ -508,6 +508,86 @@ describe("Deck — integration tests across many user stories", () => {
     expect(screen.getByText("swapped.mp3")).toBeInTheDocument();
   });
 
+  it("@us US59: applyBend re-anchors start time so playback position stays consistent across a nudge", async () => {
+    // QA flagged the start-time recompute on nudge start/end (Deck.jsx A2) as
+    // intricate and untested. The interval anchors elapsed time on
+    //   elapsed = (ctx.currentTime - startTimeRef) * speed
+    // which assumes playbackRate === base speed. While a bend is held the real
+    // rate is speed + bend, so startTimeRef must be re-anchored on bend start
+    // AND end — otherwise the reported time drifts/jumps. This test plays a
+    // track, advances ctx time across a held-then-released bend, and asserts
+    // the displayed time advances smoothly with no jump.
+    vi.useFakeTimers();
+    try {
+      let api;
+      const { container } = render(<Harness onMount={(a) => { api = a; }} />);
+      // Adopt a long (60 s) pre-decoded buffer so 6 s of test playback never
+      // wraps the loop — the position math, not loop wrapping, is under test.
+      const sr = 11025;
+      const longBuf = new MockAudioBuffer(1, sr * 60, sr);
+      await act(async () => {
+        await api.deckRef.current.loadBuffer(longBuf, "long.mp3");
+      });
+
+      // Start playback — this opens the 100 ms position interval.
+      await act(async () => { await api.deckRef.current.play(); });
+      const ctx = api.audioCtxRef.current;
+
+      // Helper: advance the audio clock then let the position interval tick,
+      // and read the deck's reported current time. The waveform slider's
+      // aria-valuetext ("M:SS / M:SS") mirrors the live currentTime ref.
+      const reported = () => {
+        const slider = container.querySelector('[role="slider"]');
+        const vt = slider?.getAttribute("aria-valuetext") || "";
+        const m = vt.match(/^(\d+:\d\d)\s*\//);
+        return m ? m[1] : null;
+      };
+      const tick = (seconds) => {
+        act(() => {
+          ctx.advance(seconds);
+          vi.advanceTimersByTime(100); // one interval cycle
+        });
+      };
+
+      // Play 2 s at base speed.
+      tick(2);
+      const tBeforeBend = reported();
+
+      // Hold NUDGE + : applyBend snapshots the position at the OLD rate and
+      // re-anchors startTimeRef to the new effective rate. No time jump here.
+      const up = screen.getByRole("button", { name: /Pitch bend up deck A/i });
+      await act(async () => fireEvent.pointerDown(up, { pointerId: 11 }));
+      const tAtBendStart = reported();
+      // The re-anchor must not jump the reported position when the bend starts.
+      expect(tAtBendStart).toBe(tBeforeBend);
+
+      // Play 2 s with the bend held, then release it.
+      tick(2);
+      await act(async () => fireEvent.pointerUp(up, { pointerId: 11 }));
+      const tAtBendEnd = reported();
+
+      // Play 2 more seconds at base speed after the release.
+      tick(2);
+      const tAfter = reported();
+
+      // Across the whole sequence the reported time advanced monotonically
+      // with no backward jump — the re-anchor on bend start AND end kept the
+      // position math consistent.
+      const toSec = (s) => {
+        const [m, sec] = s.split(":").map(Number);
+        return m * 60 + sec;
+      };
+      expect(toSec(tAtBendEnd)).toBeGreaterThanOrEqual(toSec(tAtBendStart));
+      expect(toSec(tAfter)).toBeGreaterThanOrEqual(toSec(tAtBendEnd));
+      // No wild jump: ~6 s of playback total (bend is only ±4%), so the final
+      // reported position sits in a tight, sane band — not drifted seconds off.
+      expect(toSec(tAfter)).toBeGreaterThanOrEqual(5);
+      expect(toSec(tAfter)).toBeLessThanOrEqual(7);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("@us US24: bass-drop re-entry guard — double-fire does not throw", async () => {
     // Load a buffer via drop so the deck chain is built and BASS DROP enables.
     const { container } = render(<Harness />);

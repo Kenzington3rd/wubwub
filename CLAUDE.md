@@ -112,6 +112,14 @@ public/
 | `1`–`8` | Jump to cue N on focused deck |
 | `M` | Drop a recording cue marker (no-op unless recording) |
 | `Q W E R A S D F` | Trigger sample pad 1–8 |
+| `←/→` *(waveform focused)* | Seek the focused waveform ±5 s |
+| `Home/End` *(waveform focused)* | Seek the focused waveform to start / end |
+
+> **Waveform seek vs. global arrows:** the waveform `<canvas>` is a
+> `role="slider"` seek control once a track is loaded. While it has keyboard
+> focus, `←/→/↑/↓/Home/End` seek that track and the canvas calls
+> `stopPropagation()`, so the global crossfader/volume arrow shortcuts do not
+> also fire. Tab away from the canvas to use the global arrow shortcuts again.
 
 > **`S` collision:** `S` is both sample pad 6 and the deck-sync shortcut.
 > Resolution: when a deck is **focused**, `S` syncs that deck; sample pad 6 is

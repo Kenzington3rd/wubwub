@@ -150,7 +150,11 @@ Every interactive control defines: **default, hover, active/engaged, disabled.**
 - Toggle buttons expose `aria-pressed`.
 - Decks are `role="region"` with an `aria-label` naming the deck + focus state.
 - Keyboard: the whole app is operable without a mouse (see USER_GUIDE.md).
-  Focused deck is visually indicated by a stronger border + glow.
+  Focused deck is visually indicated by a stronger border + glow. The
+  waveform `<canvas>` is no exception — once a track is loaded it is a
+  `role="slider"` seek control (`tabIndex={0}`, arrow / Home / End keys seek);
+  it consumes those keys (`stopPropagation`) so the global crossfader/volume
+  arrow shortcuts do not double-fire while it is focused.
 - Form inputs are skipped by the global keydown handler so typing never triggers
   shortcuts.
 - Contrast: body text `#ccd6f6` on `#070a14` passes WCAG AA, and `--text-muted`

@@ -1,11 +1,22 @@
 import { useCallback, useEffect, useRef } from "react";
 
-// Live waveform + frequency-bar canvas with optional click-to-seek and cue markers.
-// Reads the analyser via `chainRef` so the RAF loop doesn't restart when the
-// parent re-renders (chainRef identity is stable; .current changes are picked up
-// dynamically inside the loop).
+// Live waveform + frequency-bar canvas with click-to-seek, keyboard seek, and
+// cue markers. Reads the analyser via `chainRef` so the RAF loop doesn't restart
+// when the parent re-renders (chainRef identity is stable; .current changes are
+// picked up dynamically inside the loop).
 //
 // Mutating values (currentTime, duration, cues) also come in via refs.
+//
+// Keyboard seek (DESIGN_GUIDE §6 — the whole app is operable without a mouse):
+// when a track is loaded the canvas is a `role="slider"` seek control. ←/→ step
+// the playhead ±5 s, Home jumps to 0, End to the track end. The seek target is
+// handed to `onSeek` as a normalized 0–1 value — the exact contract the
+// pointer handler uses — so Deck's `handleSeek` is reused unchanged.
+
+// Arrow-key seek step, in seconds. Small enough for fine positioning, large
+// enough that a few presses cover a phrase.
+const SEEK_STEP_SECONDS = 5;
+
 export default function WaveformCanvas({
   chainRef,
   color,
@@ -14,6 +25,7 @@ export default function WaveformCanvas({
   durationRef,
   cuesRef,
   onSeek,
+  ariaLabel,
 }) {
   const canvasRef = useRef(null);
   const animRef = useRef(null);
@@ -146,12 +158,79 @@ export default function WaveformCanvas({
     [onSeek]
   );
 
+  // Keyboard seek. Active only when `onSeek` is wired (i.e. a track is loaded);
+  // the canvas is otherwise not a focusable control. ←/→ step ±5 s, Home/End
+  // jump to the track ends. The seek target is normalized to 0–1 — the same
+  // shape the pointer handler passes — so Deck's seek contract is reused.
+  //
+  // IMPORTANT: keys consumed here MUST `stopPropagation()` so the global
+  // window keydown handler in App.jsx does not ALSO act on the same press
+  // (its skip-list covers inputs/textareas/selects/contenteditable but not a
+  // focused canvas — arrow keys would otherwise nudge the crossfader/volume).
+  const handleKeyDown = useCallback(
+    (e) => {
+      if (!onSeek) return;
+      const duration = durationRef?.current ?? 0;
+      if (duration <= 0) return;
+      const currentTime = currentTimeRef?.current ?? 0;
+      let targetSeconds = null;
+      switch (e.key) {
+        case "ArrowLeft":
+        case "ArrowDown":
+          targetSeconds = currentTime - SEEK_STEP_SECONDS;
+          break;
+        case "ArrowRight":
+        case "ArrowUp":
+          targetSeconds = currentTime + SEEK_STEP_SECONDS;
+          break;
+        case "Home":
+          targetSeconds = 0;
+          break;
+        case "End":
+          // A hair before the very end so a non-looping track doesn't
+          // immediately fire `onended` and reset to 0.
+          targetSeconds = Math.max(0, duration - 0.01);
+          break;
+        default:
+          return; // not a seek key — let it bubble normally
+      }
+      // Consume the event so the global App keydown handler doesn't also
+      // act on it (arrow keys move the crossfader / deck volume there).
+      e.preventDefault();
+      e.stopPropagation();
+      const clamped = Math.max(0, Math.min(duration, targetSeconds));
+      onSeek(clamped / duration);
+    },
+    [onSeek, durationRef, currentTimeRef]
+  );
+
+  // ARIA slider value model: whole-second position within the track. When no
+  // track is loaded the canvas is a plain, non-focusable element.
+  const seekable = !!onSeek;
+  const duration = durationRef?.current ?? 0;
+  const currentTime = currentTimeRef?.current ?? 0;
+  const maxSeconds = Math.max(0, Math.round(duration));
+  const nowSeconds = Math.max(0, Math.min(maxSeconds, Math.round(currentTime)));
+  const fmt = (s) => {
+    const m = Math.floor(s / 60);
+    const sec = Math.floor(s % 60);
+    return `${m}:${sec.toString().padStart(2, "0")}`;
+  };
+
   return (
     <canvas
       ref={canvasRef}
       width={400}
       height={120}
       onPointerDown={handlePointer}
+      onKeyDown={seekable ? handleKeyDown : undefined}
+      role={seekable ? "slider" : undefined}
+      tabIndex={seekable ? 0 : undefined}
+      aria-label={seekable ? ariaLabel || "Track seek position" : undefined}
+      aria-valuemin={seekable ? 0 : undefined}
+      aria-valuemax={seekable ? maxSeconds : undefined}
+      aria-valuenow={seekable ? nowSeconds : undefined}
+      aria-valuetext={seekable ? `${fmt(nowSeconds)} / ${fmt(maxSeconds)}` : undefined}
       style={{
         width: "100%",
         height: 120,

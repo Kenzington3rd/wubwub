@@ -76,6 +76,24 @@ describe("Looper — US28", () => {
     expect(posted.seconds).toBeLessThanOrEqual(60);
   });
 
+  it("@us US28: a low-BPM / high-bar capture is hard-clamped to exactly 60 s in the worklet message", () => {
+    // capture() computes seconds = (bars*4*60)/bpm, then Math.min(60, …). At a
+    // low BPM with the highest bar count the raw window blows past the ring
+    // buffer's 60 s, so the message posted to the worklet must carry exactly
+    // 60 — the worklet would otherwise silently truncate the loop.
+    let workletNode;
+    render(<Harness workletReady bpm={50} onWorklet={(n) => { workletNode = n; }} />);
+    // 16 bars @ 50 BPM = 16*4*60/50 = 76.8 s raw → clamp to 60.
+    const select = screen.getAllByRole("combobox")[0];
+    fireEvent.change(select, { target: { value: "16" } });
+    const capture = screen.getAllByRole("button", { name: /Capture/i })[0];
+    fireEvent.click(capture);
+
+    const posted = workletNode.port.postedMessages.find((m) => m.type === "capture");
+    expect(posted).toBeTruthy();
+    expect(posted.seconds).toBe(60);
+  });
+
   it("@us US61: a playing loop slot fans its output into the pre-limiter record tap", () => {
     // The "Clean" (pre-limiter) recorder tap must carry looper audio, not just
     // the decks. Verify the slot's gain node connects to BOTH the master
