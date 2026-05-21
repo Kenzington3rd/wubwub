@@ -102,6 +102,7 @@ export default function MidiPanel({
         {learnAnnounce}
       </div>
       <button
+        type="button"
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
         aria-controls="midi-panel-body"
@@ -149,6 +150,7 @@ export default function MidiPanel({
               <button
                 type="button"
                 onClick={enabled ? onDisable : onEnable}
+                aria-pressed={enabled}
                 style={{
                   background: enabled ? "#60a5fa22" : "rgba(255,255,255,0.05)",
                   border: `1px solid ${enabled ? "#60a5fa55" : "rgba(255,255,255,0.1)"}`,
@@ -250,6 +252,7 @@ export default function MidiPanel({
                       </label>
                     )}
                     <button
+                      type="button"
                       onClick={() => (learning ? onCancelLearn() : onStartLearn(t.id))}
                       aria-pressed={learning}
                       aria-label={
@@ -274,6 +277,7 @@ export default function MidiPanel({
                     </button>
                     {m && (
                       <button
+                        type="button"
                         onClick={() => onClearMapping(t.id)}
                         title="Remove mapping"
                         aria-label={`Remove MIDI mapping for ${t.label}`}

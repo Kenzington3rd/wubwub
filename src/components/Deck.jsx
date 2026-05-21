@@ -309,7 +309,15 @@ const Deck = forwardRef(function Deck(
       }
     }, 200);
     return () => clearTimeout(reverbSizeDebounceRef.current);
-  }, [effects.reverb.size, effects.reverb.on, effects.reverb.mix, audioCtxRef, chainTick]);
+    // W2 (R20) — MIX is owned by the separate non-debounced wet-gain effect
+    // above (lines ~269-278). Listing effects.reverb.mix here caused a
+    // 200 ms-debounced duck-swap-restore to fire every time the MIX knob
+    // moved, audibly dipping the wet bus. Deps are now ONLY the size value
+    // plus on + chainTick (size is what actually requires the IR rebuild;
+    // on is kept so the effect runs on first toggle if it ever needs to,
+    // and chainTick re-runs after a chain rebuild). MIX changes continue to
+    // ramp the wet gain directly via the dedicated effect.
+  }, [effects.reverb.size, effects.reverb.on, audioCtxRef, chainTick]);
 
   // ─── Effects: delay (on/mix/time/feedback) ───
   useEffect(() => {
@@ -375,7 +383,12 @@ const Deck = forwardRef(function Deck(
       }
     }, 200);
     return () => clearTimeout(distortionDriveDebounceRef.current);
-  }, [effects.distortion.drive, effects.distortion.on, effects.distortion.mix, audioCtxRef, chainTick]);
+    // W2 (R20) — same fix as the reverb-size debounce above. MIX is owned by
+    // the separate non-debounced wet-gain effect (lines ~333-342). Listing
+    // effects.distortion.mix here caused a 200 ms-debounced duck-swap-restore
+    // to fire on every MIX knob move, audibly dipping the wet bus. Deps are
+    // now ONLY drive + on + chainTick.
+  }, [effects.distortion.drive, effects.distortion.on, audioCtxRef, chainTick]);
 
   // ─── Source lifecycle ───
   const stopAndDisconnectSource = useCallback(() => {
@@ -1066,6 +1079,7 @@ const Deck = forwardRef(function Deck(
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button
+            type="button"
             onClick={tapBpm}
             className="wc-btn-hover"
             title="Tap to set BPM by ear"
@@ -1087,6 +1101,7 @@ const Deck = forwardRef(function Deck(
             TAP
           </button>
           <button
+            type="button"
             onClick={onSync}
             disabled={!fileName}
             title="Sync speed to the other deck's BPM"
@@ -1112,6 +1127,7 @@ const Deck = forwardRef(function Deck(
             SYNC
           </button>
           <button
+            type="button"
             onClick={runAutoBpm}
             disabled={!fileName || autoBpmRunning}
             aria-busy={autoBpmRunning}
@@ -1136,6 +1152,7 @@ const Deck = forwardRef(function Deck(
             {autoBpmRunning ? "…" : "AUTO"}
           </button>
           <button
+            type="button"
             onClick={() => setBpm((b) => Math.max(40, Math.round(b / 2)))}
             disabled={!fileName}
             className="wc-btn-hover"
@@ -1160,6 +1177,7 @@ const Deck = forwardRef(function Deck(
             ÷2
           </button>
           <button
+            type="button"
             onClick={() => setBpm((b) => Math.min(220, Math.round(b * 2)))}
             disabled={!fileName}
             className="wc-btn-hover"
@@ -1250,6 +1268,7 @@ const Deck = forwardRef(function Deck(
         style={{ display: "none" }}
       />
       <button
+        type="button"
         onClick={() => fileInputRef.current?.click()}
         style={{
           background: fileName ? `${color}11` : `${color}18`,
@@ -1332,6 +1351,7 @@ const Deck = forwardRef(function Deck(
         ].map((btn) => (
           <button
             key={btn.label}
+            type="button"
             onClick={() => btn.action()}
             className={btn.active ? undefined : "wc-btn-hover"}
             title={btn.label}

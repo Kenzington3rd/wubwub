@@ -253,6 +253,7 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
                     dead affordance. Matches MidiPanel's conditional clear. */}
                 {loaded && (
                   <button
+                    type="button"
                     onClick={() => clearPad(i)}
                     title="Clear pad"
                     aria-label={`Clear sample pad ${i + 1}`}
@@ -287,6 +288,7 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
                 style={{ display: "none" }}
               />
               <button
+                type="button"
                 onClick={() => {
                   if (loaded) trigger(i);
                   else fileInputRefs.current[i]?.click();

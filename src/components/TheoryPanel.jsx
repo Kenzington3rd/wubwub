@@ -54,6 +54,7 @@ export default function TheoryPanel({
           return (
             <button
               key={tab.id}
+              type="button"
               id={`theory-tab-${tab.id}`}
               role="tab"
               aria-selected={active}
@@ -163,6 +164,7 @@ export default function TheoryPanel({
                 return (
                   <button
                     key={item.camelot}
+                    type="button"
                     onClick={() => setSelectedKey(isSelected ? null : i)}
                     aria-pressed={isSelected}
                     className={isHighlighted ? undefined : "wc-btn-hover"}
@@ -285,6 +287,7 @@ export default function TheoryPanel({
               </p>
             </div>
             <button
+              type="button"
               onClick={() => setTipIdx((i) => (i + 1) % TIPS.length)}
               // P10 (R16) — reuse the project hover idiom so the button has a
               // distinct default/hover state, matching the transport pattern.

@@ -306,6 +306,7 @@ export default function Looper({
               </div>
               <div style={{ display: "flex", gap: 4 }}>
                 <button
+                  type="button"
                   onClick={() => capture(i)}
                   disabled={!workletReady || pendingSlot === i}
                   title={
@@ -338,6 +339,7 @@ export default function Looper({
                   {pendingSlot === i ? "…" : "Capture"}
                 </button>
                 <button
+                  type="button"
                   onClick={() => togglePlay(i)}
                   disabled={!slot.hasBuffer}
                   title={slot.isPlaying ? "Stop loop" : "Play loop"}
@@ -366,6 +368,7 @@ export default function Looper({
                     Matches MidiPanel's conditional clear and SamplePad. */}
                 {slot.hasBuffer && (
                   <button
+                    type="button"
                     onClick={() => clearSlot(i)}
                     title="Clear loop"
                     aria-label={`Clear loop ${i + 1}`}

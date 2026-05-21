@@ -884,6 +884,61 @@ describe("App MIDI residual-bug regressions — R17", () => {
     expect(() => act(() => window.dispatchEvent(up2))).not.toThrow();
   });
 
+  // @us US39 (W5 R20) — onClearMidiMapping (called by clicking a row's Clear
+  // button) must also clear any stale learnHint. R19 added a setLearnHint("")
+  // call inside onClearMidiMapping for exactly this case. Without it, if the
+  // user is mid-learn on a different target (a Note On rejection has surfaced
+  // a hint) and clicks Clear on a separate mapping, the hint persists and
+  // reads as the wrong context. This is the integration regression.
+  it("@us US39: Clearing a mapping while a learnHint is set clears the hint (W5 R20)", async () => {
+    const input = makeFakeInput("in-1", "Controller");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+
+    render(<App />);
+    // Expand the MIDI panel and enable MIDI.
+    fireEvent.click(screen.getByRole("button", { name: /MIDI settings/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Enable MIDI/i }));
+    });
+
+    // First, capture a CC mapping for Deck A Volume so a Clear button exists
+    // on its row.
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Learn MIDI mapping for Deck A Volume/i,
+      })
+    );
+    await act(async () => {
+      input.emit([0xb0, 7, 64]); // CC ch1 cc7 → captures the mapping
+    });
+    // Mapping summary now visible.
+    expect(await screen.findByText(/ch1 cc7/i)).toBeInTheDocument();
+
+    // Start Learn on a DIFFERENT target (Deck B Volume) and emit a Note On —
+    // the rejection surfaces the inline hint on the active learn row.
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Learn MIDI mapping for Deck B Volume/i,
+      })
+    );
+    await act(async () => {
+      input.emit([0x90, 36, 100]); // Note On — rejected, hint surfaces
+    });
+    expect(screen.getByText(/aren't routed yet/i)).toBeInTheDocument();
+
+    // Click Clear on Deck A Volume's already-captured mapping. The fix:
+    // onClearMidiMapping also clears the stale learnHint.
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Remove MIDI mapping for Deck A Volume/i,
+      })
+    );
+    // Hint is gone. The hint is rendered only when (learning && learnHint),
+    // so its absence proves the App-level state cleared.
+    expect(screen.queryByText(/aren't routed yet/i)).not.toBeInTheDocument();
+  });
+
   // @us US59 (R18 T6) — window blur (Alt+Tab away, OS focus loss) is the
   // other path where no keyup is ever delivered for a held NUDGE key. Without
   // the blur listener the bend stays setTargetAtTime'd at ±0.04 forever and

@@ -69,9 +69,25 @@ export function buildDistortionCurve(drive = 40, samples = 4096) {
 // ~0.7% — far enough below audibility that the pin is inaudible while still
 // nailing the floor exactly. Non-zero targets keep the original smooth curve
 // so volume / mix adjustments stay glitch-free.
+//
+// W1 (R20) — every call begins by cancelling any pending future events on the
+// param so a new ramp cleanly supersedes the previous one. Without this, a
+// prior `rampGain(param, 0)` left a `setValueAtTime(0, now + 5τ)` pin queued
+// in the future. A subsequent `rampGain(param, nonZero)` within that window
+// (e.g. rapidly toggling an effect on→off→on) used to slam the param to 0
+// mid-ramp-up when the stale pin fired. Cancel-and-hold (or its
+// cancelScheduledValues + setValueAtTime fallback) freezes whatever value the
+// existing automation is currently producing, drops all future events, and
+// hands the schedule over to the new ramp.
 export function rampGain(param, target, ctx, tau = 0.02) {
   if (!param || !ctx) return;
   const now = ctx.currentTime;
+  if (typeof param.cancelAndHoldAtTime === "function") {
+    param.cancelAndHoldAtTime(now);
+  } else {
+    param.cancelScheduledValues(now);
+    param.setValueAtTime(param.value, now);
+  }
   param.setTargetAtTime(target, now, tau);
   if (target === 0) {
     param.setValueAtTime(0, now + 5 * tau);

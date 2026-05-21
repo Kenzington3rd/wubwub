@@ -74,13 +74,26 @@ describe("MidiPanel — US39 (Web MIDI supported)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^MIDI/i }));
     const enableBtn = screen.getByRole("button", { name: /Enable MIDI/i });
     expect(enableBtn).toBeInTheDocument();
-    // V2 (R19) — the toggle's accessible state is carried by its CHANGING
-    // label ("Enable MIDI" → "Disable MIDI"), not aria-pressed. The two were
-    // contradictory: aria-pressed=true on a "Disable MIDI" label reads as
-    // "this toggle is currently on" while the label is an action verb.
-    expect(enableBtn).not.toHaveAttribute("aria-pressed");
+    // W3 (R20) — DESIGN_GUIDE §6 explicitly requires toggle buttons to expose
+    // aria-pressed. The standard ARIA pattern for action-labelled toggles is
+    // "action label + pressed state": "Disable MIDI, pressed" correctly reads
+    // as "the button is in pressed/enabled state; clicking it will disable."
+    expect(enableBtn).toHaveAttribute("aria-pressed", "false");
     // type="button" so wrapping in a form would never accidentally submit.
     expect(enableBtn).toHaveAttribute("type", "button");
+  });
+
+  // @us US39 (W3 R20) — enabled state flips aria-pressed=true; the action
+  // label flips to "Disable MIDI". A screen reader announces "Disable MIDI,
+  // pressed" — i.e. the toggle is currently in pressed/enabled state and
+  // clicking it will perform the labelled action (disable).
+  it("@us US39: enabled state carries aria-pressed=true with the Disable label", async () => {
+    const { default: MidiPanel } = await import("../src/components/MidiPanel.jsx");
+    render(<MidiPanel {...baseProps} enabled />);
+    fireEvent.click(screen.getByRole("button", { name: /^MIDI/i }));
+    const disableBtn = screen.getByRole("button", { name: /Disable MIDI/i });
+    expect(disableBtn).toHaveAttribute("aria-pressed", "true");
+    expect(disableBtn).toHaveAttribute("type", "button");
   });
 });
 

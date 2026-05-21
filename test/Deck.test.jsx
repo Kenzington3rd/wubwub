@@ -1057,4 +1057,180 @@ describe("Deck — integration tests across many user stories", () => {
     // After firing, the button is engaged → aria-pressed=true.
     expect(bassDrop).toHaveAttribute("aria-pressed", "true");
   });
+
+  // @us US7 (W5 R20) — V5 (R19) added cancel-and-hold for the LPF sweep param
+  // too, not just EQ. During a running bass drop the drop owns the multi-leg
+  // exponential LPF schedule; a user-driven filter slider move used to queue
+  // behind those ramps and not take effect until t3. The fix cancel-and-holds
+  // first so the user's value lands immediately. The schedule queue must
+  // contain a `cancelAndHold` entry (or its fallback) BEFORE the user's
+  // setTargetAtTime.
+  it("@us US7: filter change during a bass drop cancel-and-holds the LPF schedule (V5 R19)", async () => {
+    let api;
+    const { container } = render(<Harness onMount={(a) => { api = a; }} />);
+    const deckDiv = container.querySelector('[role="region"]');
+    const fakeAudio = new File([new Uint8Array([0, 1, 2])], "track.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckDiv, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckDiv, {
+        dataTransfer: { files: [fakeAudio], items: [{ kind: "file" }] },
+      });
+    });
+
+    const bassDrop = await waitFor(() => {
+      const btn = screen.getByRole("button", { name: /BASS DROP/i });
+      expect(btn).not.toBeDisabled();
+      return btn;
+    });
+    await act(async () => fireEvent.click(bassDrop));
+
+    const ctx = api.audioCtxRef.current;
+    // The LPF sweep node is the only lowpass BiquadFilter in the deck chain.
+    const filter = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowpass"
+    );
+    // Snapshot the queue length so we only see what the user-driven slider
+    // move appends; the drop's exponentialRamp legs are already queued.
+    const before = filter.frequency.scheduledValues.length;
+
+    // User moves the FLT slider while the drop is still running. The native
+    // range input responds to onChange, not keyDown.
+    const filterSlider = screen.getByRole("slider", {
+      name: /filter frequency/i,
+    });
+    await act(async () => {
+      fireEvent.change(filterSlider, { target: { value: "8000" } });
+    });
+
+    const after = filter.frequency.scheduledValues.slice(before);
+    // cancelAndHoldAtTime (or its fallback cancelScheduledValues +
+    // setValueAtTime) lands BEFORE the user's setTargetAtTime — proof the
+    // user's value supersedes the drop's owned schedule.
+    const cahIdx = after.findIndex(
+      (e) => e.type === "cancelAndHold" || e.type === "cancel"
+    );
+    const setTargetIdx = after.findIndex((e) => e.type === "setTarget");
+    expect(cahIdx).toBeGreaterThanOrEqual(0);
+    expect(setTargetIdx).toBeGreaterThan(cahIdx);
+  });
+
+  // @us US20 (W5 R20) — V1's synchronous-pin pattern is paired across reverb
+  // and distortion. The reverb-size test already exists (lines ~940). This
+  // mirrors it for distortion DRIVE: with distortion.on=true and mix>0, the
+  // 200 ms-debounced curve hot-swap must pin wet to 0 via setValueAtTime
+  // BEFORE the ramp-back's setTargetAtTime — otherwise the duck-ramp and
+  // restore-ramp anchored at the same ctx.currentTime collide and the duck
+  // never lands.
+  it("@us US20: distortion-drive swap pins wet to 0 via setValueAtTime before the curve swap (V1 R19)", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 3, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+      // Turn distortion on with default mix=0.3 (> 0.001 → triggers the
+      // pin-and-restore path).
+      const distortionToggle = screen.getByLabelText(
+        /Distortion effect (on|off)/i
+      );
+      await act(async () => fireEvent.click(distortionToggle));
+
+      const ctx = api.audioCtxRef.current;
+      // distortionWet is the GainNode the WaveShaper's host wires its wet bus
+      // through. The chain.js builder connects WaveShaper → distortionWet, so
+      // we grab it by walking from the WaveShaperNode.
+      const shaper = ctx._nodes.find((n) => n.nodeType === "WaveShaperNode");
+      const distortionWet = shaper.connections.find(
+        (n) => n.nodeType === "GainNode"
+      );
+      const before = distortionWet.gain.scheduledValues.length;
+
+      // Spin DRIVE — fires the 200 ms debounce path.
+      const knobs = screen.getAllByRole("slider");
+      const driveKnob = knobs.find((k) => k.getAttribute("aria-label") === "DRIVE");
+      await act(async () => fireEvent.keyDown(driveKnob, { key: "ArrowUp" }));
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      const after = distortionWet.gain.scheduledValues.slice(before);
+      // setValueAtTime(0, …) lands BEFORE the ramp-back's setTargetAtTime
+      // with a positive target.
+      const setZeroIdx = after.findIndex(
+        (e) => e.type === "setValue" && e.value === 0
+      );
+      const rampBackIdx = after.findIndex(
+        (e) => e.type === "setTarget" && e.target > 0
+      );
+      expect(setZeroIdx).toBeGreaterThanOrEqual(0);
+      expect(rampBackIdx).toBeGreaterThan(setZeroIdx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // @us US18 (W2 R20) — MIX is owned by a separate, non-debounced wet-gain
+  // effect. R19 added effects.reverb.mix to the reverb-size debounce's deps,
+  // which caused a 200 ms-debounced duck-swap-restore to fire every time the
+  // MIX knob moved — audibly dipping the wet bus. The fix removes MIX from
+  // the size-debounce deps. Regression: with reverb on + non-zero mix, moving
+  // ONLY the mix knob must NOT fire the size debounce (no new setValue(0)
+  // duck entry on the wet gain, no new IR built).
+  it("@us US18: changing reverb MIX does not fire the size-debounce duck (W2 R20)", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 3, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+      // Turn reverb on; default mix=0.3 (> 0).
+      const reverbToggle = screen.getByLabelText(/Reverb effect (on|off)/i);
+      await act(async () => fireEvent.click(reverbToggle));
+      // Let the initial IR build settle out of the debounce window.
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      const ctx = api.audioCtxRef.current;
+      const conv = ctx._nodes.find((n) => n.nodeType === "ConvolverNode");
+      const reverbWet = conv.connections.find((n) => n.nodeType === "GainNode");
+      // Snapshot both the wet schedule and the convolver's buffer identity.
+      const before = reverbWet.gain.scheduledValues.length;
+      const irBefore = conv.buffer;
+
+      // Move ONLY the MIX knob — must NOT trigger a size-debounce rebuild.
+      const knobs = screen.getAllByRole("slider");
+      const mixKnob = knobs.find(
+        (k) =>
+          k.getAttribute("aria-label") === "MIX" &&
+          k.closest("div")?.textContent?.includes("Reverb") !== false
+      );
+      // There are multiple MIX knobs (reverb, delay, distortion); the first
+      // one is the reverb card's. Either way only the reverb-specific
+      // debounce is under test here.
+      const reverbMixKnob = mixKnob || knobs.find((k) => k.getAttribute("aria-label") === "MIX");
+      await act(async () => fireEvent.keyDown(reverbMixKnob, { key: "ArrowUp" }));
+      // Advance well past the 200 ms debounce — if MIX were still in the deps,
+      // a duck-swap-restore would land in this window.
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      const after = reverbWet.gain.scheduledValues.slice(before);
+      // The debounce body would have written a setValue(0, …) at ctx.currentTime
+      // (the synchronous-pin duck). Its absence proves the size-debounce
+      // didn't fire — so MIX is no longer in the deps. The dedicated wet-gain
+      // useEffect ramps the wet gain directly via setTarget (no setValue pin
+      // on a non-zero target), so the only entries we tolerate are setTarget
+      // (and cancelAndHold from the W1 rampGain prefix).
+      const duckPin = after.find(
+        (e) => e.type === "setValue" && e.value === 0
+      );
+      expect(duckPin).toBeUndefined();
+      // And the IR buffer was NOT swapped — same reference as before.
+      expect(conv.buffer).toBe(irBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

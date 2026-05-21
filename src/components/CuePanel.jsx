@@ -17,6 +17,7 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
       }}
     >
       <button
+        type="button"
         onClick={onSet}
         disabled={disabled}
         title={maxReached ? "Max 8 cues — delete one first" : "Set cue at current position"}
@@ -59,6 +60,7 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
           title={`Cue ${i + 1} — ${formatTime(cue.time)}`}
         >
           <button
+            type="button"
             onClick={() => onJump(i)}
             aria-label={`Jump to cue ${i + 1}`}
             style={{
@@ -85,6 +87,7 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
             <span style={{ opacity: 0.7 }}>{formatTime(cue.time)}</span>
           </button>
           <button
+            type="button"
             onClick={() => onDelete(cue.id)}
             aria-label={`Delete cue ${i + 1}`}
             style={{

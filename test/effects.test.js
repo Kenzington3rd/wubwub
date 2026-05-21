@@ -167,4 +167,50 @@ describe("rampGain — US19 (delay feedback clamping foundation)", () => {
     expect(setTarget).toBeTruthy();
     expect(setTarget.target).toBe(0);
   });
+
+  // @us US19 (W1 R20) — rampGain to 0 used to leave a setValueAtTime(0, now+5τ)
+  // pin queued in the future. A subsequent rampGain(param, nonZero) within
+  // that window (rapidly toggling reverb on→off→on) saw the stale pin fire
+  // mid-ramp-up and audibly slam the param to 0. Fix: every rampGain call now
+  // begins with cancelAndHoldAtTime(now) (or the cancelScheduledValues +
+  // setValueAtTime fallback) so the new ramp cleanly supersedes the old.
+  // Regression assertion: after rampGain(param, 0) → rampGain(param, 0.5),
+  // the second call emitted a cancel before its setTarget. The mock's queue
+  // records every call verbatim (it can't simulate the engine's
+  // drop-future-events behavior on cancel), so the contract under test is
+  // "did we issue the cancel signal that hands ownership to the new ramp."
+  // The real engine drops the stale 0-pin once cancelAndHoldAtTime fires.
+  it("@us US19 (W1 R20): a second ramp issues cancelAndHold before its setTarget so the prior zero-pin is dropped", () => {
+    const ctx = new AudioContext();
+    ctx._currentTime = 1.0;
+    const node = ctx.createGain();
+    // First call: ramp to 0 — queues a setValueAtTime(0, now+5τ) pin.
+    rampGain(node.gain, 0, ctx, 0.02);
+    // Snapshot the queue at the boundary — anything appended after this
+    // belongs to the second rampGain call.
+    const beforeSecondCall = node.gain.scheduledValues.length;
+
+    // Second call lands immediately after — must cancel the stale pin first.
+    rampGain(node.gain, 0.5, ctx, 0.02);
+
+    const appended = node.gain.scheduledValues.slice(beforeSecondCall);
+    // The second call's very first appended event is the cancel — proof the
+    // engine was told to drop pending future events before the new ramp
+    // starts. Without the W1 fix the second call would jump straight to
+    // setTarget and the first call's zero-pin would slam the gain at 1.10.
+    const cancelIdx = appended.findIndex(
+      (e) => e.type === "cancelAndHold" || e.type === "cancel"
+    );
+    expect(cancelIdx).toBe(0);
+    // And the new setTarget is queued AFTER the cancel, with the new target.
+    const setTargetIdx = appended.findIndex((e) => e.type === "setTarget");
+    expect(setTargetIdx).toBeGreaterThan(cancelIdx);
+    expect(appended[setTargetIdx].target).toBe(0.5);
+    // The second call (target 0.5, non-zero) must NOT itself append another
+    // setValueAtTime(0, …) pin — that's the 5τ floor only for target=0.
+    const ownZeroPin = appended.find(
+      (e) => e.type === "setValue" && e.value === 0
+    );
+    expect(ownZeroPin).toBeUndefined();
+  });
 });

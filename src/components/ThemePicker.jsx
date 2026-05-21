@@ -23,6 +23,7 @@ export default function ThemePicker({ deckId, value, onChange }) {
         return (
           <button
             key={c.id}
+            type="button"
             onClick={() => onChange(c.value)}
             title={c.name}
             aria-label={`Deck ${deckId} color: ${c.name}`}
