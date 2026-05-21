@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { captureStartIndex } from "../public/worklets/looper-worklet.js";
+import { captureStartIndex } from "../src/worklets/looper-worklet.js";
 
 // The ring-buffer wrap math from the looper AudioWorklet. The worklet itself
 // can't be imported directly (it extends AudioWorkletProcessor, which only

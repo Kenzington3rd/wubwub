@@ -1,4 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+// Worklet source is imported as a raw string so both the multi-file build and
+// the single-file (`vite-plugin-singlefile`) build inline it as JS rather than
+// shipping a sibling `worklets/looper-worklet.js` file. At runtime we wrap the
+// source in a Blob and pass the resulting object URL to `addModule`. This
+// also makes the worklet load correctly from `file://`, where the previous
+// `"/worklets/looper-worklet.js"` absolute path resolved to the drive root.
+import looperWorkletSrc from "./worklets/looper-worklet.js?raw";
 import useMatchMedia from "./hooks/useMatchMedia.js";
 import Deck from "./components/Deck.jsx";
 import Crossfader from "./components/Crossfader.jsx";
@@ -15,7 +22,14 @@ import {
   extensionForMime,
   buildCueSheet,
 } from "./audio/recorder.js";
-import { enableMidi, mapCcToValue, MIDI_SUPPORTED } from "./midi/midiMap.js";
+import {
+  enableMidi,
+  mapCcToValue,
+  applyRelative,
+  decodeRelative2c,
+  decodeSignedMag,
+  MIDI_SUPPORTED,
+} from "./midi/midiMap.js";
 import { serializeSettings } from "./settings.js";
 import { SAMPLE_PAD_KEYS } from "./data.js";
 
@@ -53,6 +67,11 @@ export default function App() {
   const [midiInputName, setMidiInputName] = useState("");
   const [midiMappings, setMidiMappings] = useState({});
   const [learnTarget, setLearnTarget] = useState(null);
+  // Map of MIDIInput.id → display name, learned the first time we see a
+  // message from each input. The MidiPanel uses this to disambiguate mapping
+  // rows by controller name when more than one input has bound mappings, so
+  // two controllers' ch1/cc7 can be told apart.
+  const [midiInputNames, setMidiInputNames] = useState({});
   // W1.5 — session crate. An in-memory list of decoded tracks: each entry is
   // { id, name, bpm, camelot, _buffer }. The decoded AudioBuffer is kept off
   // the rendered object (`crateBuffersRef`) so it never accidentally ends up
@@ -91,6 +110,13 @@ export default function App() {
   const effectiveBpmRef = useRef(128);
   const mappingsRef = useRef({});
   const learnTargetRef = useRef(null);
+  // Running value per target, used only by the relative-encoder path. Seeded
+  // lazily from the target's absolute default the first time a relative tick
+  // arrives, then mutated in place as deltas accumulate. The user setting an
+  // absolute mapping on the same target overrides this on the next CC; for a
+  // pure-relative jog wheel we just need somewhere to remember "where the
+  // dial is now".
+  const relativeStateRef = useRef({});
   // W1.5 — decoded AudioBuffers for crate entries, keyed by entry id. Held in
   // a ref (not state) so the buffers stay out of render data and are dropped
   // for GC the moment an entry is removed / the crate is cleared.
@@ -193,8 +219,23 @@ export default function App() {
     // the master compressor with no JS reference).
     if (!workletNodeRef.current && !workletLoadingRef.current) {
       workletLoadingRef.current = (async () => {
+        // Wrap the imported worklet source in a Blob and hand the resulting
+        // object URL to `addModule`. Works in dev, the PWA build, the single
+        // -file build, and from `file://`. The URL is revoked immediately
+        // after registration succeeds — the worklet code has already been
+        // copied into the AudioWorkletGlobalScope by then.
+        let workletUrl = null;
         try {
-          await ctx.audioWorklet.addModule("/worklets/looper-worklet.js");
+          try {
+            workletUrl = URL.createObjectURL(
+              new Blob([looperWorkletSrc], { type: "text/javascript" }),
+            );
+            await ctx.audioWorklet.addModule(workletUrl);
+          } finally {
+            if (workletUrl) {
+              try { URL.revokeObjectURL(workletUrl); } catch { /* noop */ }
+            }
+          }
           if (workletNodeRef.current) return; // someone got there first
           const node = new AudioWorkletNode(ctx, "looper-processor", {
             numberOfInputs: 1,
@@ -497,8 +538,26 @@ export default function App() {
   useEffect(() => { mappingsRef.current = midiMappings; }, [midiMappings]);
   useEffect(() => { learnTargetRef.current = learnTarget; }, [learnTarget]);
 
-  const applyMidiTarget = useCallback((targetId, cc127) => {
-    const val = mapCcToValue(cc127, targetId);
+  // Default value to seed a target's relative-state ref the first time a
+  // relative tick arrives for it (no current-value getter on the Deck/master,
+  // so we pick a sensible mid-range starting point).
+  const defaultForTarget = (targetId) => {
+    switch (targetId) {
+      case "deckA.filterFreq":
+      case "deckB.filterFreq":
+        return 20000; // fully open
+      case "deckA.speed":
+      case "deckB.speed":
+        return 1; // normal speed
+      default:
+        return 0.5; // crossfade / volume / master volume mid-range
+    }
+  };
+
+  const dispatchTargetValue = useCallback((targetId, val) => {
+    // Mirror into the relative ref so a later relative tick continues from
+    // wherever absolute moves left things.
+    relativeStateRef.current[targetId] = val;
     switch (targetId) {
       case "crossfade":
         setCrossfade(val);
@@ -529,24 +588,107 @@ export default function App() {
     }
   }, []);
 
-  const onMidiCc = useCallback(
-    (channel, cc, value, inputName) => {
+  const applyMidiCc = useCallback(
+    (targetId, mapping, ccValue) => {
+      const mode = mapping.mode || "absolute";
+      if (mode === "absolute") {
+        dispatchTargetValue(targetId, mapCcToValue(ccValue, targetId));
+        return;
+      }
+      // Relative mode — accumulate against the stored running value.
+      const delta =
+        mode === "relative2c"
+          ? decodeRelative2c(ccValue)
+          : decodeSignedMag(ccValue);
+      const current =
+        relativeStateRef.current[targetId] ?? defaultForTarget(targetId);
+      dispatchTargetValue(targetId, applyRelative(current, delta, targetId));
+    },
+    [dispatchTargetValue]
+  );
+
+  const onMidiMessage = useCallback(
+    (message, inputId, inputName) => {
       setMidiInputName(inputName || "");
+      // Remember this input's name keyed by id so the panel can disambiguate
+      // mapping rows when more than one controller is bound. Only writes on
+      // change to avoid pointless re-renders.
+      if (inputId && inputName) {
+        setMidiInputNames((prev) =>
+          prev[inputId] === inputName ? prev : { ...prev, [inputId]: inputName }
+        );
+      }
+      // Learn mode: capture whichever recognised message arrives first. CC
+      // becomes a kind:"cc" mapping; Note On becomes a kind:"note" mapping.
+      // Note Off is ignored during learn so a button release doesn't replace
+      // the press the user just made.
       if (learnTargetRef.current) {
-        const targetId = learnTargetRef.current;
-        setMidiMappings((prev) => ({ ...prev, [targetId]: { channel, cc } }));
-        learnTargetRef.current = null;
-        setLearnTarget(null);
+        if (message.kind === "cc") {
+          const targetId = learnTargetRef.current;
+          setMidiMappings((prev) => ({
+            ...prev,
+            [targetId]: {
+              inputId,
+              channel: message.channel,
+              kind: "cc",
+              number: message.cc,
+              mode: "absolute",
+            },
+          }));
+          learnTargetRef.current = null;
+          setLearnTarget(null);
+        } else if (message.kind === "noteon") {
+          const targetId = learnTargetRef.current;
+          setMidiMappings((prev) => ({
+            ...prev,
+            [targetId]: {
+              inputId,
+              channel: message.channel,
+              kind: "note",
+              number: message.note,
+              mode: "absolute",
+            },
+          }));
+          learnTargetRef.current = null;
+          setLearnTarget(null);
+        }
         return;
       }
       const map = mappingsRef.current;
       for (const [targetId, mapping] of Object.entries(map)) {
-        if (mapping.channel === channel && mapping.cc === cc) {
-          applyMidiTarget(targetId, value);
+        // Match by inputId (when both sides know it), channel, kind, number.
+        // A v1-imported mapping with inputId=undefined matches any input —
+        // best-effort behavior so a settings file from the old shape still
+        // works after re-plugging the controller.
+        if (
+          mapping.channel !== message.channel ||
+          (mapping.kind || "cc") !== message.kind
+        ) {
+          continue;
         }
+        if (mapping.inputId !== undefined && mapping.inputId !== inputId) {
+          continue;
+        }
+        if (message.kind === "cc") {
+          if (mapping.number !== message.cc) continue;
+          applyMidiCc(targetId, mapping, message.value);
+        } else if (message.kind === "noteon") {
+          if (mapping.number !== message.note) continue;
+          // Routing a note trigger to a target value is part of the deferred
+          // MIDI controller overhaul. For now, surface that the trigger was
+          // received so a developer debugging the panel can see Learn captured
+          // the right note even though runtime application is not wired yet.
+          // eslint-disable-next-line no-console
+          console.debug(
+            `[wavecraft] MIDI note trigger received for "${targetId}" ` +
+              `(ch${message.channel + 1} note${message.note}) — runtime ` +
+              `routing for note mappings is deferred to a later round.`
+          );
+        }
+        // noteoff is intentionally not applied (button-up shouldn't change a value).
       }
     },
-    [applyMidiTarget]
+    [applyMidiCc]
   );
 
   const onEnableMidi = async () => {
@@ -556,7 +698,7 @@ export default function App() {
     }
     try {
       await ensureMasterCtx();
-      const unsub = await enableMidi(onMidiCc);
+      const unsub = await enableMidi(onMidiMessage);
       midiUnsubRef.current = unsub;
       setMidiEnabled(true);
       setMidiError("");
@@ -578,6 +720,17 @@ export default function App() {
       const next = { ...prev };
       delete next[targetId];
       return next;
+    });
+  };
+
+  // Per-mapping CC mode change ("absolute" / "relative2c" / "signedMag").
+  // No-op on a note mapping — note triggers don't have a relative/absolute
+  // axis. The MidiPanel hides the dropdown for note mappings.
+  const onChangeMidiMode = (targetId, mode) => {
+    setMidiMappings((prev) => {
+      const existing = prev[targetId];
+      if (!existing) return prev;
+      return { ...prev, [targetId]: { ...existing, mode } };
     });
   };
 
@@ -845,10 +998,12 @@ export default function App() {
           onEnable={onEnableMidi}
           onDisable={onDisableMidi}
           mappings={midiMappings}
+          inputNames={midiInputNames}
           learnTarget={learnTarget}
           onStartLearn={setLearnTarget}
           onCancelLearn={() => setLearnTarget(null)}
           onClearMapping={onClearMidiMapping}
+          onChangeMode={onChangeMidiMode}
           inputName={midiInputName}
           error={midiError}
         />

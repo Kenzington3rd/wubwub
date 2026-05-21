@@ -77,3 +77,164 @@ describe("MidiPanel — US39 (Web MIDI supported)", () => {
     expect(enableBtn).toHaveAttribute("aria-pressed", "false");
   });
 });
+
+// C1 + C2 — once a mapping exists with the new shape, the per-row summary
+// shows ch/cc or ch/note, appends the controller name only when more than one
+// controller is bound, and the mode dropdown is visible for CC mappings.
+describe("MidiPanel — US39 (mapping display, bugs C1 + C2 + C3)", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.doMock("../src/midi/midiMap.js", () => ({
+      MIDI_SUPPORTED: true,
+      MIDI_TARGETS: [
+        { id: "crossfade", label: "Crossfader" },
+        { id: "deckA.volume", label: "Deck A Volume" },
+      ],
+    }));
+  });
+
+  it("@us US39 (bug C1): single controller — summary is plain 'ch1 cc7' (no name)", async () => {
+    const { default: MidiPanel } = await import("../src/components/MidiPanel.jsx");
+    render(
+      <MidiPanel
+        {...baseProps}
+        enabled
+        mappings={{
+          crossfade: {
+            inputId: "in-a",
+            channel: 0,
+            kind: "cc",
+            number: 7,
+            mode: "absolute",
+          },
+        }}
+        inputNames={{ "in-a": "DDJ-FLX4" }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^MIDI/i }));
+    expect(screen.getByText(/^ch1 cc7$/)).toBeInTheDocument();
+  });
+
+  it("@us US39 (bug C1): two controllers — summary appends the controller name", async () => {
+    const { default: MidiPanel } = await import("../src/components/MidiPanel.jsx");
+    render(
+      <MidiPanel
+        {...baseProps}
+        enabled
+        mappings={{
+          crossfade: {
+            inputId: "in-a",
+            channel: 0,
+            kind: "cc",
+            number: 7,
+            mode: "absolute",
+          },
+          "deckA.volume": {
+            inputId: "in-b",
+            channel: 0,
+            kind: "cc",
+            number: 7,
+            mode: "absolute",
+          },
+        }}
+        inputNames={{ "in-a": "DDJ-FLX4", "in-b": "Launch Control" }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^MIDI/i }));
+    expect(screen.getByText(/ch1 cc7 · DDJ-FLX4/)).toBeInTheDocument();
+    expect(screen.getByText(/ch1 cc7 · Launch Control/)).toBeInTheDocument();
+  });
+
+  it("@us US39 (bug C2): note mapping renders 'ch1 note36'", async () => {
+    const { default: MidiPanel } = await import("../src/components/MidiPanel.jsx");
+    render(
+      <MidiPanel
+        {...baseProps}
+        enabled
+        mappings={{
+          crossfade: {
+            inputId: "in-a",
+            channel: 0,
+            kind: "note",
+            number: 36,
+            mode: "absolute",
+          },
+        }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^MIDI/i }));
+    expect(screen.getByText(/^ch1 note36$/)).toBeInTheDocument();
+  });
+
+  it("@us US39 (bug C3): a CC mapping renders the Mode dropdown defaulted to its mode", async () => {
+    const { default: MidiPanel } = await import("../src/components/MidiPanel.jsx");
+    render(
+      <MidiPanel
+        {...baseProps}
+        enabled
+        onChangeMode={() => {}}
+        mappings={{
+          crossfade: {
+            inputId: "in-a",
+            channel: 0,
+            kind: "cc",
+            number: 7,
+            mode: "relative2c",
+          },
+        }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^MIDI/i }));
+    const select = screen.getByRole("combobox", { name: /Mode for Crossfader/i });
+    expect(select).toHaveValue("relative2c");
+  });
+
+  it("@us US39 (bug C3): note mappings have no Mode dropdown", async () => {
+    const { default: MidiPanel } = await import("../src/components/MidiPanel.jsx");
+    render(
+      <MidiPanel
+        {...baseProps}
+        enabled
+        onChangeMode={() => {}}
+        mappings={{
+          crossfade: {
+            inputId: "in-a",
+            channel: 0,
+            kind: "note",
+            number: 36,
+            mode: "absolute",
+          },
+        }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^MIDI/i }));
+    expect(
+      screen.queryByRole("combobox", { name: /Mode for Crossfader/i })
+    ).not.toBeInTheDocument();
+  });
+
+  it("@us US39 (bug C3): changing the Mode dropdown calls onChangeMode with the new mode", async () => {
+    const { default: MidiPanel } = await import("../src/components/MidiPanel.jsx");
+    const onChangeMode = vi.fn();
+    render(
+      <MidiPanel
+        {...baseProps}
+        enabled
+        onChangeMode={onChangeMode}
+        mappings={{
+          crossfade: {
+            inputId: "in-a",
+            channel: 0,
+            kind: "cc",
+            number: 7,
+            mode: "absolute",
+          },
+        }}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: /^MIDI/i }));
+    const select = screen.getByRole("combobox", { name: /Mode for Crossfader/i });
+    fireEvent.change(select, { target: { value: "relative2c" } });
+    expect(onChangeMode).toHaveBeenCalledWith("crossfade", "relative2c");
+  });
+});

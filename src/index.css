@@ -1,25 +1,12 @@
 /* ──────────────────────────────────────────────────────────
    WAVECRAFT — Global styles
    Self-hosted fonts. No network calls at runtime.
+
+   @font-face declarations live in `src/fonts/index.js` and are injected at
+   boot. Importing the .woff2 files through Vite (`?url`) lets the build
+   choose between sibling-file (multi-file build) and data-URI (single-file
+   build) without us hard-coding the path here in CSS.
    ────────────────────────────────────────────────────────── */
-
-@font-face {
-  font-family: "Audiowide";
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url("/fonts/Audiowide-Regular.woff2") format("woff2");
-}
-
-/* Exo 2 is shipped as a variable font — one file covers weights 100–900. */
-@font-face {
-  font-family: "Exo 2";
-  font-style: normal;
-  font-weight: 100 900;
-  font-display: swap;
-  src: url("/fonts/Exo2-Variable.woff2") format("woff2-variations"),
-       url("/fonts/Exo2-Variable.woff2") format("woff2");
-}
 
 /* Resets */
 *, *::before, *::after {

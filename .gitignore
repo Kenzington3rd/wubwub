@@ -1,6 +1,8 @@
 node_modules/
 dist/
+dist-single/
 .vite/
+coverage/
 *.local
 .DS_Store
 Thumbs.db

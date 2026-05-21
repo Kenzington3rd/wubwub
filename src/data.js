@@ -1,28 +1,34 @@
+// Each entry's `compatible` array lists the three harmonically-safe
+// neighbours and DOES NOT include the key itself. Consumers that want to
+// highlight "current selection + compatible" treat the selected key as an
+// implicit fourth member. This matches what `camelotCompatible()` returns and
+// keeps the two consumers in sync (the previous 4-item shape included self
+// and diverged from the helper, which let TheoryPanel and Deck disagree).
 export const CAMELOT_WHEEL = [
-  { key: "Ab min", camelot: "1A", compatible: ["1A", "1B", "12A", "2A"] },
-  { key: "B maj", camelot: "1B", compatible: ["1B", "1A", "12B", "2B"] },
-  { key: "Eb min", camelot: "2A", compatible: ["2A", "2B", "1A", "3A"] },
-  { key: "Gb maj", camelot: "2B", compatible: ["2B", "2A", "1B", "3B"] },
-  { key: "Bb min", camelot: "3A", compatible: ["3A", "3B", "2A", "4A"] },
-  { key: "Db maj", camelot: "3B", compatible: ["3B", "3A", "2B", "4B"] },
-  { key: "F min", camelot: "4A", compatible: ["4A", "4B", "3A", "5A"] },
-  { key: "Ab maj", camelot: "4B", compatible: ["4B", "4A", "3B", "5B"] },
-  { key: "C min", camelot: "5A", compatible: ["5A", "5B", "4A", "6A"] },
-  { key: "Eb maj", camelot: "5B", compatible: ["5B", "5A", "4B", "6B"] },
-  { key: "G min", camelot: "6A", compatible: ["6A", "6B", "5A", "7A"] },
-  { key: "Bb maj", camelot: "6B", compatible: ["6B", "6A", "5B", "7B"] },
-  { key: "D min", camelot: "7A", compatible: ["7A", "7B", "6A", "8A"] },
-  { key: "F maj", camelot: "7B", compatible: ["7B", "7A", "6B", "8B"] },
-  { key: "A min", camelot: "8A", compatible: ["8A", "8B", "7A", "9A"] },
-  { key: "C maj", camelot: "8B", compatible: ["8B", "8A", "7B", "9B"] },
-  { key: "E min", camelot: "9A", compatible: ["9A", "9B", "8A", "10A"] },
-  { key: "G maj", camelot: "9B", compatible: ["9B", "9A", "8B", "10B"] },
-  { key: "B min", camelot: "10A", compatible: ["10A", "10B", "9A", "11A"] },
-  { key: "D maj", camelot: "10B", compatible: ["10B", "10A", "9B", "11B"] },
-  { key: "Gb min", camelot: "11A", compatible: ["11A", "11B", "10A", "12A"] },
-  { key: "A maj", camelot: "11B", compatible: ["11B", "11A", "10B", "12B"] },
-  { key: "Db min", camelot: "12A", compatible: ["12A", "12B", "11A", "1A"] },
-  { key: "E maj", camelot: "12B", compatible: ["12B", "12A", "11B", "1B"] },
+  { key: "Ab min", camelot: "1A", compatible: ["1B", "12A", "2A"] },
+  { key: "B maj", camelot: "1B", compatible: ["1A", "12B", "2B"] },
+  { key: "Eb min", camelot: "2A", compatible: ["2B", "1A", "3A"] },
+  { key: "Gb maj", camelot: "2B", compatible: ["2A", "1B", "3B"] },
+  { key: "Bb min", camelot: "3A", compatible: ["3B", "2A", "4A"] },
+  { key: "Db maj", camelot: "3B", compatible: ["3A", "2B", "4B"] },
+  { key: "F min", camelot: "4A", compatible: ["4B", "3A", "5A"] },
+  { key: "Ab maj", camelot: "4B", compatible: ["4A", "3B", "5B"] },
+  { key: "C min", camelot: "5A", compatible: ["5B", "4A", "6A"] },
+  { key: "Eb maj", camelot: "5B", compatible: ["5A", "4B", "6B"] },
+  { key: "G min", camelot: "6A", compatible: ["6B", "5A", "7A"] },
+  { key: "Bb maj", camelot: "6B", compatible: ["6A", "5B", "7B"] },
+  { key: "D min", camelot: "7A", compatible: ["7B", "6A", "8A"] },
+  { key: "F maj", camelot: "7B", compatible: ["7A", "6B", "8B"] },
+  { key: "A min", camelot: "8A", compatible: ["8B", "7A", "9A"] },
+  { key: "C maj", camelot: "8B", compatible: ["8A", "7B", "9B"] },
+  { key: "E min", camelot: "9A", compatible: ["9B", "8A", "10A"] },
+  { key: "G maj", camelot: "9B", compatible: ["9A", "8B", "10B"] },
+  { key: "B min", camelot: "10A", compatible: ["10B", "9A", "11A"] },
+  { key: "D maj", camelot: "10B", compatible: ["10A", "9B", "11B"] },
+  { key: "Gb min", camelot: "11A", compatible: ["11B", "10A", "12A"] },
+  { key: "A maj", camelot: "11B", compatible: ["11A", "10B", "12B"] },
+  { key: "Db min", camelot: "12A", compatible: ["12B", "11A", "1A"] },
+  { key: "E maj", camelot: "12B", compatible: ["12A", "11B", "1B"] },
 ];
 
 // Harmonically-safe mixing targets for a Camelot code `NX` (N = 1–12, X = A|B):

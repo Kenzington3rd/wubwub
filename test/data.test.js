@@ -26,19 +26,18 @@ describe("CAMELOT_WHEEL — US11", () => {
     }
   });
 
-  it("@us US11: each key declares 4 harmonically compatible neighbors", () => {
+  it("@us US11: each key declares 3 harmonically compatible neighbours (not including self)", () => {
+    // Bug #16 fix — the shape used to include the key itself in `compatible`
+    // (4 items), while `camelotCompatible()` returned only the 3 neighbours.
+    // The two diverged; consumers (TheoryPanel uses `.compatible`, Deck uses
+    // the helper) disagreed. Both now use the 3-item neighbours-only shape.
     for (const k of CAMELOT_WHEEL) {
-      expect(k.compatible).toHaveLength(4);
-      // Each compatible code must be a real Camelot code.
+      expect(k.compatible).toHaveLength(3);
+      // Each compatible code must be a real Camelot code, and never self.
       for (const c of k.compatible) {
         expect(CAMELOT_WHEEL.some((w) => w.camelot === c)).toBe(true);
+        expect(c).not.toBe(k.camelot);
       }
-    }
-  });
-
-  it("@us US11: every key lists itself as compatible (self-mix is the simplest blend)", () => {
-    for (const k of CAMELOT_WHEEL) {
-      expect(k.compatible).toContain(k.camelot);
     }
   });
 });
@@ -71,11 +70,10 @@ describe("camelotCompatible — US58 (reactive harmonic key suggestions)", () =>
   });
 
   it("@us US58: agrees with the CAMELOT_WHEEL.compatible set (order aside)", () => {
+    // Post bug #16: both shapes are the same 3-item neighbours-only list.
     for (const k of CAMELOT_WHEEL) {
       const computed = camelotCompatible(k.camelot);
-      // wheel `compatible` is [self, relative, -1, +1]; drop self, compare sets.
-      const wheelNeighbours = k.compatible.filter((c) => c !== k.camelot);
-      expect(new Set(computed)).toEqual(new Set(wheelNeighbours));
+      expect(new Set(computed)).toEqual(new Set(k.compatible));
     }
   });
 

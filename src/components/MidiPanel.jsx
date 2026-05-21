@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { MIDI_SUPPORTED, MIDI_TARGETS } from "../midi/midiMap.js";
 import Icon from "./Icon.jsx";
 
@@ -15,19 +15,42 @@ const SR_ONLY = {
   border: 0,
 };
 
+const MODE_OPTIONS = [
+  { value: "absolute", label: "Absolute" },
+  { value: "relative2c", label: "Relative 2c" },
+  { value: "signedMag", label: "Signed Mag" },
+];
+
 export default function MidiPanel({
   enabled,
   onEnable,
   onDisable,
   mappings,
+  // Map of MIDIInput.id → display name. Only used to disambiguate the per-
+  // mapping summary when more than one controller has bound mappings.
+  inputNames = {},
   learnTarget,
   onStartLearn,
   onCancelLearn,
   onClearMapping,
+  // Update a single mapping's CC mode (absolute / relative2c / signedMag).
+  // Optional — when omitted, the mode dropdown is hidden.
+  onChangeMode,
   inputName,
   error,
 }) {
   const [open, setOpen] = useState(false);
+
+  // Distinct controllers actually referenced by bound mappings. When two or
+  // more, each row labels its mapping with the controller name so the user
+  // can tell two controllers' "ch1 cc7" apart.
+  const distinctInputCount = useMemo(() => {
+    const ids = new Set();
+    for (const m of Object.values(mappings)) {
+      if (m && m.inputId) ids.add(m.inputId);
+    }
+    return ids.size;
+  }, [mappings]);
 
   // Announce MIDI learn transitions for screen readers: entering learn mode,
   // and when a mapping is captured (learnTarget clears with a mapping now set).
@@ -45,6 +68,21 @@ export default function MidiPanel({
     }
     prevLearnRef.current = learnTarget;
   }, [learnTarget, mappings]);
+
+  // Compact "ch1 cc7" / "ch1 note36" summary; appends "· <controller>" only
+  // when more than one input is bound, so the single-controller case stays
+  // tidy.
+  const summarize = (m) => {
+    const kind = m.kind || "cc";
+    const number = m.number ?? m.cc;
+    const suffix = kind === "note" ? `note${number}` : `cc${number}`;
+    const base = `ch${m.channel + 1} ${suffix}`;
+    if (distinctInputCount > 1 && m.inputId) {
+      const name = inputNames[m.inputId];
+      if (name) return `${base} · ${name}`;
+    }
+    return base;
+  };
 
   return (
     <div
@@ -136,6 +174,10 @@ export default function MidiPanel({
               {MIDI_TARGETS.map((t) => {
                 const m = mappings[t.id];
                 const learning = learnTarget === t.id;
+                // Mode dropdown only makes sense for CC mappings — note pads
+                // don't have an absolute-vs-relative axis.
+                const showMode =
+                  m && (m.kind || "cc") === "cc" && typeof onChangeMode === "function";
                 return (
                   <div
                     key={t.id}
@@ -150,17 +192,52 @@ export default function MidiPanel({
                       border: `1px solid ${learning ? "#60a5fa66" : "rgba(255,255,255,0.06)"}`,
                       borderRadius: 8,
                       fontSize: 11,
+                      flexWrap: "wrap",
                     }}
                   >
-                    <span style={{ flex: 1, color: "#8892b0" }}>{t.label}</span>
+                    <span style={{ flex: 1, color: "#8892b0", minWidth: 80 }}>{t.label}</span>
                     {m ? (
                       <span style={{ color: "#60a5fa", fontFamily: "'Exo 2', sans-serif" }}>
-                        ch{m.channel + 1} cc{m.cc}
+                        {summarize(m)}
                       </span>
                     ) : learning ? (
                       <span style={{ color: "#60a5fa", fontStyle: "italic" }}>twist…</span>
                     ) : (
                       <span style={{ color: "#4a5580" }}>—</span>
+                    )}
+                    {showMode && (
+                      <label
+                        style={{
+                          display: "inline-flex",
+                          alignItems: "center",
+                          gap: 4,
+                          fontSize: 10,
+                          color: "#4a5580",
+                        }}
+                      >
+                        <span style={SR_ONLY}>Mode for {t.label}</span>
+                        <span aria-hidden="true">Mode</span>
+                        <select
+                          value={m.mode || "absolute"}
+                          onChange={(e) => onChangeMode(t.id, e.target.value)}
+                          aria-label={`Mode for ${t.label}`}
+                          style={{
+                            background: "rgba(255,255,255,0.05)",
+                            border: "1px solid rgba(255,255,255,0.1)",
+                            color: "#8892b0",
+                            borderRadius: 4,
+                            fontSize: 10,
+                            padding: "1px 4px",
+                            cursor: "pointer",
+                          }}
+                        >
+                          {MODE_OPTIONS.map((opt) => (
+                            <option key={opt.value} value={opt.value}>
+                              {opt.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
                     )}
                     <button
                       onClick={() => (learning ? onCancelLearn() : onStartLearn(t.id))}

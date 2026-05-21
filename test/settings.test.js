@@ -12,8 +12,20 @@ const FULL_CONFIG = {
   deckBColor: "#4ade80",
   crossfadeCurve: "linear",
   midiMappings: {
-    crossfade: { channel: 0, cc: 7 },
-    "deckA.volume": { channel: 2, cc: 21 },
+    crossfade: {
+      inputId: "in-a",
+      channel: 0,
+      kind: "cc",
+      number: 7,
+      mode: "absolute",
+    },
+    "deckA.volume": {
+      inputId: "in-b",
+      channel: 2,
+      kind: "cc",
+      number: 21,
+      mode: "relative2c",
+    },
   },
   recordTapMode: "pre",
 };
@@ -32,7 +44,13 @@ describe("settings — export shape (W1.4 / US62)", () => {
     expect(obj.deckAColor).toBe("#f0c040");
     expect(obj.crossfadeCurve).toBe("linear");
     expect(obj.recordTapMode).toBe("pre");
-    expect(obj.midiMappings.crossfade).toEqual({ channel: 0, cc: 7 });
+    expect(obj.midiMappings.crossfade).toEqual({
+      inputId: "in-a",
+      channel: 0,
+      kind: "cc",
+      number: 7,
+      mode: "absolute",
+    });
   });
 
   it("@us US62: the export contains no audio buffers, file names or cue points", () => {
@@ -53,15 +71,46 @@ describe("settings — round-trip (W1.4 / US62)", () => {
     expect(result.config.deckBColor).toBe("#4ade80");
     expect(result.config.crossfadeCurve).toBe("linear");
     expect(result.config.recordTapMode).toBe("pre");
+    // Mappings round-trip with the inputId / kind / number / mode shape.
     expect(result.config.midiMappings).toEqual(FULL_CONFIG.midiMappings);
   });
 
   it("@us US62: MIDI mappings survive a round-trip (the reload-survival benefit)", () => {
     const result = parseSettings(serializeSettings(FULL_CONFIG));
     expect(result.config.midiMappings["deckA.volume"]).toEqual({
+      inputId: "in-b",
       channel: 2,
-      cc: 21,
+      kind: "cc",
+      number: 21,
+      mode: "relative2c",
     });
+  });
+
+  // C1 — v1 settings files (legacy `{ channel, cc }` shape, no inputId) must
+  // still import without throwing. inputId is undefined (best-effort match
+  // against any controller at runtime), kind defaults to "cc", mode "absolute".
+  it("@us US62 (bug C1): v1 settings file imports cleanly into the v2 shape", () => {
+    const v1 = JSON.stringify({
+      app: "WAVECRAFT",
+      version: 1,
+      midiMappings: {
+        crossfade: { channel: 0, cc: 7 },
+        "deckA.volume": { channel: 2, cc: 21 },
+      },
+    });
+    let result;
+    expect(() => {
+      result = parseSettings(v1);
+    }).not.toThrow();
+    expect(result.ok).toBe(true);
+    expect(result.config.midiMappings.crossfade).toEqual({
+      channel: 0,
+      kind: "cc",
+      number: 7,
+      mode: "absolute",
+    });
+    expect(result.config.midiMappings.crossfade.inputId).toBeUndefined();
+    expect(result.config.midiMappings["deckA.volume"].number).toBe(21);
   });
 });
 
@@ -119,19 +168,68 @@ describe("settings — malformed import is handled gracefully (W1.4 / US62)", ()
     const result = parseSettings(
       JSON.stringify({
         app: "WAVECRAFT",
-        version: 1,
+        version: 2,
         midiMappings: {
-          crossfade: { channel: 1, cc: 10 }, // valid
-          masterVol: { channel: 99, cc: 10 }, // channel out of range → dropped
-          "deckA.speed": { cc: 5 }, // missing channel → dropped
+          crossfade: {
+            inputId: "in-a",
+            channel: 1,
+            kind: "cc",
+            number: 10,
+            mode: "absolute",
+          },
+          masterVol: { channel: 99, kind: "cc", number: 10 }, // channel out of range → dropped
+          "deckA.speed": { kind: "cc", number: 5 }, // missing channel → dropped
           "deckB.volume": "garbage", // not an object → dropped
+          "deckA.volume": {
+            channel: 0,
+            kind: "cc",
+            number: 200, // out of range → dropped
+          },
+          "deckA.filterFreq": {
+            channel: 0,
+            kind: "bogus", // unknown kind → dropped
+            number: 5,
+          },
+          "deckB.filterFreq": {
+            channel: 0,
+            kind: "cc",
+            number: 5,
+            mode: "telepathy", // unknown mode → dropped
+          },
         },
       })
     );
     expect(result.ok).toBe(true);
     expect(result.config.midiMappings).toEqual({
-      crossfade: { channel: 1, cc: 10 },
+      crossfade: {
+        inputId: "in-a",
+        channel: 1,
+        kind: "cc",
+        number: 10,
+        mode: "absolute",
+      },
     });
+  });
+
+  it("@us US62 (bug C1): inputId longer than the cap is rejected", () => {
+    const longId = "x".repeat(500);
+    const result = parseSettings(
+      JSON.stringify({
+        app: "WAVECRAFT",
+        version: 2,
+        midiMappings: {
+          crossfade: {
+            inputId: longId,
+            channel: 1,
+            kind: "cc",
+            number: 10,
+            mode: "absolute",
+          },
+        },
+      })
+    );
+    expect(result.ok).toBe(true);
+    expect(result.config.midiMappings.crossfade).toBeUndefined();
   });
 
   it("@us US62: a bare array or null is rejected without throwing", () => {
