@@ -46,23 +46,19 @@ and STYLE_GUIDE.md (code).
 - **Buttons** — two-step radius scale: **large** controls (transport pads, file
   loader, BASS DROP) use `border-radius: 10px`; **small / compact** controls
   (TAP, SYNC, AUTO, cue chips, looper & sample-pad controls, MIDI buttons) use
-  `6–8px`. Icon-only controls have a minimum 38×38px hit area (via padding or
-  `min-width` / `min-height`) and must carry an `aria-label`. **All interactive
-  text buttons have a minimum 38×38px hit area, regardless of label size or
-  context.** This includes native `<select>` elements: every `<select>` in the
-  app currently targets the 38px floor (BassDropMenu, Looper bars, Crossfader
-  curve, MidiPanel mode) — there is no sanctioned 30px-select exemption in
-  effect. Sanctioned exceptions:
-  - **ThemePicker swatches** — 24×24 hit area (compact packed targets, see
-    existing §3 note below).
-  Text buttons use Audiowide for primary actions (BASS DROP), Exo 2 elsewhere.
-  - **ThemePicker swatches.** The accent swatches are visually 16×16px chips,
-    but the `<button>` carrying each one adds 4px symmetric padding around
-    the chip so the actual pointer hit area is **≥ 24×24** — meeting
-    WCAG 2.5.8 (Target Size — Minimum) without changing how the swatches
-    look. This is NOT an exemption from the 38×38 rule for full-size
-    controls; it is a deliberate compact target at the WCAG minimum, used
-    here because a full-size swatch row would crowd out the MasterBus
+  `6–8px`. Icon-only controls must carry an `aria-label`. Text buttons use
+  Audiowide for primary actions (BASS DROP), Exo 2 elsewhere. **All
+  interactive controls — buttons, icon buttons, and native `<select>`s —
+  have a minimum 38×38px hit area (via padding or `min-width` / `min-height`),
+  regardless of label size or context.** Every `<select>` in the app
+  (BassDropMenu, Looper bars, Crossfader curve, MidiPanel mode) targets the
+  38px floor — there is no 30px-select exemption in effect.
+  - **Sanctioned exception — ThemePicker swatches.** The accent swatches are
+    visually 16×16px chips, but the `<button>` carrying each one adds 4px
+    symmetric padding around the chip so the actual pointer hit area is
+    **≥ 24×24** — meeting WCAG 2.5.8 (Target Size — Minimum) without
+    changing how the swatches look. This is the sole exception to the 38×38
+    rule, used because a full-size swatch row would crowd out the MasterBus
     controls.
 - **Icon** — see BRANDING_GUIDE §5. Size 10–18px depending on context.
 - **Segmented two-option toggle** — a pair of joined buttons sharing one
