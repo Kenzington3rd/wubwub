@@ -65,7 +65,9 @@ export function buildDeckChain(ctx, outputNode, recordTap) {
 
   // ─── Distortion ───
   const distortion = ctx.createWaveShaper();
-  distortion.oversample = "4x";
+  // A8 — 2x is the audibly transparent cost-of-business setting; 4x reserved
+  // for non-realtime export if added later.
+  distortion.oversample = "2x";
   distortion.curve = buildDistortionCurve(40);
   const distortionDry = ctx.createGain();
   const distortionWet = ctx.createGain();

@@ -65,11 +65,11 @@ describe("buildDeckChain — US55, US18–US20", () => {
     expect(chain.delay.maxDelayTime).toBe(2.0);
   });
 
-  it("@us US20: distortion starts bypassed and uses 4× oversample", () => {
+  it("@us US20: distortion starts bypassed and uses 2× oversample (A8 — 2x is audibly transparent; 4x reserved for non-realtime export)", () => {
     const ctx = new AudioContext();
     const chain = buildDeckChain(ctx, ctx.createGain());
     expect(chain.distortionWet.gain.value).toBe(0);
-    expect(chain.distortion.oversample).toBe("4x");
+    expect(chain.distortion.oversample).toBe("2x");
   });
 
   it("@us US10: analyser uses fftSize 2048", () => {

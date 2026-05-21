@@ -19,10 +19,10 @@ export default function BassDropMenu({ preset, onChange, color }) {
         border: `1px solid ${color}${hover ? "66" : "33"}`,
         borderRadius: 6,
         fontSize: 9,
-        // D6 — the BASS DROP row is a tight inline pairing with the full-size
-        // BASS DROP button; a 38px select would tower over the layout. 30px
-        // is the largest height that still reads as paired with that button.
-        minHeight: 30,
+        // 38×38 minimum hit area (WCAG 2.5.8). The BASS DROP button next to
+        // it is already a tall primary action, so a full-floor select sits
+        // comfortably alongside it.
+        minHeight: 38,
         padding: "2px 4px",
         fontFamily: "'Exo 2', sans-serif",
         cursor: "pointer",

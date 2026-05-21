@@ -173,7 +173,10 @@ export default function MasterBus({
       {/* W1.7 — clip indicator. Lit in --danger when the signal clips.
           Purely visual: no live region — a hot signal flips on/off many
           times a second, which would flood a polite announcer. The title
-          attribute carries the explanation for pointer users. */}
+          attribute is a hover convenience for mouse users; the actionable
+          "too hot — lower volume" hint surfaces inline as a caption below
+          while clipping so touch + keyboard users can perceive it too
+          (WCAG 1.4.13 — info not via hover/focus only). */}
       <div
         title={
           clipping
@@ -188,7 +191,9 @@ export default function MasterBus({
           letterSpacing: 1,
           textTransform: "uppercase",
           fontFamily: "'Exo 2', sans-serif",
-          color: clipping ? "#f87171" : "#4a5580",
+          // Disabled-state colour uses text-muted, not text-dim #4a5580
+          // (which fails WCAG 1.4.11 on the deep bg).
+          color: clipping ? "#f87171" : "#8892b0",
         }}
       >
         <span
@@ -198,12 +203,30 @@ export default function MasterBus({
             width: 10,
             height: 10,
             borderRadius: "50%",
-            background: clipping ? "#f87171" : "#4a5580",
+            background: clipping ? "#f87171" : "#8892b0",
             boxShadow: clipping ? "0 0 8px #f87171aa" : "none",
             transition: "background 0.1s",
           }}
         />
         CLIP
+        {clipping && (
+          <span
+            // Inline caption — visible while the signal is clipping.
+            // Transition honours prefers-reduced-motion via the global
+            // index.css rule that neutralises transition-duration.
+            style={{
+              marginLeft: 6,
+              textTransform: "none",
+              letterSpacing: 0,
+              fontSize: 10,
+              color: "#f87171",
+              fontFamily: "'Exo 2', sans-serif",
+              transition: "opacity 0.15s ease",
+            }}
+          >
+            too hot — lower volume
+          </span>
+        )}
       </div>
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>

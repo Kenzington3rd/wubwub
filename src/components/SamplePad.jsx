@@ -11,10 +11,18 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
   );
   // A decode failure is routine user feedback — surface it inline (cleared on
   // the next successful load) rather than blocking with alert(), matching the
-  // loadError pattern in Deck.jsx and Crate.jsx.
+  // loadError pattern in Deck.jsx and Crate.jsx. The error carries an id so a
+  // repeated identical decode failure re-announces — a polite role="alert"
+  // only fires on DOM diff, so identical text alone wouldn't reach the
+  // screen reader without a unique key swap on the alert wrapper.
   const [loadError, setLoadError] = useState(null);
+  const loadErrorIdRef = useRef(0);
   const bufferRefs = useRef(Array(PAD_COUNT).fill(null));
   const gainRefs = useRef(Array(PAD_COUNT).fill(null));
+  // A6 — see Looper.jsx. Tracks whether each pad's cached gain has been wired
+  // into the parallel pre-limiter record tap; deferred-attach on a later call
+  // once the tap becomes available.
+  const tapAttachedRefs = useRef(Array(PAD_COUNT).fill(false));
   const fileInputRefs = useRef(Array(PAD_COUNT).fill(null));
 
   const ensureGain = useCallback(
@@ -35,8 +43,24 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
         // the "Clean" recording captures sample-pad audio, not just the decks.
         // The tap has no downstream connection, so this never doubles the
         // audible signal. Optional: if the tap isn't ready the pad still plays.
-        if (recordTapRef?.current) g.connect(recordTapRef.current);
+        //
+        // A6 — track whether the tap was actually attached. If recordTapRef
+        // wasn't ready at first ensureGain, the connection was silently
+        // skipped — a subsequent call must retry once the tap exists, or the
+        // pad would never reach the "Clean" recorder.
+        if (recordTapRef?.current) {
+          g.connect(recordTapRef.current);
+          tapAttachedRefs.current[i] = true;
+        } else {
+          tapAttachedRefs.current[i] = false;
+        }
         gainRefs.current[i] = g;
+      } else if (!tapAttachedRefs.current[i] && recordTapRef?.current) {
+        // A6 — the gain was cached before the record tap was built. Now that
+        // it exists, fan the pad into the parallel pre-limiter tap so the
+        // "Clean" recording finally captures sample-pad audio.
+        g.connect(recordTapRef.current);
+        tapAttachedRefs.current[i] = true;
       }
       return g;
     },
@@ -60,9 +84,10 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
           p.map((row, idx) => (idx === i ? { ...row, name: file.name } : row))
         );
       } catch {
-        setLoadError(
-          `Couldn't decode "${file.name}". Try WAV, MP3, OGG, or FLAC.`
-        );
+        setLoadError({
+          id: ++loadErrorIdRef.current,
+          text: `Couldn't decode "${file.name}". Try WAV, MP3, OGG, or FLAC.`,
+        });
       }
     },
     [audioCtxRef, ensureMasterCtx]
@@ -122,6 +147,7 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
         }
         gainRefs.current[i] = null;
         bufferRefs.current[i] = null;
+        tapAttachedRefs.current[i] = false;
       }
     };
   }, []);
@@ -153,7 +179,11 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
         </span>
       </div>
       {loadError && (
+        // Keyed by error id so a repeated identical error re-announces:
+        // a polite role="alert" only fires on DOM diff, so without the
+        // key swap an identical text wouldn't reach the screen reader.
         <div
+          key={`pad-err-${loadError.id}`}
           role="alert"
           style={{
             color: "#f87171",
@@ -162,7 +192,7 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
             marginBottom: 8,
           }}
         >
-          {loadError}
+          {loadError.text}
         </div>
       )}
       <div

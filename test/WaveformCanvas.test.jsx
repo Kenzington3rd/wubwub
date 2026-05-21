@@ -183,6 +183,34 @@ describe("WaveformCanvas — keyboard seek (US64)", () => {
     }
   });
 
+  it("@us US64: ArrowUp / ArrowDown bubble untouched (do not seek, do not cancel)", () => {
+    // ↑/↓ are reserved for the global "focused deck volume ±5%" shortcut.
+    // The canvas must NOT seek on them, must NOT preventDefault, and must NOT
+    // stopPropagation — they have to reach the App-level keydown handler even
+    // while the canvas has focus.
+    const onSeek = vi.fn();
+    const { container } = render(
+      <Harness onSeek={onSeek} duration={100} currentTime={20} />
+    );
+    const canvas = container.querySelector("canvas");
+
+    const windowSpy = vi.fn();
+    window.addEventListener("keydown", windowSpy);
+    try {
+      const upEvt = fireEvent.keyDown(canvas, { key: "ArrowUp" });
+      const downEvt = fireEvent.keyDown(canvas, { key: "ArrowDown" });
+      // No seek should fire on either key.
+      expect(onSeek).not.toHaveBeenCalled();
+      // Both events must reach the window — propagation was not stopped.
+      expect(windowSpy).toHaveBeenCalledTimes(2);
+      // fireEvent returns false when defaultPrevented; we expect TRUE (not cancelled).
+      expect(upEvt).toBe(true);
+      expect(downEvt).toBe(true);
+    } finally {
+      window.removeEventListener("keydown", windowSpy);
+    }
+  });
+
   it("@us US64: keyboard seek is a no-op when there is no track duration", () => {
     const onSeek = vi.fn();
     const { container } = render(

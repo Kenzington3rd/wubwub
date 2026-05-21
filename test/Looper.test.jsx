@@ -6,10 +6,21 @@ import Looper from "../src/components/Looper.jsx";
 // Build a Looper harness with a mocked Web Audio graph. The global Web Audio
 // mock (installed in test/setup.js) provides AudioContext + AudioWorkletNode.
 // `onWorklet` exposes the mock worklet node so tests can inspect postMessage.
-function Harness({ workletReady = true, bpm = 128, onWorklet, onRefs }) {
+// `tapReady=false` simulates the "record tap not yet built" startup race
+// covered by A6.
+function Harness({
+  workletReady = true,
+  bpm = 128,
+  onWorklet,
+  onRefs,
+  tapReady = true,
+}) {
   const audioCtxRef = useRef(new AudioContext());
   const outputNodeRef = useRef(audioCtxRef.current.createGain());
-  const recordTapRef = useRef(audioCtxRef.current.createGain());
+  // A6 — start with no tap when tapReady=false, then the test can fill the
+  // ref later to simulate the master bus coming online after the Looper has
+  // already lazily built a slot's gain node.
+  const recordTapRef = useRef(tapReady ? audioCtxRef.current.createGain() : null);
   const workletNodeRef = useRef(
     new AudioWorkletNode(audioCtxRef.current, "looper-processor", {
       processorOptions: { seconds: 60 },
@@ -17,7 +28,7 @@ function Harness({ workletReady = true, bpm = 128, onWorklet, onRefs }) {
   );
   const effectiveBpmRef = useRef(bpm);
   if (onWorklet) onWorklet(workletNodeRef.current);
-  if (onRefs) onRefs({ outputNodeRef, recordTapRef });
+  if (onRefs) onRefs({ outputNodeRef, recordTapRef, audioCtxRef });
   return (
     <Looper
       audioCtxRef={audioCtxRef}
@@ -92,6 +103,68 @@ describe("Looper — US28", () => {
     const posted = workletNode.port.postedMessages.find((m) => m.type === "capture");
     expect(posted).toBeTruthy();
     expect(posted.seconds).toBe(60);
+  });
+
+  it("@us US61 (A6): a slot whose gain was built before the record tap existed still reaches the tap once it comes online", () => {
+    // A6 — ensureGain caches a slot's GainNode the first time it's needed.
+    // If recordTapRef.current was null at that moment, the tap connection was
+    // silently skipped. The cached gain must NOT stay orphaned: a later play
+    // must reconnect to the tap once it exists, or "Clean" recording will
+    // miss looper audio forever after the slot is captured.
+    let workletNode;
+    let refs;
+    render(
+      <Harness
+        workletReady
+        tapReady={false}
+        onWorklet={(n) => { workletNode = n; }}
+        onRefs={(r) => { refs = r; }}
+      />
+    );
+    const ctx = workletNode.context;
+    // Deliver a synthetic capture so slot L1 has a buffer to play.
+    const left = new Float32Array(1024);
+    const right = new Float32Array(1024);
+    act(() => {
+      for (const fn of workletNode.port._listeners) {
+        fn({
+          data: {
+            type: "capture",
+            slot: 0,
+            left: left.buffer,
+            right: right.buffer,
+            sampleRate: ctx.sampleRate,
+          },
+        });
+      }
+    });
+    // First play — record tap is NOT ready yet. The slot gain is created and
+    // wired to the master output, but NOT to the (still-null) tap.
+    const playBtn = screen.getByRole("button", { name: /Play loop 1/i });
+    act(() => fireEvent.click(playBtn));
+    let src = ctx._lastStartedSource;
+    const slotGain = src.connections[0];
+    expect(slotGain).toBeTruthy();
+    expect(slotGain.connections).toContain(refs.outputNodeRef.current);
+    // The tap was null when the gain was built — no stale connection.
+    expect(refs.recordTapRef.current).toBeNull();
+    expect(slotGain.connections).toHaveLength(1);
+
+    // Stop the slot. Now the master bus comes online and the record tap is
+    // built. Filling the ref simulates the App's late master-bus setup —
+    // exactly the "tap built later" sequence A6 covers.
+    act(() => fireEvent.click(playBtn)); // toggle to stop
+    refs.recordTapRef.current = ctx.createGain();
+
+    // Second play — ensureGain finds the cached gain and the now-ready tap,
+    // and attaches the tap connection on this call.
+    act(() => fireEvent.click(playBtn));
+    src = ctx._lastStartedSource;
+    // The slot gain is the SAME cached node (still has the output connection),
+    // but it has now picked up the deferred tap connection too.
+    expect(src.connections[0]).toBe(slotGain);
+    expect(slotGain.connections).toContain(refs.outputNodeRef.current);
+    expect(slotGain.connections).toContain(refs.recordTapRef.current);
   });
 
   it("@us US61: a playing loop slot fans its output into the pre-limiter record tap", () => {

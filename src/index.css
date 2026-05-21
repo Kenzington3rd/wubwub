@@ -27,9 +27,12 @@
 }
 
 /* Keyboard focus ring — visible on every focusable control when navigating
-   by keyboard (not shown for mouse clicks). */
+   by keyboard (not shown for mouse clicks). Uses the neutral text-primary
+   (#ccd6f6) so the ring stays readable against every deck accent context —
+   tying the ring to a deck color (e.g. cyan) would camouflage focus on
+   cyan-accented controls and clash with the gold/purple/etc. themes. */
 *:focus-visible {
-  outline: 2px solid #00f5d4;
+  outline: 2px solid #ccd6f6;
   outline-offset: 2px;
 }
 

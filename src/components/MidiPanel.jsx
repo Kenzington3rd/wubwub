@@ -62,6 +62,8 @@ export default function MidiPanel({
       <button
         onClick={() => setOpen((o) => !o)}
         aria-expanded={open}
+        aria-controls="midi-panel-body"
+        aria-label="MIDI settings"
         style={{
           background: "transparent",
           border: "none",
@@ -94,7 +96,7 @@ export default function MidiPanel({
         </span>
       </button>
       {open && (
-        <div style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
+        <div id="midi-panel-body" style={{ marginTop: 10, display: "flex", flexDirection: "column", gap: 10 }}>
           {!MIDI_SUPPORTED && (
             <p style={{ fontSize: 11, color: "#8892b0" }}>
               Web MIDI isn't available here. Try Chrome, Edge, or Opera.

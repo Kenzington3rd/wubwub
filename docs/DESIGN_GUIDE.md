@@ -49,12 +49,14 @@ and STYLE_GUIDE.md (code).
   `6–8px`. Icon-only controls have a minimum 38×38px hit area (via padding or
   `min-width` / `min-height`) and must carry an `aria-label`. Text buttons use
   Audiowide for primary actions (BASS DROP), Exo 2 elsewhere.
-  - **Exemption — color-swatch picker.** The `ThemePicker` accent swatches are
-    16×16px and intentionally below the 38×38 minimum: they are a tightly
-    packed swatch grid where a full-size hit area would force the row to wrap
-    or crowd out the MasterBus controls. They remain accessible — each swatch
-    is a real `<button>` with an `aria-label` and keyboard focus. This is the
-    only sanctioned exemption from the 38×38 rule.
+  - **ThemePicker swatches.** The accent swatches are visually 16×16px chips,
+    but the `<button>` carrying each one adds 4px symmetric padding around
+    the chip so the actual pointer hit area is **≥ 24×24** — meeting
+    WCAG 2.5.8 (Target Size — Minimum) without changing how the swatches
+    look. This is NOT an exemption from the 38×38 rule for full-size
+    controls; it is a deliberate compact target at the WCAG minimum, used
+    here because a full-size swatch row would crowd out the MasterBus
+    controls.
 - **Icon** — see BRANDING_GUIDE §5. Size 10–18px depending on context.
 - **Segmented two-option toggle** — a pair of joined buttons sharing one
   rounded border (e.g. the MasterBus recorder Clean/Radio tap toggle). The
@@ -155,8 +157,15 @@ Every interactive control defines: **default, hover, active/engaged, disabled.**
   Focused deck is visually indicated by a stronger border + glow. The
   waveform `<canvas>` is no exception — once a track is loaded it is a
   `role="slider"` seek control (`tabIndex={0}`, arrow / Home / End keys seek);
-  it consumes those keys (`stopPropagation`) so the global crossfader/volume
-  arrow shortcuts do not double-fire while it is focused.
+  it consumes `←/→/Home/End` (`stopPropagation`) so the global crossfader
+  arrow shortcuts do not double-fire while it is focused. `↑/↓` are NOT
+  consumed by the canvas — they bubble to the global handler and adjust the
+  focused deck's volume, matching the documented global ↑/↓ behavior.
+- **Focus ring.** The global `*:focus-visible` outline is `2px solid #ccd6f6`
+  (text-primary, the registered neutral). Using a deck accent (e.g. cyan)
+  would camouflage focus on a same-accent control and clash with every other
+  deck-color context. `#ccd6f6` on `#070a14` exceeds the 3:1 non-text contrast
+  requirement and stays visible on any accent-tinted background.
 - Form inputs are skipped by the global keydown handler so typing never triggers
   shortcuts.
 - Contrast: body text `#ccd6f6` on `#070a14` passes WCAG AA, and `--text-muted`

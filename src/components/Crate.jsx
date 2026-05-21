@@ -38,7 +38,12 @@ export default function Crate({
 }) {
   const fileInputRef = useRef(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  // Error state carries an id alongside the text so repeated identical errors
+  // re-announce on screen readers. A polite live region only fires on DOM
+  // diff — same text + same key = no diff = no announcement. The id is used
+  // as a `key` on the alert wrapper so each new error replaces the node.
   const [error, setError] = useState(null);
+  const errorIdRef = useRef(0);
 
   // Decode each picked/dropped file and hand the buffer up to App via onAdd.
   // Wrong file types and decode failures surface inline — never thrown, never
@@ -59,11 +64,14 @@ export default function Crate({
           anyError = true;
         }
       }
-      setError(
-        anyError
-          ? "Some files were skipped — use audio files (MP3, WAV, OGG, FLAC, M4A, AAC)."
-          : null
-      );
+      if (anyError) {
+        setError({
+          id: ++errorIdRef.current,
+          text: "Some files were skipped — use audio files (MP3, WAV, OGG, FLAC, M4A, AAC).",
+        });
+      } else {
+        setError(null);
+      }
     },
     [onAdd]
   );
@@ -200,7 +208,11 @@ export default function Crate({
       </div>
 
       {error && (
+        // The unique key forces React to remount the alert node when the
+        // same error fires twice — without that, screen readers wouldn't
+        // re-announce a repeated identical error message (no DOM diff).
         <div
+          key={`crate-err-${error.id}`}
           role="alert"
           style={{
             color: "#f87171",
@@ -209,7 +221,7 @@ export default function Crate({
             marginBottom: 8,
           }}
         >
-          {error}
+          {error.text}
         </div>
       )}
 

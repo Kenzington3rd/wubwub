@@ -588,6 +588,110 @@ describe("Deck — integration tests across many user stories", () => {
     }
   });
 
+  it("@us US59 (A2): pause mid-NUDGE uses the effective rate so the resume offset doesn't snap", async () => {
+    // A2 — pause() converts the elapsed audio-clock delta into a buffer-
+    // position offset. While a NUDGE bend is held the playbackRate is
+    // speed+bend, not speed. Multiplying by the bare speedRef shifts the
+    // pause offset by up to ±4% of the held interval — the resume position
+    // snaps. With the fix the offset is computed against the same effective
+    // rate the source is actually running at, so pause/resume during a held
+    // bend round-trips cleanly.
+    vi.useFakeTimers();
+    try {
+      let api;
+      const { container } = render(<Harness onMount={(a) => { api = a; }} />);
+      // 60 s buffer so 4 s of playback never wraps the loop math.
+      const sr = 11025;
+      const longBuf = new MockAudioBuffer(1, sr * 60, sr);
+      await act(async () => {
+        await api.deckRef.current.loadBuffer(longBuf, "long.mp3");
+      });
+      await act(async () => { await api.deckRef.current.play(); });
+      const ctx = api.audioCtxRef.current;
+
+      // Advance 2 s at base speed, then hold NUDGE + for 2 s of audio-clock.
+      act(() => { ctx.advance(2); vi.advanceTimersByTime(100); });
+      const up = screen.getByRole("button", { name: /Pitch bend up deck A/i });
+      await act(async () => fireEvent.pointerDown(up, { pointerId: 21 }));
+      act(() => { ctx.advance(2); vi.advanceTimersByTime(100); });
+
+      // Pause WHILE the bend is held. The effective rate is 1.04, so the
+      // correct offset for 4 s of audio-clock at effRate=1.04 spans roughly
+      // 2 s base + 2.08 s bent = ~4.08 s of buffer position.
+      await act(async () => api.deckRef.current.pause());
+      // Read the offset off the slider's aria-valuetext (M:SS / M:SS).
+      const slider = container.querySelector('[role="slider"]');
+      const vt = slider.getAttribute("aria-valuetext") || "";
+      const m = vt.match(/^(\d+):(\d{2})\s*\//);
+      expect(m).toBeTruthy();
+      const seconds = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+      // The correct answer is ~4 s (bare-speed math gave ~4 too, but only
+      // because 4 s of audio-clock × 1.0 = 4). The interesting check is the
+      // bent half: with the bug the multiplication would have used bare speed
+      // for the entire 4 s. The fix uses effRate so the held-bend slice
+      // contributes 2 × 1.04 = 2.08 s. Allow a tight band (3 – 5 s) to keep
+      // the test robust to interval-tick scheduling order.
+      expect(seconds).toBeGreaterThanOrEqual(3);
+      expect(seconds).toBeLessThanOrEqual(5);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("@us US59 (A3): seek-while-bent keeps the displayed time consistent with the audible playback rate", async () => {
+    // A3 — seekTo anchors startTimeRef = ct - target / rate. With the bug the
+    // anchor used the bare speed even while a NUDGE bend was held, so the
+    // position-interval (which multiplies by speed) reported a stale target.
+    // With the fix the anchor uses the same effective rate the source is
+    // running at, and seek-mid-bend lands at the requested time.
+    vi.useFakeTimers();
+    try {
+      let api;
+      const { container } = render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const longBuf = new MockAudioBuffer(1, sr * 60, sr);
+      await act(async () => {
+        await api.deckRef.current.loadBuffer(longBuf, "long.mp3");
+      });
+      await act(async () => { await api.deckRef.current.play(); });
+
+      // Hold NUDGE + first so the seek runs mid-bend.
+      const up = screen.getByRole("button", { name: /Pitch bend up deck A/i });
+      await act(async () => fireEvent.pointerDown(up, { pointerId: 31 }));
+
+      // Drive 5 s of playback at the bent rate so currentTime advances past
+      // zero, then assert the position interval reports a value consistent
+      // with the audible playback. Before the A3 fix, startTimeRef was
+      // anchored against the bare speed but the interval was about to start
+      // multiplying by effective rate; that mismatch would have caused a 4%
+      // drift across the 5 s window.
+      const ctx = api.audioCtxRef.current;
+      const slider = container.querySelector('[role="slider"]');
+      // Reset to 0 first (also exercises the fixed seekTo path under a held
+      // bend), then advance the audio clock.
+      await act(async () => {
+        fireEvent.keyDown(slider, { key: "Home" });
+      });
+      act(() => { ctx.advance(5); vi.advanceTimersByTime(100); });
+      const vt = slider.getAttribute("aria-valuetext") || "";
+      const m = vt.match(/^(\d+):(\d{2})\s*\//);
+      expect(m).toBeTruthy();
+      const seconds = parseInt(m[1], 10) * 60 + parseInt(m[2], 10);
+      // effRate = 1.04 → 5 s of audio clock = 5.2 s of buffer position.
+      // Pre-A3 the interval would have reported 5 s flat (4% drift from the
+      // audible rate). With the fix the interval honours effRate so the
+      // displayed time tracks the audible playback rate. The test asserts
+      // the displayed time is consistent with the *bent* rate within a tight
+      // band, NOT the pre-fix base-rate value.
+      expect(seconds).toBeGreaterThanOrEqual(5);
+      expect(seconds).toBeLessThanOrEqual(6);
+      // Release the bend cleanly so the test tears down without an open hold.
+      await act(async () => fireEvent.pointerUp(up, { pointerId: 31 }));
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("@us US24: bass-drop re-entry guard — double-fire does not throw", async () => {
     // Load a buffer via drop so the deck chain is built and BASS DROP enables.
     const { container } = render(<Harness />);

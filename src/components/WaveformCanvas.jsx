@@ -12,6 +12,11 @@ import { useCallback, useEffect, useRef } from "react";
 // the playhead ±5 s, Home jumps to 0, End to the track end. The seek target is
 // handed to `onSeek` as a normalized 0–1 value — the exact contract the
 // pointer handler uses — so Deck's `handleSeek` is reused unchanged.
+//
+// ↑/↓ are intentionally NOT seek keys here — they are reserved for the global
+// shortcut "focused deck volume ±5%" (CLAUDE.md). The canvas lets them bubble
+// untouched (no `preventDefault`, no `stopPropagation`) so the App-level
+// keydown handler can act on them while the canvas has focus.
 
 // Arrow-key seek step, in seconds. Small enough for fine positioning, large
 // enough that a few presses cover a phrase.
@@ -29,6 +34,12 @@ export default function WaveformCanvas({
 }) {
   const canvasRef = useRef(null);
   const animRef = useRef(null);
+  // A7 — current CSS-pixel dimensions of the canvas, kept in a ref so the
+  // draw loop reads the latest size without restarting on every resize. The
+  // backing store is sized to CSS × devicePixelRatio for crisp rendering on
+  // retina/high-DPI displays; ctx2d is scaled by DPR so draw math stays in
+  // CSS pixels.
+  const cssSizeRef = useRef({ w: 400, h: 120 });
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -37,8 +48,6 @@ export default function WaveformCanvas({
     // Canvas 2D can be unavailable (GPU blocked, headless test env, very old
     // browser). Skip the entire draw loop in that case rather than crashing.
     if (!ctx2d) return;
-    const W = canvas.width;
-    const H = canvas.height;
 
     // Pre-allocate the FFT scratch buffers once. The AnalyserNode's
     // frequencyBinCount is fixed (fftSize/2 = 1024 here), so this never grows.
@@ -46,12 +55,54 @@ export default function WaveformCanvas({
     let timeData = null;
     let freqData = null;
 
+    // A7 — resize the backing store to CSS × DPR and scale the 2D context so
+    // every subsequent draw uses CSS pixels. Only fires when the measured CSS
+    // size actually changes (set is idempotent on the canvas otherwise).
+    const resize = (cssW, cssH) => {
+      if (cssW <= 0 || cssH <= 0) return;
+      const dpr = (typeof window !== "undefined" && window.devicePixelRatio) || 1;
+      const targetW = Math.round(cssW * dpr);
+      const targetH = Math.round(cssH * dpr);
+      if (canvas.width !== targetW) canvas.width = targetW;
+      if (canvas.height !== targetH) canvas.height = targetH;
+      // setTransform replaces — never compounds — so this stays stable across
+      // repeated resize calls (no DPR^N blow-up).
+      ctx2d.setTransform(dpr, 0, 0, dpr, 0, 0);
+      cssSizeRef.current = { w: cssW, h: cssH };
+    };
+
+    // Initial size: read the canvas's laid-out CSS size if available,
+    // otherwise fall back to the markup width/height (used by happy-dom which
+    // doesn't compute layout).
+    const initialW =
+      canvas.clientWidth || canvas.getBoundingClientRect()?.width || 400;
+    const initialH =
+      canvas.clientHeight || canvas.getBoundingClientRect()?.height || 120;
+    resize(initialW, initialH);
+
+    // Track size changes (mobile breakpoint flip, deck-card resize). Don't
+    // reallocate every frame — only when ResizeObserver fires a real change.
+    let ro = null;
+    if (typeof ResizeObserver !== "undefined") {
+      ro = new ResizeObserver((entries) => {
+        for (const e of entries) {
+          // contentRect on older browsers; contentBoxSize on newer ones.
+          const r = e.contentRect;
+          if (r) resize(r.width, r.height);
+        }
+      });
+      ro.observe(canvas);
+    }
+
     const draw = () => {
       animRef.current = requestAnimationFrame(draw);
       const analyser = chainRef?.current?.analyser ?? null;
       const duration = durationRef?.current ?? 0;
       const currentTime = currentTimeRef?.current ?? 0;
       const cues = cuesRef?.current ?? [];
+      // A7 — draw math uses CSS pixels (ctx2d is pre-scaled by DPR).
+      const W = cssSizeRef.current.w;
+      const H = cssSizeRef.current.h;
 
       if (!analyser) {
         ctx2d.clearRect(0, 0, W, H);
@@ -143,7 +194,10 @@ export default function WaveformCanvas({
       }
     };
     draw();
-    return () => cancelAnimationFrame(animRef.current);
+    return () => {
+      cancelAnimationFrame(animRef.current);
+      if (ro) ro.disconnect();
+    };
   }, [chainRef, color, currentTimeRef, durationRef, cuesRef]);
 
   const handlePointer = useCallback(
@@ -167,6 +221,10 @@ export default function WaveformCanvas({
   // window keydown handler in App.jsx does not ALSO act on the same press
   // (its skip-list covers inputs/textareas/selects/contenteditable but not a
   // focused canvas — arrow keys would otherwise nudge the crossfader/volume).
+  //
+  // ↑/↓ are intentionally NOT handled here. They are reserved for the global
+  // "focused deck volume ±5%" shortcut documented in CLAUDE.md, so we let
+  // them bubble untouched (no preventDefault, no stopPropagation).
   const handleKeyDown = useCallback(
     (e) => {
       if (!onSeek) return;
@@ -176,11 +234,9 @@ export default function WaveformCanvas({
       let targetSeconds = null;
       switch (e.key) {
         case "ArrowLeft":
-        case "ArrowDown":
           targetSeconds = currentTime - SEEK_STEP_SECONDS;
           break;
         case "ArrowRight":
-        case "ArrowUp":
           targetSeconds = currentTime + SEEK_STEP_SECONDS;
           break;
         case "Home":

@@ -74,7 +74,15 @@ const Deck = forwardRef(function Deck(
   const [currentTime, setCurrentTime] = useState(0);
   const [bassDropActive, setBassDropActive] = useState(false);
   const [bassDropPreset, setBassDropPreset] = useState("standard");
+  // Error state carries an id alongside the text so a repeated identical error
+  // re-announces on screen readers. A role="alert" region only triggers on a
+  // DOM diff — identical text alone wouldn't re-announce. The id is used as a
+  // `key` on the alert wrapper so each new error remounts the node.
   const [loadError, setLoadError] = useState(null);
+  const loadErrorIdRef = useRef(0);
+  const showLoadError = useCallback((text) => {
+    setLoadError({ id: ++loadErrorIdRef.current, text });
+  }, []);
   const [bpm, setBpm] = useState(128);
   const [bpmConfidence, setBpmConfidence] = useState(null);
   const [autoBpmRunning, setAutoBpmRunning] = useState(false);
@@ -276,11 +284,17 @@ const Deck = forwardRef(function Deck(
       src.loop = isLoopingRef.current;
       // Honour an in-progress pitch-bend so a seek mid-nudge doesn't snap the
       // pitch. bendRef is 0 unless a NUDGE button is currently held.
-      src.playbackRate.value = clamp(speedRef.current + bendRef.current, 0.5, 2.0);
+      const effRate = clamp(speedRef.current + bendRef.current, 0.5, 2.0);
+      src.playbackRate.value = effRate;
       src.connect(chain.gain);
       src.start(0, target);
       sourceRef.current = src;
-      startTimeRef.current = ctx.currentTime - target / speedRef.current;
+      // A3 — anchor startTimeRef against the *effective* rate the source is
+      // actually running at. The position interval will recompute elapsed as
+      // (ctx.currentTime - startTimeRef) * effRate, so the two must use the
+      // same divisor or the displayed time drifts by ±4% relative to the
+      // audible playback whenever the user seeks mid-nudge.
+      startTimeRef.current = ctx.currentTime - target / effRate;
       isPlayingRef.current = true;
       setIsPlaying(true);
 
@@ -299,7 +313,17 @@ const Deck = forwardRef(function Deck(
       timeIntervalRef.current = setInterval(() => {
         const c = audioCtxRef.current;
         if (!c || !isPlayingRef.current) return;
-        const elapsed = (c.currentTime - startTimeRef.current) * speedRef.current;
+        // A3 — multiply by the *effective* rate (base + bend), matching the
+        // rate seekTo anchored startTimeRef against and the rate the source
+        // is actually running at. Otherwise a seek-while-bent (or any held
+        // bend after seek) makes the displayed time drift relative to the
+        // audible playback.
+        const effRate = clamp(
+          speedRef.current + (bendRef?.current || 0),
+          0.5,
+          2.0
+        );
+        const elapsed = (c.currentTime - startTimeRef.current) * effRate;
         const d = durationRef.current;
         const t =
           isLoopingRef.current && d > 0
@@ -364,7 +388,7 @@ const Deck = forwardRef(function Deck(
       ) {
         // Wrong file type is routine user feedback — show it inline (cleared
         // on the next successful load) rather than blocking with alert().
-        setLoadError("Please choose an audio file (MP3, WAV, OGG, FLAC, M4A, AAC).");
+        showLoadError("Please choose an audio file (MP3, WAV, OGG, FLAC, M4A, AAC).");
         return;
       }
       const ctx = await ensureMasterCtx();
@@ -378,10 +402,10 @@ const Deck = forwardRef(function Deck(
         // A decode failure is routine user feedback — show it inline (cleared
         // on the next successful load by adoptBuffer) rather than blocking
         // with alert(). Mirrors the wrong-file-type branch above and Crate.
-        setLoadError("Could not decode this audio file. Try WAV, MP3, OGG, or FLAC.");
+        showLoadError("Could not decode this audio file. Try WAV, MP3, OGG, or FLAC.");
       }
     },
-    [buildChain, ensureMasterCtx, adoptBuffer]
+    [buildChain, ensureMasterCtx, adoptBuffer, showLoadError]
   );
 
   const handleFile = async (e) => {
@@ -419,7 +443,19 @@ const Deck = forwardRef(function Deck(
     if (!sourceRef.current || !isPlayingRef.current) return;
     const c = audioCtxRef.current;
     if (c) {
-      const elapsed = (c.currentTime - startTimeRef.current) * speedRef.current;
+      // A2 — while a NUDGE bend is held the live playbackRate is
+      // `speed + bend`, not the base `speed`. Multiplying elapsed by the bare
+      // `speedRef.current` mid-bend would mis-translate the audio-clock delta
+      // into the buffer-position offset by up to ±4% of the held interval,
+      // snapping the resume position the moment the user pauses. Use the same
+      // effective rate the source is actually running at — clamped to the
+      // same [0.5, 2.0] band applyBend uses — and the offset stays accurate.
+      const effRate = clamp(
+        speedRef.current + (bendRef?.current || 0),
+        0.5,
+        2.0
+      );
+      const elapsed = (c.currentTime - startTimeRef.current) * effRate;
       const d = durationRef.current;
       let off = isLoopingRef.current && d > 0 ? elapsed % d : Math.min(elapsed, d);
       if (!Number.isFinite(off) || off < 0) off = 0;
@@ -456,9 +492,13 @@ const Deck = forwardRef(function Deck(
   useEffect(() => {
     if (sourceRef.current && isPlayingRef.current) {
       // Keep any held pitch-bend layered on top of the new base speed.
-      sourceRef.current.playbackRate.value = clamp(speed + bendRef.current, 0.5, 2.0);
+      const effRate = clamp(speed + bendRef.current, 0.5, 2.0);
+      sourceRef.current.playbackRate.value = effRate;
       const c = audioCtxRef.current;
-      if (c) startTimeRef.current = c.currentTime - currentTimeRef.current / speed;
+      // A3 — anchor against the effective rate so the position interval (also
+      // multiplying by effRate) stays consistent across a speed change made
+      // while a NUDGE bend is held.
+      if (c) startTimeRef.current = c.currentTime - currentTimeRef.current / effRate;
     }
   }, [speed, audioCtxRef]);
 
@@ -474,15 +514,15 @@ const Deck = forwardRef(function Deck(
       bendRef.current = offset;
       return;
     }
-    // A2 — the play-position interval anchors elapsed time on
-    //   elapsed = (ctx.currentTime - startTimeRef) * speedRef.current
-    // which assumes the playbackRate equals the base `speed`. While a NUDGE
-    // bend is held the real rate is `speed + bend`, so the anchor must be
-    // recomputed whenever the effective rate changes (bend start AND end).
-    // Snapshot the position the OLD effective rate has advanced to, then
-    // re-anchor startTimeRef as if the NEW base speed had produced it. This
-    // keeps the time display and cue math accurate across the bend; without
-    // it a cue jump after a held bend lands off by the accumulated drift.
+    // A2 / A3 — the play-position interval anchors elapsed time on
+    //   elapsed = (ctx.currentTime - startTimeRef) * effRate
+    // where effRate = clamp(speed + bend, 0.5, 2.0) is the rate the source is
+    // actually running at. The anchor must be recomputed whenever effRate
+    // changes (bend start AND end). Snapshot the position the OLD effRate has
+    // advanced to, switch the bend, then re-anchor startTimeRef as if the NEW
+    // effRate had produced that position — keeping time display and cue math
+    // accurate across the bend.
+    const newEff = clamp(speedRef.current + offset, 0.5, 2.0);
     if (isPlayingRef.current) {
       const prevRate = clamp(speedRef.current + bendRef.current, 0.5, 2.0);
       const pos = (ctx.currentTime - startTimeRef.current) * prevRate;
@@ -490,10 +530,10 @@ const Deck = forwardRef(function Deck(
       const known =
         isLoopingRef.current && d > 0 ? ((pos % d) + d) % d : Math.max(0, pos);
       currentTimeRef.current = known;
-      startTimeRef.current = ctx.currentTime - known / speedRef.current;
+      startTimeRef.current = ctx.currentTime - known / newEff;
     }
     bendRef.current = offset;
-    const target = clamp(speedRef.current + offset, 0.5, 2.0);
+    const target = newEff;
     // setTargetAtTime (not a hard .value write) avoids an audible click as the
     // pitch slides in/out.
     src.playbackRate.setTargetAtTime(target, ctx.currentTime, 0.015);
@@ -524,10 +564,31 @@ const Deck = forwardRef(function Deck(
     const preset = BASS_DROP_PRESETS[bassDropPreset] || BASS_DROP_PRESETS.standard;
     setBassDropActive(true);
     const now = ctx.currentTime;
+    // A1 — every ramp endpoint must sit at least MIN_RAMP_S after its prior
+    // anchor on the same param. Otherwise a short preset.buildSec (or a slip
+    // in scheduling between `at(t1 - 0.1)` and `at(t1)`) collapses the ramp
+    // to a 0-duration jump, which the Web Audio engine renders as an audible
+    // step/click instead of a glide. 0.02 s (~one audio quantum at 48k) is
+    // small enough to be inaudible on default-buildSec presets and big enough
+    // to keep the ramp a ramp.
+    const MIN_RAMP_S = 0.02;
     // Clamp every scheduled ramp endpoint to >= now. A very short preset
     // buildSec can otherwise put `t1 - 0.1` in the past, which the Web Audio
     // automation API rejects.
     const at = (t) => Math.max(now, t);
+    // safeRamp(param, startVal, endVal, startT, endT, kind)
+    // Anchors `param` at `startVal` at `startT`, then ramps to `endVal` at
+    // max(endT, startT + MIN_RAMP_S) so the ramp duration is always strictly
+    // positive. `kind` is "linear" | "exp"; expRamp targets <= 0 are floored
+    // by the caller upstream (filter freq path), this helper does not clamp.
+    const safeRamp = (param, startVal, endVal, startT, endT, kind) => {
+      const sT = at(startT);
+      const eT = Math.max(at(endT), sT + MIN_RAMP_S);
+      param.setValueAtTime(startVal, sT);
+      if (kind === "exp") param.exponentialRampToValueAtTime(endVal, eT);
+      else param.linearRampToValueAtTime(endVal, eT);
+      return eT;
+    };
     const t1 = at(now + preset.buildSec); // end of build
     const t2 = at(t1 + 0.05); // drop snap
     const t3 = at(t2 + preset.decaySec); // end of decay
@@ -536,17 +597,18 @@ const Deck = forwardRef(function Deck(
     const lpfStart = Math.max(1, preset.lpfStart);
 
     chain.filter.frequency.cancelScheduledValues(now);
-    chain.filter.frequency.setValueAtTime(20000, now);
-    chain.filter.frequency.exponentialRampToValueAtTime(lpfStart, t1);
-    chain.filter.frequency.setValueAtTime(lpfStart, t1);
-    chain.filter.frequency.exponentialRampToValueAtTime(20000, t2);
+    // LPF: 20k → lpfStart over the build, then snap-hold, then lpfStart → 20k.
+    // Each safeRamp guarantees the ramp endpoint is at least MIN_RAMP_S after
+    // its setValueAtTime anchor, so a tight preset.buildSec can't collapse the
+    // glide to a 0-duration step.
+    safeRamp(chain.filter.frequency, 20000, lpfStart, now, t1, "exp");
+    safeRamp(chain.filter.frequency, lpfStart, 20000, t1, t2, "exp");
 
     chain.eqLow.gain.cancelScheduledValues(now);
-    chain.eqLow.gain.setValueAtTime(eq.low, now);
-    chain.eqLow.gain.linearRampToValueAtTime(preset.eqLowKill, at(t1 - 0.1));
-    chain.eqLow.gain.setValueAtTime(preset.eqLowKill, t1);
-    chain.eqLow.gain.linearRampToValueAtTime(preset.eqLowPostDrop, t2);
-    chain.eqLow.gain.linearRampToValueAtTime(eq.low, t3);
+    // EQ low: hold user value, kill, snap-hold at kill, recover post-drop, restore.
+    const t1kill = safeRamp(chain.eqLow.gain, eq.low, preset.eqLowKill, now, t1 - 0.1, "linear");
+    safeRamp(chain.eqLow.gain, preset.eqLowKill, preset.eqLowPostDrop, t1kill, t2, "linear");
+    safeRamp(chain.eqLow.gain, preset.eqLowPostDrop, eq.low, t2, t3, "linear");
 
     // Wobble preset: LFO modulating filter freq after the drop
     if (preset.wobble) {
@@ -837,11 +899,15 @@ const Deck = forwardRef(function Deck(
               border: `1px solid ${color}33`,
               borderRadius: 6,
               padding: "4px 8px",
-              color: fileName ? color : "#4a5580",
+              // Disabled label uses text-muted (#8892b0) instead of text-dim
+              // (#4a5580 → ~2.7:1 on the deep bg, fails WCAG 1.4.11). The
+              // `opacity: 0.6` together with #8892b0 keeps the visual
+              // disabled-state appearance while staying above 3:1.
+              color: fileName ? color : "#8892b0",
               fontSize: 10,
               cursor: fileName ? "pointer" : "not-allowed",
               fontFamily: "'Exo 2', sans-serif",
-              opacity: fileName ? 1 : 0.5,
+              opacity: fileName ? 1 : 0.6,
             }}
           >
             SYNC
@@ -857,11 +923,13 @@ const Deck = forwardRef(function Deck(
               border: `1px solid ${color}33`,
               borderRadius: 6,
               padding: "4px 8px",
+              // Disabled label uses text-muted (#8892b0) + reduced opacity —
+              // never text-dim #4a5580 on the deep bg (fails WCAG 1.4.11).
               color: autoBpmRunning ? color : "#8892b0",
               fontSize: 10,
               cursor: fileName && !autoBpmRunning ? "pointer" : "not-allowed",
               fontFamily: "'Exo 2', sans-serif",
-              opacity: fileName ? 1 : 0.5,
+              opacity: fileName ? 1 : 0.6,
             }}
           >
             {autoBpmRunning ? "…" : "AUTO"}
@@ -877,11 +945,13 @@ const Deck = forwardRef(function Deck(
               border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 6,
               padding: "4px 6px",
-              color: fileName ? "#8892b0" : "#4a5580",
+              // Disabled label uses text-muted + opacity, never text-dim
+              // #4a5580 on the deep bg (fails WCAG 1.4.11).
+              color: "#8892b0",
               fontSize: 10,
               cursor: fileName ? "pointer" : "not-allowed",
               fontFamily: "'Exo 2', sans-serif",
-              opacity: fileName ? 1 : 0.5,
+              opacity: fileName ? 1 : 0.6,
             }}
           >
             ÷2
@@ -897,11 +967,11 @@ const Deck = forwardRef(function Deck(
               border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 6,
               padding: "4px 6px",
-              color: fileName ? "#8892b0" : "#4a5580",
+              color: "#8892b0",
               fontSize: 10,
               cursor: fileName ? "pointer" : "not-allowed",
               fontFamily: "'Exo 2', sans-serif",
-              opacity: fileName ? 1 : 0.5,
+              opacity: fileName ? 1 : 0.6,
             }}
           >
             ×2
@@ -1000,7 +1070,11 @@ const Deck = forwardRef(function Deck(
       </button>
 
       {loadError && (
+        // Keyed by error id so a repeated identical error re-announces:
+        // a polite role="alert" only fires on DOM diff, so without the
+        // key swap an identical text wouldn't reach the screen reader.
         <div
+          key={`deck-${id}-err-${loadError.id}`}
           role="alert"
           style={{
             color: "#f87171",
@@ -1008,7 +1082,7 @@ const Deck = forwardRef(function Deck(
             fontFamily: "'Exo 2', sans-serif",
           }}
         >
-          {loadError}
+          {loadError.text}
         </div>
       )}
 
@@ -1103,7 +1177,7 @@ const Deck = forwardRef(function Deck(
               className={held ? undefined : "wc-btn-hover"}
               style={{
                 flex: 1,
-                minHeight: 30,
+                minHeight: 38,
                 display: "flex",
                 alignItems: "center",
                 justifyContent: "center",
@@ -1111,12 +1185,14 @@ const Deck = forwardRef(function Deck(
                 borderRadius: 8,
                 border: `1px solid ${held ? color : color + "33"}`,
                 background: held ? `${color}33` : "rgba(255,255,255,0.05)",
-                color: fileName ? (held ? color : "#8892b0") : "#4a5580",
+                // Disabled label uses text-muted + opacity, never text-dim
+                // #4a5580 on the deep bg (fails WCAG 1.4.11 contrast).
+                color: held ? color : "#8892b0",
                 fontSize: 10,
                 letterSpacing: 1,
                 fontFamily: "'Exo 2', sans-serif",
                 cursor: fileName ? "pointer" : "not-allowed",
-                opacity: fileName ? 1 : 0.5,
+                opacity: fileName ? 1 : 0.6,
                 boxShadow: held ? `0 0 12px ${color}44` : "none",
                 touchAction: "none",
                 userSelect: "none",
@@ -1128,7 +1204,7 @@ const Deck = forwardRef(function Deck(
                   transform: btn.rotate ? `rotate(${btn.rotate}deg)` : undefined,
                 }}
               >
-                <Icon name={btn.icon} size={11} color={fileName ? (held ? color : "#8892b0") : "#4a5580"} />
+                <Icon name={btn.icon} size={11} color={held ? color : "#8892b0"} />
               </span>
               {btn.label}
             </button>

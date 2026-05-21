@@ -24,7 +24,10 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
         style={{
           background: disabled ? "rgba(255,255,255,0.04)" : `${color}22`,
           border: `1px solid ${color}55`,
-          color: disabled ? "#4a5580" : color,
+          // Disabled label uses text-muted + opacity, never text-dim #4a5580
+          // on the deep bg (fails WCAG 1.4.11). Matches Deck's disabled-button
+          // pattern.
+          color: disabled ? "#8892b0" : color,
           borderRadius: 8,
           padding: "4px 10px",
           fontSize: 10,
@@ -33,6 +36,7 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
           fontFamily: "'Exo 2', sans-serif",
           fontWeight: 700,
           cursor: disabled ? "not-allowed" : "pointer",
+          opacity: disabled ? 0.6 : 1,
         }}
       >
         {maxReached ? "8 / 8" : "+ CUE"}
@@ -60,13 +64,20 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
             style={{
               background: "transparent",
               border: "none",
-              padding: 0,
+              // 38×38 minimum hit area — matches the sibling delete button on
+              // the same chip and clears the WCAG 2.5.8 target-size minimum.
+              // Padding pulls the text out from the edges; justifyContent
+              // keeps the label centered.
+              minWidth: 38,
+              minHeight: 38,
+              padding: "0 4px",
               color: "inherit",
               fontFamily: "inherit",
               fontSize: "inherit",
               cursor: "pointer",
               display: "flex",
               alignItems: "center",
+              justifyContent: "center",
               gap: 4,
             }}
           >

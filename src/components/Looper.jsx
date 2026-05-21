@@ -35,6 +35,14 @@ export default function Looper({
   const bufferRefs = useRef(Array(SLOT_COUNT).fill(null));
   const sourceRefs = useRef(Array(SLOT_COUNT).fill(null));
   const gainRefs = useRef(Array(SLOT_COUNT).fill(null));
+  // A6 — track whether each slot's cached gain is wired into the parallel
+  // pre-limiter record tap. If the master bus / record tap wasn't ready when
+  // the slot's gain was first created, the tap connection is silently skipped
+  // and the slot's audio never reaches the "Clean" recorder. We cache the gain
+  // anyway (so the audible-output connection isn't rebuilt), but flag the tap
+  // attachment as pending — on every subsequent ensureGain call, if the tap is
+  // now available we connect it then.
+  const tapAttachedRefs = useRef(Array(SLOT_COUNT).fill(false));
   // State (not a ref) so the Capture button's disabled state re-renders while
   // a capture is in flight.
   const [pendingSlot, setPendingSlot] = useState(null);
@@ -61,8 +69,24 @@ export default function Looper({
         // the "Clean" recording captures looper audio, not just the decks. The
         // tap has no downstream connection, so this never doubles the audible
         // signal. Optional: if the tap isn't ready the slot still plays.
-        if (recordTapRef?.current) g.connect(recordTapRef.current);
+        //
+        // A6 — track whether the tap was actually attached. If recordTapRef
+        // wasn't ready at first ensureGain, the connection was silently
+        // skipped — a subsequent call must retry once the tap exists, or the
+        // slot would never reach the "Clean" recorder.
+        if (recordTapRef?.current) {
+          g.connect(recordTapRef.current);
+          tapAttachedRefs.current[i] = true;
+        } else {
+          tapAttachedRefs.current[i] = false;
+        }
         gainRefs.current[i] = g;
+      } else if (!tapAttachedRefs.current[i] && recordTapRef?.current) {
+        // A6 — the gain was cached before the record tap was built. Now that
+        // it exists, fan the slot into the parallel pre-limiter tap so the
+        // "Clean" recording finally captures looper audio.
+        g.connect(recordTapRef.current);
+        tapAttachedRefs.current[i] = true;
       }
       return g;
     },
@@ -175,6 +199,7 @@ export default function Looper({
         }
         gainRefs.current[i] = null;
         bufferRefs.current[i] = null;
+        tapAttachedRefs.current[i] = false;
       }
     };
   }, []);
@@ -263,10 +288,10 @@ export default function Looper({
                     borderRadius: 4,
                     color: "#8892b0",
                     fontSize: 10,
-                    // D6 — the slot header is a tight inline row next to the
-                    // L# label; 30px is the largest height that pairs cleanly
-                    // with the label without bloating the slot card header.
-                    minHeight: 30,
+                    // The native <select> meets the 38×38 minimum hit area for
+                    // interactive controls (WCAG 2.5.8). No sanctioned <select>
+                    // exemption — the slot card header expands to fit.
+                    minHeight: 38,
                     padding: "1px 6px",
                     cursor: "pointer",
                     transition: "background 0.15s ease, border-color 0.15s ease",
@@ -288,6 +313,11 @@ export default function Looper({
                       ? `Capture ${slot.bars} bars into loop ${i + 1}`
                       : "Audio worklet still initializing"
                   }
+                  aria-label={
+                    pendingSlot === i
+                      ? `Capturing loop ${i + 1}`
+                      : `Capture ${slot.bars} bars into loop ${i + 1}`
+                  }
                   style={{
                     flex: 1,
                     background: `${color}22`,
@@ -296,6 +326,7 @@ export default function Looper({
                     borderRadius: 6,
                     fontSize: 10,
                     padding: "4px 6px",
+                    minHeight: 38,
                     cursor: workletReady && pendingSlot !== i ? "pointer" : "not-allowed",
                     fontFamily: "'Exo 2', sans-serif",
                     fontWeight: 600,
