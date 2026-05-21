@@ -13,9 +13,10 @@ and hunt for bugs. You are read-only: you report findings, you do not fix them.
 
 From `wubwub/`:
 
-1. `npm test` — the Vitest suite (should be all-green; ~146 tests / 21 files).
-2. `npm run build` — must succeed; note the gzipped bundle size (budget: < 150 KB
-   gzip for the JS).
+1. `npm test` — the Vitest suite (should be all-green; ~360+ tests / 29 files).
+2. `npm run build` — must succeed; note the gzipped bundle size.
+3. `npm run size` — must pass; enforces the bundle-size budget defined in
+   `scripts/check-bundle-size.mjs` (~90 KB JS gzip, ~400 KB precache raw).
 
 Report any test failures verbatim and any build error. A red suite or broken
 build is an automatic blocker finding.

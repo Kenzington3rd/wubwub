@@ -70,9 +70,11 @@ them is not a WAVECRAFT feature:
 
 ## 6. Status
 
-P0–P3 of the original roadmap are shipped. 146 automated tests. See `CLAUDE.md`
-for the live status checklist and `ROADMAP.md` for what's next (top items:
-split-cue bus, opt-in metadata persistence, manual beatgrid, stems).
+P0–P3 of the original roadmap and Wave 1 of the product backlog are shipped.
+360+ automated tests across 29 files. See `CLAUDE.md` for the live status
+checklist, `BACKLOG.md` for shipped/queued items, and `ROADMAP.md` for what's
+next (top items: split-cue bus, opt-in metadata persistence, manual beatgrid,
+stems).
 
 ## 7. Success criteria for any new feature
 
