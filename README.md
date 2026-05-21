@@ -10,7 +10,7 @@ WAVECRAFT is a dual-deck DJ mixing app that runs entirely in your browser. **Not
 ```bash
 npm install
 npm run dev            # http://localhost:5173
-npm test               # vitest, 330+ tests
+npm test               # vitest, 360+ tests
 npm run build          # → dist/ (multi-file PWA, precached for offline)
 npm run build:single   # → dist-single/index.html (one self-contained file)
 npm run size           # build + bundle-size budget check (reruns the build internally)
