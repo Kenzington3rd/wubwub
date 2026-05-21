@@ -132,6 +132,18 @@ const Deck = forwardRef(function Deck(
   // one swap, and the swap itself uses the duck-swap-restore pattern.
   const distortionDriveDebounceRef = useRef(null);
   const filterFreqRef = useRef(20000);
+  // X4 (R21) — mirror effects.reverb.mix / effects.distortion.mix into refs.
+  // The reverb-size and distortion-drive debounces (R20) intentionally do NOT
+  // list mix in their deps to avoid spurious rebuilds on MIX-knob moves, so
+  // the timer body's closure captures the mix value at the moment the timer
+  // was *scheduled*. If the user spins MIX inside the 200 ms debounce window,
+  // the ramp-back endpoint would otherwise pin wet to the STALE captured
+  // value, overriding the live wet ramp from the non-debounced mix effect.
+  // Reading from these refs in the timer body keeps the ramp-back aligned
+  // with the user's current MIX position. Mirrors the eqLowRef / filterFreqRef
+  // pattern above.
+  const reverbMixRef = useRef(0.3);
+  const distortionMixRef = useRef(0.4);
   // V5 (R19) — mirror the EQ knob values into refs so the bass-drop's t3
   // recovery endpoint reads the user's CURRENT value (not the closure value
   // captured when triggerBassDrop was called). Without these refs, moving an
@@ -178,6 +190,16 @@ const Deck = forwardRef(function Deck(
     eqMidRef.current = eq.mid;
     eqHighRef.current = eq.high;
   }, [eq]);
+  // X4 (R21) — reverb / distortion MIX ref mirrors. The size-debounce and
+  // drive-debounce timers (200 ms) read MIX from these refs when computing
+  // the ramp-back target, so a MIX slide during the debounce window lands at
+  // the user's CURRENT value instead of the stale closure capture.
+  useEffect(() => {
+    reverbMixRef.current = effects.reverb.mix;
+  }, [effects.reverb.mix]);
+  useEffect(() => {
+    distortionMixRef.current = effects.distortion.mix;
+  }, [effects.distortion.mix]);
 
   // ─── Audio graph construction ───
   const buildChain = useCallback(async () => {
@@ -297,7 +319,12 @@ const Deck = forwardRef(function Deck(
       // covered by zero input. If wet is already ~0 we skip the pin and
       // ramp-back and just swap (no audible click possible).
       const wetParam = chain.reverbWet.gain;
-      const targetWet = effects.reverb.on ? effects.reverb.mix : 0;
+      // X4 (R21) — read MIX via the ref so a MIX slide during the 200 ms
+      // debounce window lands at the user's CURRENT value, not the value
+      // captured in this closure when the timer was scheduled. Without the
+      // ref, the ramp-back would override the live wet ramp produced by the
+      // non-debounced mix effect, snapping audio back to the stale capture.
+      const targetWet = effects.reverb.on ? reverbMixRef.current : 0;
       const liveWet = wetParam.value;
       if (liveWet > 0.001) {
         wetParam.setValueAtTime(0, ctx.currentTime);
@@ -371,8 +398,11 @@ const Deck = forwardRef(function Deck(
       // jams wet to 0 atomically, the curve swap lands while the WaveShaper
       // sees a 0-input window, then ramp wet back to target.
       const wetParam = chain.distortionWet.gain;
-      const { on, mix, drive } = effects.distortion;
-      const targetWet = on ? mix : 0;
+      const { on, drive } = effects.distortion;
+      // X4 (R21) — read MIX via the ref so a slide during the 200 ms debounce
+      // window lands at the user's CURRENT value, not the stale closure
+      // capture. Mirrors the reverb-size fix above.
+      const targetWet = on ? distortionMixRef.current : 0;
       const liveWet = wetParam.value;
       if (liveWet > 0.001) {
         wetParam.setValueAtTime(0, ctx.currentTime);
@@ -1270,6 +1300,16 @@ const Deck = forwardRef(function Deck(
       <button
         type="button"
         onClick={() => fileInputRef.current?.click()}
+        // X2 (R21) — once a file is loaded the button's visible text becomes
+        // just the filename, leaving the accessible name without a verb.
+        // Override with an action-shaped aria-label so screen-reader users
+        // hear what the button *does* (load / replace) and which deck it's
+        // for, instead of just hearing the bare track filename.
+        aria-label={
+          fileName
+            ? `Loaded: ${fileName} — click to replace (Deck ${id})`
+            : `Load audio for Deck ${id}`
+        }
         style={{
           background: fileName ? `${color}11` : `${color}18`,
           border: `1px dashed ${color}44`,
@@ -1344,35 +1384,59 @@ const Deck = forwardRef(function Deck(
       {/* Transport */}
       <div style={{ display: "flex", justifyContent: "center", gap: 6 }} role="group" aria-label={`Deck ${id} transport`}>
         {[
-          { icon: "play", action: play, active: isPlaying, label: "Play" },
-          { icon: "pause", action: pause, active: false, label: "Pause" },
-          { icon: "stop", action: stop, active: false, label: "Stop" },
-          { icon: "loop", action: () => setIsLooping((v) => !v), active: isLooping, label: "Loop" },
-        ].map((btn) => (
-          <button
-            key={btn.label}
-            type="button"
-            onClick={() => btn.action()}
-            className={btn.active ? undefined : "wc-btn-hover"}
-            title={btn.label}
-            aria-label={`${btn.label} deck ${id}`}
-            aria-pressed={btn.active}
-            style={{
-              width: 38,
-              height: 38,
-              borderRadius: 10,
-              border: "none",
-              background: btn.active ? `${color}33` : "rgba(255,255,255,0.05)",
-              cursor: "pointer",
-              boxShadow: btn.active ? `0 0 12px ${color}33` : "none",
-              display: "flex",
-              alignItems: "center",
-              justifyContent: "center",
-            }}
-          >
-            <Icon name={btn.icon} size={18} color={btn.active ? color : "#8892b0"} />
-          </button>
-        ))}
+          // X1 (R21) — `toggle: true` entries are real toggle controls and
+          // emit aria-pressed (Play tracks isPlaying, Loop tracks isLooping).
+          // `toggle: false` entries (Pause, Stop) are MOMENTARY actions per
+          // DESIGN_GUIDE §6 — they MUST NOT carry aria-pressed at all (a
+          // hardcoded "false" on every render incorrectly tells AT users the
+          // button is a toggle that happens to be off).
+          { icon: "play", action: play, active: isPlaying, toggle: true, label: "Play" },
+          { icon: "pause", action: pause, active: false, toggle: false, label: "Pause" },
+          { icon: "stop", action: stop, active: false, toggle: false, label: "Stop" },
+          { icon: "loop", action: () => setIsLooping((v) => !v), active: isLooping, toggle: true, label: "Loop" },
+        ].map((btn) => {
+          // X3 (R21) — gate transport on a loaded buffer just like SYNC / AUTO /
+          // ÷2 / ×2 / NUDGE / BASS DROP. Disabled palette matches the rest of
+          // the deck (text-muted #8892b0 + opacity 0.6 for label, opacity 0.4
+          // + cursor not-allowed for the whole button).
+          const disabled = !fileName;
+          // X1 — only attach aria-pressed for true toggles. Spreading a
+          // conditional object keeps the attribute off the rendered DOM when
+          // it shouldn't be there (vs passing `undefined`, which some testing
+          // matchers still treat as present).
+          const ariaPressedProps = btn.toggle ? { "aria-pressed": btn.active } : {};
+          return (
+            <button
+              key={btn.label}
+              type="button"
+              onClick={() => btn.action()}
+              disabled={disabled}
+              className={btn.active ? undefined : "wc-btn-hover"}
+              title={btn.label}
+              aria-label={`${btn.label} deck ${id}`}
+              {...ariaPressedProps}
+              style={{
+                width: 38,
+                height: 38,
+                borderRadius: 10,
+                border: "none",
+                background: btn.active ? `${color}33` : "rgba(255,255,255,0.05)",
+                cursor: disabled ? "not-allowed" : "pointer",
+                boxShadow: btn.active ? `0 0 12px ${color}33` : "none",
+                opacity: disabled ? 0.4 : 1,
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Icon
+                name={btn.icon}
+                size={18}
+                color={btn.active ? color : "#8892b0"}
+              />
+            </button>
+          );
+        })}
       </div>
 
       {/* Pitch-bend nudge — momentary ±4% speed offset while held */}

@@ -75,6 +75,7 @@ anything else off-palette).
 | scrollbar-track | `#1e2440` | `::-webkit-scrollbar-thumb` + Firefox `scrollbar-color` in `src/index.css` |
 | knob-body-light | `#2a2f45` | Inner stop of the `Knob.jsx` radial-gradient body |
 | knob-body-dark | `#12152a` | Outer stop of the `Knob.jsx` radial-gradient body |
+| option-bg | `#0d1225` | Native `<select>` option dropdown background to override browser default light (`BassDropMenu.jsx`, `Crossfader.jsx`, `Looper.jsx`) |
 
 `#4a5580` (text-dim) remains reserved for de-emphasized decorative hints only
 (e.g. an em-dash placeholder) — never on a live affordance or anything that must

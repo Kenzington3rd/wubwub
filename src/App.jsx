@@ -270,6 +270,16 @@ export default function App() {
         } catch (err) {
           console.warn("Looper worklet failed to load — looper disabled.", err);
           workletLoadingRef.current = null; // allow retry
+        } finally {
+          // X7 (R21) — housekeeping: once the IIFE has settled, the promise it
+          // returned has served its purpose (the workletNodeRef is the source
+          // of truth from now on). Nulling the ref releases the fulfilled
+          // Promise so it doesn't sit pinned for the lifetime of the App. On
+          // failure the catch above already nulled it for retry; this finally
+          // covers the success path. Future ensureMasterCtx calls hit the
+          // `workletNodeRef.current` guard at the top of the block and skip
+          // the IIFE entirely, so no double-load risk.
+          if (workletNodeRef.current) workletLoadingRef.current = null;
         }
       })();
     }

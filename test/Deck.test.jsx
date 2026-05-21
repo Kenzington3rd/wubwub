@@ -1233,4 +1233,291 @@ describe("Deck — integration tests across many user stories", () => {
       vi.useRealTimers();
     }
   });
+
+  // @us US26 (X1 R21) — Pause and Stop are MOMENTARY actions, not toggles.
+  // Per DESIGN_GUIDE §6 non-toggle buttons MUST NOT carry aria-pressed (a
+  // hardcoded "false" attribute incorrectly tells assistive tech the control
+  // is a toggle that happens to be off). Play and Loop ARE toggles (active
+  // tracks isPlaying / isLooping) and must keep aria-pressed.
+  it("@us US26: Pause and Stop omit aria-pressed; Play and Loop carry it (X1 R21)", () => {
+    render(<Harness />);
+    const playBtn = screen.getByRole("button", { name: /Play deck/i });
+    const pauseBtn = screen.getByRole("button", { name: /Pause deck/i });
+    const stopBtn = screen.getByRole("button", { name: /Stop deck/i });
+    const loopBtn = screen.getByRole("button", { name: /Loop deck/i });
+    // Toggles: aria-pressed present (and "false" while inactive).
+    expect(playBtn).toHaveAttribute("aria-pressed");
+    expect(loopBtn).toHaveAttribute("aria-pressed");
+    // Loop is engaged by default (isLooping starts true).
+    expect(loopBtn).toHaveAttribute("aria-pressed", "true");
+    expect(playBtn).toHaveAttribute("aria-pressed", "false");
+    // Momentary actions: the attribute must NOT appear in the DOM at all.
+    expect(pauseBtn).not.toHaveAttribute("aria-pressed");
+    expect(stopBtn).not.toHaveAttribute("aria-pressed");
+  });
+
+  // @us US44 (X2 R21) — once a file is loaded, the file-load button's visible
+  // text becomes JUST the filename and the accessible name loses its verb. An
+  // explicit aria-label keeps the action context ("load / replace") and the
+  // deck identity in the SR announcement, both empty and loaded.
+  it("@us US44: file-load button aria-label flips between empty / loaded states (X2 R21)", async () => {
+    let api;
+    const { container } = render(<Harness id="A" onMount={(a) => { api = a; }} />);
+    // Empty state — the load button is the only one with this aria-label shape.
+    expect(
+      screen.getByRole("button", { name: /Load audio for Deck A/i })
+    ).toBeInTheDocument();
+    // Drop a fake audio file → adoptBuffer flips fileName.
+    const deckDiv = container.querySelector('[role="region"]');
+    const fakeAudio = new File([new Uint8Array([0, 1, 2])], "tune.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckDiv, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckDiv, {
+        dataTransfer: { files: [fakeAudio], items: [{ kind: "file" }] },
+      });
+    });
+    // Loaded state — the label now carries the filename + replace action.
+    const loaded = screen.getByRole("button", {
+      name: /Loaded: tune\.mp3 — click to replace \(Deck A\)/i,
+    });
+    expect(loaded).toBeInTheDocument();
+    // The bare "Load audio for Deck A" label is gone now.
+    expect(
+      screen.queryByRole("button", { name: /^Load audio for Deck A$/i })
+    ).toBeNull();
+    // Keep api reference live so eslint-no-unused doesn't complain.
+    expect(api.deckRef.current).toBeTruthy();
+  });
+
+  // @us US26 (X3 R21) — all four transport buttons are gated on a loaded file,
+  // matching SYNC / AUTO / ÷2 / ×2 / NUDGE / BASS DROP. Without a buffer the
+  // controls are non-operative; surfacing that as `disabled` keeps the focus
+  // model honest and announces the state to screen readers.
+  it("@us US26: transport buttons are disabled until a file is loaded (X3 R21)", async () => {
+    let api;
+    const { container } = render(<Harness onMount={(a) => { api = a; }} />);
+    // Empty: every transport button is disabled.
+    for (const name of [/Play deck/i, /Pause deck/i, /Stop deck/i, /Loop deck/i]) {
+      expect(screen.getByRole("button", { name })).toBeDisabled();
+    }
+    // Drop a track → transport enables.
+    const deckDiv = container.querySelector('[role="region"]');
+    const fakeAudio = new File([new Uint8Array([0, 1, 2])], "track.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckDiv, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckDiv, {
+        dataTransfer: { files: [fakeAudio], items: [{ kind: "file" }] },
+      });
+    });
+    for (const name of [/Play deck/i, /Pause deck/i, /Stop deck/i, /Loop deck/i]) {
+      expect(screen.getByRole("button", { name })).not.toBeDisabled();
+    }
+    expect(api.deckRef.current).toBeTruthy();
+  });
+
+  // @us US18 (X4 R21) — the 200 ms reverb-size debounce captures effects.reverb.mix
+  // in closure. If the user nudges SIZE and then slides MIX from 0.3 → 0.7
+  // inside the debounce window, the timer fires AFTER mix already moved — the
+  // ramp-back used to pin wet to the STALE captured 0.3, overriding the live
+  // 0.7 from the non-debounced mix effect. Fix mirrors mix into reverbMixRef
+  // so the ramp-back reads the LIVE value.
+  it("@us US18: reverb-size debounce ramp-back reads LIVE mix from ref, not stale closure (X4 R21)", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 3, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+      // Turn reverb ON; default mix is 0.3 → wet > 0 triggers pin-and-restore.
+      const reverbToggle = screen.getByLabelText(/Reverb effect (on|off)/i);
+      await act(async () => fireEvent.click(reverbToggle));
+      // Let any initial effect-toggle ramps drain past the debounce window.
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      const ctx = api.audioCtxRef.current;
+      const conv = ctx._nodes.find((n) => n.nodeType === "ConvolverNode");
+      const reverbWet = conv.connections.find((n) => n.nodeType === "GainNode");
+
+      // Locate the reverb knobs by walking from SIZE up to its EffectCard.
+      const knobs = screen.getAllByRole("slider");
+      const sizeKnob = knobs.find((k) => k.getAttribute("aria-label") === "SIZE");
+      expect(sizeKnob).toBeTruthy();
+      // The reverb card hosts BOTH MIX and SIZE knobs; MIX in this card is
+      // the one whose closest EffectCard ancestor contains the SIZE knob.
+      const card = sizeKnob.parentElement?.parentElement?.parentElement;
+      const reverbMixKnob = Array.from(card.querySelectorAll('[role="slider"]'))
+        .find((k) => k.getAttribute("aria-label") === "MIX");
+      expect(reverbMixKnob).toBeTruthy();
+
+      // Step 1: nudge SIZE → schedules the 200 ms debounce that closes over
+      // mix=0.3 (the current captured value).
+      await act(async () => fireEvent.keyDown(sizeKnob, { key: "ArrowUp" }));
+
+      // Step 2: within the debounce window, slide MIX UP from 0.3 to ≈0.7
+      // (40 ArrowUp ticks at step 0.01). The live, non-debounced wet effect
+      // ramps wet to ~0.7 in real time.
+      for (let i = 0; i < 40; i++) {
+        await act(async () => fireEvent.keyDown(reverbMixKnob, { key: "ArrowUp" }));
+      }
+      // Sanity: the live wet gain reflects the user's mix move BEFORE the
+      // debounce fires (the non-debounced effect already ramped to ~0.7).
+      expect(reverbWet.gain.value).toBeCloseTo(0.7, 1);
+
+      // Snapshot the schedule queue at the boundary — anything after this
+      // belongs to the debounce timer body.
+      const before = reverbWet.gain.scheduledValues.length;
+
+      // Step 3: advance past the 200 ms debounce → timer body fires. With the
+      // bug it pins wet to 0 and ramps back to the STALE 0.3. With the fix it
+      // reads reverbMixRef.current (≈0.7) and ramps back to 0.7.
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      const appended = reverbWet.gain.scheduledValues.slice(before);
+      // The duck pin must have landed (setValueAtTime(0,…)).
+      const pin = appended.find((e) => e.type === "setValue" && e.value === 0);
+      expect(pin).toBeTruthy();
+      // The ramp-back endpoint must be the LIVE mix (≈0.7), NOT the captured 0.3.
+      const rampBack = [...appended].reverse().find((e) => e.type === "setTarget");
+      expect(rampBack).toBeTruthy();
+      expect(rampBack.target).toBeCloseTo(0.7, 1);
+      // Strict guard against regression — the stale-closure bug would have
+      // landed a setTarget at exactly the captured 0.3.
+      expect(rampBack.target).not.toBeCloseTo(0.3, 2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // @us US20 (X5 R21) — symmetric regression for distortion MIX. Mirrors the
+  // existing reverb-MIX test (W2 R20): moving ONLY the distortion MIX knob
+  // must NOT trigger the drive-debounce duck-swap-restore (no setValue(0)
+  // pin on the wet gain, no curve rebuild). Confirms the R20 dep-list fix
+  // applies symmetrically to distortion, not just reverb.
+  it("@us US20: changing distortion MIX does not fire the drive-debounce duck (X5 R21)", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 3, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+      // Turn distortion on; default mix=0.4 → wet > 0.
+      const distortionToggle = screen.getByLabelText(/Distortion effect (on|off)/i);
+      await act(async () => fireEvent.click(distortionToggle));
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      const ctx = api.audioCtxRef.current;
+      const shaper = ctx._nodes.find((n) => n.nodeType === "WaveShaperNode");
+      const distortionWet = shaper.connections.find((n) => n.nodeType === "GainNode");
+      const curveBefore = shaper.curve;
+      const beforeLen = distortionWet.gain.scheduledValues.length;
+
+      // Walk up from DRIVE to the distortion EffectCard, then pick its MIX.
+      const knobs = screen.getAllByRole("slider");
+      const driveKnob = knobs.find((k) => k.getAttribute("aria-label") === "DRIVE");
+      const card = driveKnob.parentElement?.parentElement?.parentElement;
+      const distortionMixKnob = Array.from(card.querySelectorAll('[role="slider"]'))
+        .find((k) => k.getAttribute("aria-label") === "MIX");
+      expect(distortionMixKnob).toBeTruthy();
+
+      // Move ONLY the MIX knob — must NOT trigger the drive-debounce rebuild.
+      await act(async () => fireEvent.keyDown(distortionMixKnob, { key: "ArrowUp" }));
+      // Well past the 200 ms debounce window.
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      const appended = distortionWet.gain.scheduledValues.slice(beforeLen);
+      // The duck-pin (setValue(0)) is the smoking gun of a debounce-fire —
+      // its absence proves the drive-debounce did NOT run.
+      const duckPin = appended.find(
+        (e) => e.type === "setValue" && e.value === 0
+      );
+      expect(duckPin).toBeUndefined();
+      // The WaveShaper curve was NOT swapped — same reference as before.
+      expect(shaper.curve).toBe(curveBefore);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // @us US19 (X5 R21) — interaction between rampGain's cancelAndHoldAtTime
+  // prefix (R20 W1) and the debounce duck-swap-restore. The swap path pins
+  // wet to 0 with setValueAtTime(0, now), then calls rampGain(wetParam,
+  // target, ctx, 0.003) which itself prefixes a cancelAndHoldAtTime(now).
+  // The concern: does the cancelAndHold undo the explicit 0 pin? The
+  // contract is "no" — cancelAndHoldAtTime FREEZES the value at the time
+  // it's called (the 0 we just wrote), then the new setTarget ramps FROM 0
+  // back to the user's mix. The recorded queue must show setValue(0) →
+  // cancelAndHold → setTarget(>0), in that order, with NO intervening event
+  // that would erase the 0 pin.
+  it("@us US19: duck-swap-restore — cancelAndHold does not undo the 0 pin (X5 R21)", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 3, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+      // Turn reverb on (wet > 0 → triggers the pin-and-restore branch).
+      const reverbToggle = screen.getByLabelText(/Reverb effect (on|off)/i);
+      await act(async () => fireEvent.click(reverbToggle));
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      const ctx = api.audioCtxRef.current;
+      const conv = ctx._nodes.find((n) => n.nodeType === "ConvolverNode");
+      const reverbWet = conv.connections.find((n) => n.nodeType === "GainNode");
+
+      // Snapshot the schedule queue so we only see the size-swap entries.
+      const before = reverbWet.gain.scheduledValues.length;
+
+      // Spin SIZE → schedules the 200 ms debounce; fire it.
+      const knobs = screen.getAllByRole("slider");
+      const sizeKnob = knobs.find((k) => k.getAttribute("aria-label") === "SIZE");
+      await act(async () => fireEvent.keyDown(sizeKnob, { key: "ArrowUp" }));
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      const appended = reverbWet.gain.scheduledValues.slice(before);
+
+      // 1) setValue(0) pin lands first.
+      const pinIdx = appended.findIndex(
+        (e) => e.type === "setValue" && e.value === 0
+      );
+      expect(pinIdx).toBeGreaterThanOrEqual(0);
+
+      // 2) rampGain's cancelAndHoldAtTime (or cancel fallback) lands AFTER
+      //    the pin — freezing the 0 value, not erasing it.
+      const cahIdx = appended.findIndex(
+        (e, i) =>
+          i > pinIdx && (e.type === "cancelAndHold" || e.type === "cancel")
+      );
+      expect(cahIdx).toBeGreaterThan(pinIdx);
+
+      // 3) The ramp-back's setTarget lands LAST with a positive target — the
+      //    convolver ramps from the 0 the cancelAndHold froze, back up to mix.
+      const rampBackIdx = appended.findIndex(
+        (e, i) => i > cahIdx && e.type === "setTarget" && e.target > 0
+      );
+      expect(rampBackIdx).toBeGreaterThan(cahIdx);
+
+      // No subsequent event between the pin and the cancelAndHold writes a
+      // non-zero value (which would undo the duck) — only the pin itself
+      // touched the param in that window.
+      const between = appended.slice(pinIdx + 1, cahIdx);
+      const overrider = between.find(
+        (e) =>
+          (e.type === "setValue" && e.value !== 0) ||
+          (e.type === "setTarget" && e.target !== 0)
+      );
+      expect(overrider).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
