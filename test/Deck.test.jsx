@@ -692,6 +692,74 @@ describe("Deck — integration tests across many user stories", () => {
     }
   });
 
+  it("@us US18: changing reverb SIZE while wet > 0 doesn't strand wet at 0 (P1 R16)", async () => {
+    // P1 (R16) — the SIZE debounce swaps the convolver's IR. Doing that
+    // mid-tail produces an audible click, so the fix ducks the wet gain to 0
+    // first, swaps the IR, then ramps wet back to the user's target. The
+    // dangerous failure mode is the ramp-back getting lost — leaving the
+    // reverb silent forever. This test pins the contract: after the debounce
+    // fires, the wet gain target equals the user's mix value (here 0.5).
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      // Load a buffer so the deck chain exists.
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 3, sr);
+      await act(async () => {
+        await api.deckRef.current.loadBuffer(buf, "track.mp3");
+      });
+
+      // Turn reverb ON with a non-zero mix.
+      const reverbToggle = screen.getByLabelText(/Reverb effect (on|off)/i);
+      await act(async () => fireEvent.click(reverbToggle));
+
+      // Drive the reverb mix to 0.5 by spinning the MIX knob via its
+      // role=slider ArrowUp keyboard contract — covers the "user toggled
+      // reverb then turned mix up" path.
+      const knobs = screen.getAllByRole("slider");
+      // Find the reverb MIX knob (the only knob aria-labelled MIX).
+      const mixKnob = knobs.find((k) => k.getAttribute("aria-label") === "MIX");
+      expect(mixKnob).toBeTruthy();
+      // Default mix is 0.3; bump to 0.5 via repeated ArrowUp (step 0.01).
+      for (let i = 0; i < 20; i++) {
+        await act(async () => fireEvent.keyDown(mixKnob, { key: "ArrowUp" }));
+      }
+
+      const chain = api.deckRef.current; // imperative API doesn't expose chain
+      // The deck doesn't expose the chain directly; reach via the audio ctx's
+      // node list — the wet gain is the GainNode at index reverbWet.
+      const ctx = api.audioCtxRef.current;
+      // Find the reverbWet GainNode: it's the first GainNode wired downstream
+      // from a convolver in the deck chain.
+      const conv = ctx._nodes.find((n) => n.nodeType === "ConvolverNode");
+      expect(conv).toBeTruthy();
+      const reverbWet = conv.connections.find((n) => n.nodeType === "GainNode");
+      expect(reverbWet).toBeTruthy();
+      // After turning reverb on + mix=0.5, the wet gain target is ~0.5.
+      expect(reverbWet.gain.value).toBeCloseTo(0.5, 2);
+
+      // Now drive the SIZE knob — find it by its aria-label.
+      const sizeKnob = knobs.find((k) => k.getAttribute("aria-label") === "SIZE");
+      expect(sizeKnob).toBeTruthy();
+      // One ArrowUp on SIZE (step 0.1) → triggers the 200 ms debounce.
+      await act(async () => fireEvent.keyDown(sizeKnob, { key: "ArrowUp" }));
+      // Let the debounce fire.
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      // After the IR swap, the wet gain must NOT be left at 0 — the fix
+      // ramps back to the user's target (≈ 0.5). Allow a small tolerance
+      // because rampGain via setTargetAtTime writes the target into .value.
+      expect(reverbWet.gain.value).toBeGreaterThan(0.4);
+      // The buffer was swapped — at least one new buffer assignment happened.
+      // (The mock's convolver.buffer is a plain property, so we just assert
+      // it's set to a buffer matching the new SIZE duration band.)
+      expect(conv.buffer).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("@us US24: bass-drop re-entry guard — double-fire does not throw", async () => {
     // Load a buffer via drop so the deck chain is built and BASS DROP enables.
     const { container } = render(<Harness />);

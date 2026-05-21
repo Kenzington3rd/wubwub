@@ -126,6 +126,11 @@ const Deck = forwardRef(function Deck(
   const wobbleNodesRef = useRef(null);
   const reverbSizeDebounceRef = useRef(null);
   const filterFreqRef = useRef(20000);
+  // R17 Q2 — mirror of `volume` for the MIDI relative-encoder getter so the
+  // App can always read the *current* deck volume at CC-dispatch time without
+  // depending on the imperative handle being re-created (it isn't gated on
+  // `volume` in deps). speed/filter already have their own refs above.
+  const volumeRef = useRef(0.8);
   // Synchronous re-entry guard for auto-detect. `autoBpmRunning` state lags a
   // render, so a programmatic / MIDI double-trigger could start two detections
   // before the disabled attribute updates.
@@ -146,6 +151,7 @@ const Deck = forwardRef(function Deck(
   useEffect(() => { cuesRef.current = cues; }, [cues]);
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
   useEffect(() => { filterFreqRef.current = filterFreq; }, [filterFreq]);
+  useEffect(() => { volumeRef.current = volume; }, [volume]);
 
   // ─── Audio graph construction ───
   const buildChain = useCallback(async () => {
@@ -208,12 +214,26 @@ const Deck = forwardRef(function Deck(
     if (!chain || !ctx) return;
     clearTimeout(reverbSizeDebounceRef.current);
     reverbSizeDebounceRef.current = setTimeout(() => {
-      // A5 — decay omitted so it scales with SIZE: a larger IR genuinely
-      // sustains longer instead of decaying at the same fixed rate.
-      chain.reverbConv.buffer = buildReverbIR(ctx, effects.reverb.size);
+      // P1 (R16) — swapping the convolver buffer mid-tail truncates the live
+      // decay and produces an audible thump whenever wet > 0. Duck the wet
+      // gain to 0 over ~10 ms first, swap the buffer cleanly, then ramp wet
+      // back to the user's target. The 200 ms debounce gives plenty of
+      // headroom for the two short ramps. If wet is already ~0 we skip the
+      // duck and just swap (no audible click possible).
+      const wetParam = chain.reverbWet.gain;
+      const targetWet = effects.reverb.on ? effects.reverb.mix : 0;
+      const liveWet = wetParam.value;
+      if (liveWet > 0.001) {
+        rampGain(wetParam, 0, ctx, 0.003);
+        // A5 — decay omitted so it scales with SIZE.
+        chain.reverbConv.buffer = buildReverbIR(ctx, effects.reverb.size);
+        rampGain(wetParam, targetWet, ctx, 0.003);
+      } else {
+        chain.reverbConv.buffer = buildReverbIR(ctx, effects.reverb.size);
+      }
     }, 200);
     return () => clearTimeout(reverbSizeDebounceRef.current);
-  }, [effects.reverb.size, audioCtxRef, chainTick]);
+  }, [effects.reverb.size, effects.reverb.on, effects.reverb.mix, audioCtxRef, chainTick]);
 
   // ─── Effects: delay (on/mix/time/feedback) ───
   useEffect(() => {
@@ -597,12 +617,25 @@ const Deck = forwardRef(function Deck(
     const lpfStart = Math.max(1, preset.lpfStart);
 
     chain.filter.frequency.cancelScheduledValues(now);
-    // LPF: 20k → lpfStart over the build, then snap-hold, then lpfStart → 20k.
-    // Each safeRamp guarantees the ramp endpoint is at least MIN_RAMP_S after
-    // its setValueAtTime anchor, so a tight preset.buildSec can't collapse the
-    // glide to a 0-duration step.
+    // LPF: 20k → lpfStart over the build. For non-wobble presets, recover to
+    // 20k over the drop window. For wobble, ramp directly to the LFO's
+    // baseFreq at t2 — the recovery-to-20k then snap-to-baseFreq path
+    // produced a ~50 ms chirp on every drop (P2, R16). Going straight to
+    // baseFreq hands off cleanly to the LFO, which sums its depth onto the
+    // filter param from t2 onwards.
     safeRamp(chain.filter.frequency, 20000, lpfStart, now, t1, "exp");
-    safeRamp(chain.filter.frequency, lpfStart, 20000, t1, t2, "exp");
+    if (preset.wobble) {
+      safeRamp(
+        chain.filter.frequency,
+        lpfStart,
+        Math.max(1, preset.wobble.baseFreq),
+        t1,
+        t2,
+        "exp"
+      );
+    } else {
+      safeRamp(chain.filter.frequency, lpfStart, 20000, t1, t2, "exp");
+    }
 
     chain.eqLow.gain.cancelScheduledValues(now);
     // EQ low: hold user value, kill, snap-hold at kill, recover post-drop, restore.
@@ -619,8 +652,9 @@ const Deck = forwardRef(function Deck(
       depthGain.gain.value = preset.wobble.depth;
       osc.connect(depthGain);
       depthGain.connect(chain.filter.frequency);
-      // After the drop, hold filter at baseFreq and let LFO ride on top
-      chain.filter.frequency.setValueAtTime(preset.wobble.baseFreq, t2 + 0.01);
+      // P2 (R16) — the filter ramp above already lands at baseFreq at t2, so
+      // no snap-set is needed (the old set produced an audible chirp when the
+      // ramp ended at 20k). The LFO then sums its depth on top of baseFreq.
       osc.start(t2);
       osc.stop(t3);
       wobbleNodesRef.current = { osc, depthGain };
@@ -650,7 +684,10 @@ const Deck = forwardRef(function Deck(
       // first oscillator's onended then nulls the ref — orphaning the second
       // wobble's nodes. Let onended clear it for the wobble path.
       if (!preset.wobble) bassDropRunningRef.current = false;
-    }, (preset.buildSec + preset.decaySec) * 1000);
+      // P3 (R16) — add the 50 ms LPF recovery-split-point so the visual state
+      // flip matches the audible end of the drop (the audio ramp ends at
+      // now + buildSec + 0.05 + decaySec).
+    }, (preset.buildSec + 0.05 + preset.decaySec) * 1000);
   }, [audioCtxRef, bassDropPreset, eq.low]);
 
   // ─── BPM ───
@@ -790,14 +827,28 @@ const Deck = forwardRef(function Deck(
       setVolume: (v) => setVolumeState(clamp(v, 0, 1)),
       setFilterFreq: (f) => setFilterFreq(clamp(f, 60, 20000)),
       setSpeed: (s) => setSpeedState(clamp(s, 0.5, 2.0)),
+      // R17 Q2 — live getters for the MIDI relative-encoder reseed path. The
+      // relative branch reads the *current* value at dispatch time (rather
+      // than trusting a stale running ref) so the first twist after the user
+      // moved a slider doesn't teleport the parameter back toward the default.
+      // All three read from refs so the values are always live regardless of
+      // the imperative-handle's dep array.
+      getVolume: () => volumeRef.current,
+      getSpeed: () => speedRef.current,
+      getFilterFreq: () => filterFreqRef.current,
       setCue: setCueAtCurrent,
       jumpCue,
       syncTo: (otherBpm) => {
         if (!otherBpm) return;
         setSpeedState((s) => clamp(s * (otherBpm / Math.max(40, bpmRef.current)), 0.5, 2.0));
       },
+      // P11 (R16) — momentary pitch-bend exposed for keyboard shortcuts.
+      // Hold-to-bend semantics: caller fires startNudge on keydown, endNudge
+      // on keyup. The pointer UI flows through the same callbacks.
+      startNudge: (dir) => startNudge(dir),
+      endNudge: () => endNudge(),
     }),
-    [play, pause, stop, loadBuffer, cues]
+    [play, pause, stop, loadBuffer, cues, startNudge, endNudge]
   );
 
   // ─── Render ───
@@ -881,6 +932,9 @@ const Deck = forwardRef(function Deck(
               border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 6,
               padding: "4px 8px",
+              // P7 (R16) — enforce the WCAG 2.5.8 target-size minimum (24×24)
+              // for this compact control without changing font/letter-spacing.
+              minHeight: 24,
               color: "#8892b0",
               fontSize: 10,
               cursor: "pointer",
@@ -899,6 +953,8 @@ const Deck = forwardRef(function Deck(
               border: `1px solid ${color}33`,
               borderRadius: 6,
               padding: "4px 8px",
+              // P7 (R16) — meets the WCAG 2.5.8 target-size minimum (24×24).
+              minHeight: 24,
               // Disabled label uses text-muted (#8892b0) instead of text-dim
               // (#4a5580 → ~2.7:1 on the deep bg, fails WCAG 1.4.11). The
               // `opacity: 0.6` together with #8892b0 keeps the visual
@@ -923,6 +979,8 @@ const Deck = forwardRef(function Deck(
               border: `1px solid ${color}33`,
               borderRadius: 6,
               padding: "4px 8px",
+              // P7 (R16) — meets the WCAG 2.5.8 target-size minimum (24×24).
+              minHeight: 24,
               // Disabled label uses text-muted (#8892b0) + reduced opacity —
               // never text-dim #4a5580 on the deep bg (fails WCAG 1.4.11).
               color: autoBpmRunning ? color : "#8892b0",
@@ -945,6 +1003,8 @@ const Deck = forwardRef(function Deck(
               border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 6,
               padding: "4px 6px",
+              // P7 (R16) — meets the WCAG 2.5.8 target-size minimum (24×24).
+              minHeight: 24,
               // Disabled label uses text-muted + opacity, never text-dim
               // #4a5580 on the deep bg (fails WCAG 1.4.11).
               color: "#8892b0",
@@ -967,6 +1027,8 @@ const Deck = forwardRef(function Deck(
               border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 6,
               padding: "4px 6px",
+              // P7 (R16) — meets the WCAG 2.5.8 target-size minimum (24×24).
+              minHeight: 24,
               color: "#8892b0",
               fontSize: 10,
               cursor: fileName ? "pointer" : "not-allowed",

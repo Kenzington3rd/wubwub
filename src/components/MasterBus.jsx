@@ -164,6 +164,7 @@ export default function MasterBus({
           max={1}
           step={0.01}
           color="#f0c040"
+          ariaLabel="Master volume"
         />
         <span style={{ fontSize: 12, color: "#f0c040", fontWeight: 700, minWidth: 36, textAlign: "right" }}>
           {Math.round(masterVol * 100)}%
@@ -298,7 +299,10 @@ export default function MasterBus({
         style={{
           background: "rgba(255,255,255,0.05)",
           border: `1px solid ${isRecording ? "#f0c040" : "rgba(255,255,255,0.12)"}`,
-          color: isRecording ? "#f0c040" : "#4a5580",
+          // P5 (R16) — disabled label uses text-muted (#8892b0), not text-dim
+          // (#4a5580 → ~2.7:1 on the deep bg, fails WCAG 1.4.11). Opacity
+          // can carry the visual disabled appearance instead.
+          color: isRecording ? "#f0c040" : "#8892b0",
           borderRadius: 8,
           padding: "6px 12px",
           fontSize: 11,
@@ -311,7 +315,7 @@ export default function MasterBus({
           gap: 6,
         }}
       >
-        <Icon name="flag" size={12} color={isRecording ? "#f0c040" : "#4a5580"} />
+        <Icon name="flag" size={12} color={isRecording ? "#f0c040" : "#8892b0"} />
         MARKER
         {markerCount > 0 && (
           <span
@@ -342,7 +346,9 @@ export default function MasterBus({
         style={{
           background: isRecording ? "rgba(248,113,113,0.18)" : "rgba(255,255,255,0.05)",
           border: `1px solid ${isRecording ? "#f87171" : "rgba(255,255,255,0.12)"}`,
-          color: isRecording ? "#f87171" : recordSupported ? "#ccd6f6" : "#4a5580",
+          // P5 (R16) — unsupported-state label uses text-muted, not text-dim
+          // (#4a5580 fails WCAG 1.4.11 on the deep bg).
+          color: isRecording ? "#f87171" : recordSupported ? "#ccd6f6" : "#8892b0",
           borderRadius: 8,
           padding: "6px 14px",
           fontSize: 11,
@@ -361,7 +367,7 @@ export default function MasterBus({
             width: 10,
             height: 10,
             borderRadius: "50%",
-            background: isRecording ? "#f87171" : "#4a5580",
+            background: isRecording ? "#f87171" : "#8892b0",
             boxShadow: isRecording ? "0 0 8px #f87171aa" : "none",
             animation: isRecording ? "pulse 0.8s infinite alternate" : "none",
           }}

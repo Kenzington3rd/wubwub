@@ -10,12 +10,16 @@ WAVECRAFT is a dual-deck DJ mixing app that runs entirely in your browser. **Not
 ```bash
 npm install
 npm run dev            # http://localhost:5173
-npm test               # vitest, 325+ tests
+npm test               # vitest, 330+ tests
 npm run build          # → dist/ (multi-file PWA, precached for offline)
 npm run build:single   # → dist-single/index.html (one self-contained file)
-npm run size           # build + bundle-size budget check
+npm run size           # build + bundle-size budget check (reruns the build internally)
 npm run preview        # serve the production build locally
 ```
+
+`npm run size` runs `vite build` internally before checking the bundle budget,
+so `npm run build && npm run size` will build twice — use `npm run size` on
+its own when you want both.
 
 The single-file build is a literal one-file artifact. Open `dist-single/index.html`
 directly from your hard drive (or email it, or stick it on a USB stick) and the

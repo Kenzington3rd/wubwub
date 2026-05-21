@@ -382,7 +382,12 @@ export default function Looper({
                       justifyContent: "center",
                     }}
                   >
-                    <Icon name="close" size={12} color="#4a5580" />
+                    {/* P9 (R16) — icon uses text-muted (#8892b0). When the
+                        close button is rendered it's an enabled control; the
+                        icon is its only visual affordance, so it needs to
+                        meet WCAG 1.4.11 non-text contrast (≥3:1). #4a5580
+                        sat at ~2.6:1 vs the panel bg. */}
+                    <Icon name="close" size={12} color="#8892b0" />
                   </button>
                 )}
               </div>

@@ -140,6 +140,7 @@ Click a deck first to "focus" it (it gets a brighter glow).
 | `C` | Set a cue on the focused deck |
 | `1`–`8` | Jump to cue N on the focused deck |
 | `M` | Drop a recording cue marker (only while recording) |
+| `,` / `.` | **Hold** to nudge the focused deck's pitch ±4% (momentary; release returns to set speed) |
 | `Q W E R` / `A S D F` | Trigger sample pads 1–8 |
 
 `S` does double duty: with a deck focused it syncs that deck; with no deck

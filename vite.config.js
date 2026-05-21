@@ -1,4 +1,6 @@
 import { defineConfig } from "vite";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
 import { viteSingleFile } from "vite-plugin-singlefile";
@@ -20,6 +22,11 @@ const CSP_CONTENT =
   "img-src 'self' data: blob:; " +
   "font-src 'self' data:; " +
   "media-src 'self' blob:; " +
+  // `worker-src 'self' blob:` — the `blob:` is REQUIRED. The looper
+  // AudioWorklet is registered from a Blob URL (see src/App.jsx: the
+  // worklet source is imported `?raw`, wrapped in a Blob, and
+  // `URL.createObjectURL`'d into `audioWorklet.addModule`). Dropping
+  // `blob:` here silently breaks the looper in every build mode.
   "worker-src 'self' blob:; " +
   "connect-src 'none'; " +
   "frame-src 'none'; " +
@@ -37,8 +44,15 @@ const PERMISSIONS_POLICY =
  * and viteSingleFile (when it inlines + reorders) have a tendency to drop
  * the meta tags between the parser and the emit step. We run in the `post`
  * slot so we run after them and our additions survive.
+ *
+ * In `single` mode it ALSO rewrites the `apple-touch-icon` href to a
+ * `data:image/png;base64,…` URI. The single-file artifact is supposed to
+ * be a self-contained `index.html` you can carry on a thumb drive; an
+ * external `./icons/icon-192.png` reference breaks that promise from
+ * `file://`. The multi-file PWA build leaves the link untouched (it's a
+ * real sibling there).
  */
-function reinjectSecurityMeta() {
+function reinjectSecurityMeta({ isSingle, projectRoot } = {}) {
   const cspTag = `<meta http-equiv="Content-Security-Policy" content="${CSP_CONTENT}">`;
   const permTag = `<meta http-equiv="Permissions-Policy" content="${PERMISSIONS_POLICY}">`;
   return {
@@ -54,6 +68,27 @@ function reinjectSecurityMeta() {
         if (!/http-equiv=["']Permissions-Policy["']/i.test(out)) {
           out = out.replace(/<head([^>]*)>/i, (m) => `${m}\n    ${permTag}`);
         }
+        if (isSingle) {
+          // Inline apple-touch-icon as a data: URI so the single-file
+          // artifact has zero external fetches when opened over file://.
+          const iconPath = resolve(
+            projectRoot || process.cwd(),
+            "public/icons/icon-192.png",
+          );
+          try {
+            const b64 = readFileSync(iconPath).toString("base64");
+            const dataUri = `data:image/png;base64,${b64}`;
+            out = out.replace(
+              /<link\s+rel=["']apple-touch-icon["'][^>]*>/i,
+              `<link rel="apple-touch-icon" href="${dataUri}" />`,
+            );
+          } catch (err) {
+            this.warn?.(
+              `wavecraft: failed to inline apple-touch-icon (${err.message}); ` +
+                `single-file artifact will reference an external icon.`,
+            );
+          }
+        }
         return out;
       },
     },
@@ -62,6 +97,7 @@ function reinjectSecurityMeta() {
 
 export default defineConfig(({ mode }) => {
   const isSingle = mode === "single";
+  const projectRoot = process.cwd();
 
   return {
     base: "./",
@@ -121,7 +157,7 @@ export default defineConfig(({ mode }) => {
               runtimeCaching: [],
             },
           }),
-      reinjectSecurityMeta(),
+      reinjectSecurityMeta({ isSingle, projectRoot }),
     ],
     build: {
       target: "es2020",

@@ -8,7 +8,7 @@
 - **Distribution**:
   - `npm run build` → multi-file PWA bundle in `dist/` (precached for offline)
   - `npm run build:single` → one self-contained `index.html` in `dist-single/` (max portability)
-- **Fonts**: self-hosted `.woff2` (Audiowide + Exo 2 variable) in `public/fonts/`
+- **Fonts**: self-hosted `.woff2` (Audiowide + Exo 2 variable) in `src/fonts/`, injected at boot via `src/fonts/index.js` (each woff2 is imported with Vite's `?url` so the multi-file build keeps them as hashed siblings and the single-file build inlines them as `data:` URIs)
 - **License**: MIT — free, open, no subscriptions
 
 ## Mission
@@ -57,6 +57,12 @@ src/
 │   └── recorder.js           # MediaRecorder wrapper + downloadBlob
 ├── midi/
 │   └── midiMap.js            # MIDI access + CC mapping
+├── fonts/
+│   ├── index.js              # injectFonts() — @font-face injected at boot
+│   ├── Audiowide-Regular.woff2
+│   └── Exo2-Variable.woff2
+├── worklets/
+│   └── looper-worklet.js     # imported `?raw`, registered via Blob URL
 └── components/
     ├── Knob.jsx
     ├── Slider.jsx
@@ -75,12 +81,15 @@ src/
     └── TheoryPanel.jsx       # camelot wheel + genre BPM + tips + shortcuts
 
 public/
-├── fonts/
-│   ├── Audiowide-Regular.woff2
-│   └── Exo2-Variable.woff2
-└── worklets/
-    └── looper-worklet.js     # AudioWorkletProcessor ring buffer
+└── icons/                    # PWA / apple-touch-icon (SVG + 192/512 PNG)
 ```
+
+Fonts and the looper worklet no longer live in `public/` — they're imported
+through Vite's asset pipeline from `src/fonts/` (each `.woff2` via `?url`) and
+`src/worklets/looper-worklet.js` (as a `?raw` string, wrapped in a `Blob`,
+registered via `URL.createObjectURL` and revoked once `addModule` resolves).
+This is what lets the single-file build run from `file://` with no sibling
+fetches and also what lets the PWA build work under a non-root subpath.
 
 ### State Management
 - **Audio nodes**: `useRef` (no re-renders on audio state)
@@ -111,6 +120,7 @@ public/
 | `C` | Set cue at current position |
 | `1`–`8` | Jump to cue N on focused deck |
 | `M` | Drop a recording cue marker (no-op unless recording) |
+| `,` / `.` | Hold to nudge focused deck pitch ±4% (momentary, releases on keyup) |
 | `Q W E R A S D F` | Trigger sample pad 1–8 |
 | `←/→` *(waveform focused)* | Seek the focused waveform ±5 s |
 | `Home/End` *(waveform focused)* | Seek the focused waveform to start / end |
@@ -135,7 +145,7 @@ public/
 | Delay feedback | Clamped ≤ 0.9. Don't remove the clamp. |
 | Network calls | **NEVER** add `fetch`, `XHR`, `WebSocket`, `sendBeacon`. PWA service worker must not touch external origins. |
 | User file data | Files stay in `ArrayBuffer`/`AudioBuffer` in memory. Never persisted (no localStorage for user content), never transmitted. |
-| Worklet path | `public/worklets/looper-worklet.js` is referenced as `/worklets/looper-worklet.js`. Keep both in sync. |
+| Worklet path | Looper worklet source is `src/worklets/looper-worklet.js`, imported `?raw` and registered via a Blob URL in `src/App.jsx`. Don't re-introduce a static `/worklets/…` path — the Blob-URL registration is required for `file://` and PWA-subpath builds. |
 | Single-file build | `vite-plugin-singlefile` and `vite-plugin-pwa` are mutually exclusive in the same build. Use `--mode single` to pick singlefile. |
 
 ## Current Status

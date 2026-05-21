@@ -38,6 +38,10 @@ export default function MidiPanel({
   onChangeMode,
   inputName,
   error,
+  // R17 Q1 — non-empty when a Learn capture was rejected (today: a Note On
+  // arrived but note-target routing is deferred). Rendered as an inline hint
+  // beneath the active learn row. Empty string when there's nothing to show.
+  learnHint = "",
 }) {
   const [open, setOpen] = useState(false);
 
@@ -178,9 +182,15 @@ export default function MidiPanel({
                 // don't have an absolute-vs-relative axis.
                 const showMode =
                   m && (m.kind || "cc") === "cc" && typeof onChangeMode === "function";
+                // R17 Q1 — surface the rejection hint only on the active
+                // learn row (so it's visually tied to the right target).
+                const showHint = learning && learnHint;
                 return (
                   <div
                     key={t.id}
+                    style={{ display: "flex", flexDirection: "column", gap: 4 }}
+                  >
+                  <div
                     style={{
                       display: "flex",
                       alignItems: "center",
@@ -203,7 +213,7 @@ export default function MidiPanel({
                     ) : learning ? (
                       <span style={{ color: "#60a5fa", fontStyle: "italic" }}>twist…</span>
                     ) : (
-                      <span style={{ color: "#4a5580" }}>—</span>
+                      <span style={{ color: "#8892b0" }}>—</span>
                     )}
                     {showMode && (
                       <label
@@ -212,7 +222,7 @@ export default function MidiPanel({
                           alignItems: "center",
                           gap: 4,
                           fontSize: 10,
-                          color: "#4a5580",
+                          color: "#8892b0",
                         }}
                       >
                         <span style={SR_ONLY}>Mode for {t.label}</span>
@@ -242,6 +252,11 @@ export default function MidiPanel({
                     <button
                       onClick={() => (learning ? onCancelLearn() : onStartLearn(t.id))}
                       aria-pressed={learning}
+                      aria-label={
+                        learning
+                          ? `Cancel MIDI learn for ${t.label}`
+                          : `Learn MIDI mapping for ${t.label}`
+                      }
                       style={{
                         background: "transparent",
                         border: "1px solid rgba(255,255,255,0.1)",
@@ -275,9 +290,23 @@ export default function MidiPanel({
                           justifyContent: "center",
                         }}
                       >
-                        <Icon name="close" size={10} color="#4a5580" />
+                        <Icon name="close" size={10} color="#8892b0" />
                       </button>
                     )}
+                  </div>
+                  {showHint && (
+                    <div
+                      role="status"
+                      style={{
+                        fontSize: 10,
+                        color: "#fbbf24",
+                        padding: "0 8px",
+                        lineHeight: 1.4,
+                      }}
+                    >
+                      {learnHint}
+                    </div>
+                  )}
                   </div>
                 );
               })}

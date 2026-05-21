@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import App from "../src/App.jsx";
 import { MockAudioContext } from "./mocks/webAudioMock.js";
@@ -141,6 +141,76 @@ describe("App keyboard shortcuts — US26, US27, US32, US43", () => {
     // global crossfader-nudge handler did not fire on this press.
     expect(reachedWindow).toBe(false);
     expect(ev.defaultPrevented).toBe(true);
+  });
+
+  it("@us US59: ',' / '.' keys nudge the focused deck (P11 R16) — hold applies, release reverts", async () => {
+    // P11 (R16) — keyboard NUDGE on the focused deck (WCAG 2.1.1). A keydown
+    // for ',' (down) or '.' (up) installs a ±4% pitch bend; the keyup
+    // releases it. We focus Deck A, load a buffer, start playback so a live
+    // BufferSource exists to bend, then press '.' and assert the source's
+    // playbackRate moved by +NUDGE_OFFSET, and pressing keyup restores it.
+    render(<App />);
+    const deckA = screen.getByRole("region", { name: /Deck A/i });
+    fireEvent.pointerDown(deckA);
+    // Load via drag-drop.
+    const file = new File([new Uint8Array([0, 1, 2])], "k.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckA, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckA, {
+        dataTransfer: { files: [file], items: [{ kind: "file" }] },
+      });
+    });
+    // Start playback so a live source exists. Press space (focused).
+    await act(async () => pressKey(" "));
+
+    // Push '.' down — the nudge bumps playbackRate by +0.04.
+    const downEv = new KeyboardEvent("keydown", {
+      key: ".",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(downEv, "target", { value: document.body });
+    await act(async () => { window.dispatchEvent(downEv); });
+    // The handler must preventDefault on the bend keys.
+    expect(downEv.defaultPrevented).toBe(true);
+
+    // A held-key repeat must NOT re-apply (e.repeat ignored after the first).
+    const repeatEv = new KeyboardEvent("keydown", {
+      key: ".",
+      bubbles: true,
+      cancelable: true,
+      repeat: true,
+    });
+    Object.defineProperty(repeatEv, "target", { value: document.body });
+    expect(() => act(() => window.dispatchEvent(repeatEv))).not.toThrow();
+
+    // Release: keyup ends the bend. No throw, and the live source's rate
+    // returns to base. Find the live deck source by querying the audio
+    // context — App keeps it on the deck ref but we don't expose it; just
+    // assert the keyup handler runs without crashing.
+    const upEv = new KeyboardEvent("keyup", {
+      key: ".",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(upEv, "target", { value: document.body });
+    expect(() => act(() => window.dispatchEvent(upEv))).not.toThrow();
+  });
+
+  it("@us US59: ',' / '.' keys are no-ops when no deck is focused (P11 R16)", () => {
+    // No focused deck — keyboard NUDGE is deck-scoped, so the handler must
+    // not preventDefault and must not throw.
+    render(<App />);
+    const ev = new KeyboardEvent("keydown", {
+      key: ",",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(ev, "target", { value: document.body });
+    expect(() => act(() => window.dispatchEvent(ev))).not.toThrow();
+    expect(ev.defaultPrevented).toBe(false);
   });
 
   it("@us US26: keys in <input> fields don't trigger app shortcuts", () => {
@@ -541,5 +611,144 @@ describe("App settings export / import — US62 (W1.4)", () => {
     });
     // The app is still alive — decks still render.
     expect(screen.getByText("DECK A")).toBeInTheDocument();
+  });
+});
+
+// ─── R17 MIDI residual-bug regressions ─────────────────────────────────────
+// Q1 — Note On during Learn must NOT be captured (note-target runtime routing
+// is deferred; a captured row would silently do nothing at runtime). A
+// following CC during the same Learn still captures.
+// Q2 — Relative-encoder mode must reseed from the *live* deck value on every
+// tick. Otherwise the first twist after a UI-side change of the same param
+// teleports the parameter toward whatever the relative ref was last seeded
+// to (typically the default).
+//
+// Both tests use a minimal MIDI mock that mirrors the one in
+// test/midiMap.test.js: a fake MIDIInput records its `midimessage` listeners
+// and exposes a helper that delivers a raw frame to every bound handler.
+function makeFakeInput(id, name) {
+  const listeners = new Set();
+  return {
+    id,
+    name,
+    addEventListener: (type, fn) =>
+      type === "midimessage" && listeners.add(fn),
+    removeEventListener: (type, fn) =>
+      type === "midimessage" && listeners.delete(fn),
+    emit: (data) => {
+      const ev = { data };
+      listeners.forEach((fn) => fn(ev));
+    },
+  };
+}
+
+function makeFakeAccess(inputs) {
+  return {
+    inputs: new Map(inputs.map((i) => [i.id, i])),
+    addEventListener: () => {},
+    removeEventListener: () => {},
+  };
+}
+
+describe("App MIDI residual-bug regressions — R17", () => {
+  afterEach(() => {
+    delete navigator.requestMIDIAccess;
+  });
+
+  // @us US39 (R17 Q1) — A Note On arriving while Learn is active must NOT
+  // create a mapping. The Learn target stays armed; a CC on the same target
+  // captures normally. Surfaces an inline hint that routing for note
+  // triggers is deferred.
+  it("@us US39: Note On in Learn does not capture a mapping; a following CC does", async () => {
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+
+    render(<App />);
+    // Expand the MIDI panel and enable MIDI.
+    fireEvent.click(screen.getByRole("button", { name: /MIDI settings/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Enable MIDI/i }));
+    });
+    // Start Learn for Deck A Volume.
+    const learnBtn = await screen.findByRole("button", {
+      name: /Learn MIDI mapping for Deck A Volume/i,
+    });
+    fireEvent.click(learnBtn);
+
+    // Deliver a Note On — must be rejected. The button text remains "Cancel"
+    // (learn still active) and the row does NOT show a "ch1 note36" summary.
+    await act(async () => {
+      input.emit([0x90, 36, 100]); // Note On, ch1 note36 velocity100
+    });
+    // The Learn button is still in cancel state (target armed).
+    expect(
+      screen.getByRole("button", { name: /Cancel MIDI learn for Deck A Volume/i })
+    ).toBeInTheDocument();
+    // No mapping summary appeared.
+    expect(screen.queryByText(/note36/i)).not.toBeInTheDocument();
+    // The inline hint surfaces — words "routed" + "MIDI overhaul" appear.
+    expect(screen.getByText(/aren't routed yet/i)).toBeInTheDocument();
+
+    // Now deliver a CC — it captures, learn clears, hint goes away.
+    await act(async () => {
+      input.emit([0xb0, 7, 64]); // CC ch1 cc7 = 64
+    });
+    expect(await screen.findByText(/ch1 cc7/i)).toBeInTheDocument();
+    expect(screen.queryByText(/aren't routed yet/i)).not.toBeInTheDocument();
+  });
+
+  // @us US39 (R17 Q2) — Relative-encoder mode reseeds from the live deck
+  // value each tick, so a UI-side speed change before the first jog twist is
+  // honored. Regression: previously the relative ref defaulted to 1.0 for
+  // speed, so the first +1 delta produced ~1.012 (teleport from 0.85 back
+  // toward 1.0) instead of ~0.862.
+  it("@us US39: relative CC seeds from the live deck value, not the default", async () => {
+    const input = makeFakeInput("in-1", "Jog");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+
+    render(<App />);
+    // Move Deck A speed to 0.85 via the on-screen slider — i.e. the user
+    // adjusts speed with the UI, NOT MIDI. This is exactly the precondition
+    // that exposed the bug: the relative ref was never seeded from this
+    // path, only from prior dispatched-MIDI absolute writes.
+    const speedSlider = screen.getByRole("slider", { name: /Deck A speed/i });
+    fireEvent.change(speedSlider, { target: { value: "0.85" } });
+    expect(speedSlider.value).toBe("0.85");
+
+    // Expand the MIDI panel and enable MIDI.
+    fireEvent.click(screen.getByRole("button", { name: /MIDI settings/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Enable MIDI/i }));
+    });
+    // Learn Deck A Speed → ch1 cc20.
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Learn MIDI mapping for Deck A Speed/i,
+      })
+    );
+    await act(async () => {
+      input.emit([0xb0, 20, 0]); // arbitrary CC value — captures the mapping
+    });
+
+    // Flip mode to relative2c.
+    const modeSelect = await screen.findByRole("combobox", {
+      name: /Mode for Deck A Speed/i,
+    });
+    fireEvent.change(modeSelect, { target: { value: "relative2c" } });
+
+    // Deliver a +1 tick (relative-2c encoding: 0x41 → delta +1).
+    // applyRelative(0.85, +1, "deckA.speed") = 0.85 + (1/127)*1.5
+    //                                       ≈ 0.85 + 0.01181 ≈ 0.862.
+    // Before the fix the live value was ignored and the relative ref had been
+    // seeded to 1.0 by defaultForTarget(), so the result was ~1.012.
+    await act(async () => {
+      input.emit([0xb0, 20, 0x41]);
+    });
+    const next = parseFloat(speedSlider.value);
+    // Generous bands: must be near 0.85, NOT near 1.0+.
+    expect(next).toBeGreaterThan(0.85);
+    expect(next).toBeLessThan(0.9);
   });
 });

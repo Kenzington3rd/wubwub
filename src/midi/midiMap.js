@@ -94,7 +94,9 @@ export async function enableMidi(onMidi) {
           );
         }
       } else if (kindNibble === 0x80) {
-        if (data.length < 2) return;
+        // Strict 3-byte guard to match Note On above (spec Note Off is
+        // status + note + velocity). A malformed 2-byte Note Off is dropped.
+        if (data.length < 3) return;
         onMidi(
           { kind: "noteoff", channel, note: data[1] },
           input.id,

@@ -268,7 +268,10 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
                       margin: -8,
                     }}
                   >
-                    <Icon name="close" size={12} color="#4a5580" />
+                    {/* P9 (R16) — icon uses text-muted (#8892b0) so the only
+                        affordance for this enabled clear button meets WCAG
+                        1.4.11 (#4a5580 fails at ~2.6:1 vs the panel bg). */}
+                    <Icon name="close" size={12} color="#8892b0" />
                   </button>
                 )}
               </div>

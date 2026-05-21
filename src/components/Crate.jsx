@@ -287,7 +287,7 @@ export default function Crate({
                   width: 56,
                   textAlign: "right",
                   fontSize: 10,
-                  color: entry.bpm ? "#8892b0" : "#4a5580",
+                  color: "#8892b0",
                   fontFamily: "'Exo 2', sans-serif",
                 }}
               >
@@ -298,7 +298,7 @@ export default function Crate({
                   width: 34,
                   textAlign: "right",
                   fontSize: 10,
-                  color: entry.camelot ? "#8892b0" : "#4a5580",
+                  color: "#8892b0",
                   fontFamily: "'Exo 2', sans-serif",
                 }}
               >
@@ -352,7 +352,10 @@ export default function Crate({
                   justifyContent: "center",
                 }}
               >
-                <Icon name="close" size={11} color="#4a5580" />
+                {/* P9 (R16) — icon uses text-muted so the close button (the
+                    only affordance is the icon) meets WCAG 1.4.11 non-text
+                    contrast (≥3:1). #4a5580 fails at ~2.6:1. */}
+                <Icon name="close" size={11} color="#8892b0" />
               </button>
             </li>
           ))}

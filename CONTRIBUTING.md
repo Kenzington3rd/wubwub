@@ -14,10 +14,15 @@ npm test               # vitest, run once
 npm run test:watch     # vitest, watch mode
 npm run build          # multi-file PWA → dist/
 npm run build:single   # one self-contained HTML → dist-single/index.html
-npm run size           # build + bundle-size budget guard
+npm run preview        # serve the production build locally
+npm run size           # build + bundle-size budget guard (reruns the build)
 ```
 
-CI (`.github/workflows/ci.yml`) runs `npm ci && npm test && npm run size && npm run build`
+`npm run size` does its own `vite build` internally before checking the budget,
+so you don't need to chain it with `npm run build` — running both back-to-back
+just builds twice.
+
+CI (`.github/workflows/ci.yml`) runs `npm ci && npm test && npm run size && npm run build && npm run build:single`
 on every push and PR. Aim for green locally before pushing.
 
 ## Where to find work

@@ -63,14 +63,34 @@ list.
 `{accent}11`–`{accent}33` for backgrounds, `{accent}44`–`{accent}88` for borders,
 `{accent}aa`–`{accent}ff` for glows/strong states.
 
+### Structural chrome
+
+A small set of dark-slate hues sit purely as **decorative chrome** — never
+carry information, never appear as live readable copy. They are listed here so
+any reader of this guide can see they're registered (and so a sweep can flag
+anything else off-palette).
+
+| Name | Hex | Use |
+|---|---|---|
+| scrollbar-track | `#1e2440` | `::-webkit-scrollbar-thumb` + Firefox `scrollbar-color` in `src/index.css` |
+| knob-body-light | `#2a2f45` | Inner stop of the `Knob.jsx` radial-gradient body |
+| knob-body-dark | `#12152a` | Outer stop of the `Knob.jsx` radial-gradient body |
+
+`#4a5580` (text-dim) remains reserved for de-emphasized decorative hints only
+(e.g. an em-dash placeholder) — never on a live affordance or anything that must
+be read.
+
 ## 4. Typography
 
 - **Display** — `Audiowide` (single weight 400). App title, deck IDs, BASS DROP
   button, genre names, panel headings.
 - **Body** — `Exo 2` (variable, weights 300–700). All controls, labels, values,
   body copy.
-- Both are **self-hosted** in `public/fonts/` as `.woff2`. Never load fonts from a
-  CDN — that would break the zero-network promise.
+- Both are **self-hosted** in `src/fonts/` as `.woff2` (injected at boot via
+  `src/fonts/index.js`, which imports each file with Vite's `?url` so the
+  single-file build inlines them as `data:` URIs and the multi-file build emits
+  hashed siblings). Never load fonts from a CDN — that would break the
+  zero-network promise.
 - **Label size:** 9px, uppercase, `letter-spacing: 1px`, color `--text-muted`.
 - **Value size:** 10–12px, accent color, weight 600–700.
 

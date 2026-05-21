@@ -67,6 +67,13 @@ export default function App() {
   const [midiInputName, setMidiInputName] = useState("");
   const [midiMappings, setMidiMappings] = useState({});
   const [learnTarget, setLearnTarget] = useState(null);
+  // R17 Q1 — inline hint surfaced beside the active Learn row when an
+  // incoming message can't be captured. Specifically: a Note On arrives, the
+  // panel can't route note triggers yet (note-target runtime routing is
+  // deferred), so instead of silently capturing a mapping that does nothing
+  // at runtime we tell the user to use a CC for now. Cleared on cancel, on a
+  // successful CC capture, and on Learn-mode exit.
+  const [learnHint, setLearnHint] = useState("");
   // Map of MIDIInput.id → display name, learned the first time we see a
   // message from each input. The MidiPanel uses this to disambiguate mapping
   // rows by controller name when more than one input has bound mappings, so
@@ -424,9 +431,41 @@ export default function App() {
         ownRef?.current?.jumpCue?.(parseInt(e.key, 10) - 1);
         return;
       }
+      // P11 (R16) — keyboard NUDGE on the focused deck (WCAG 2.1.1). Hold-to-
+      // bend semantics: keydown applies the bend, keyup releases. `e.repeat`
+      // tail-clicks are ignored so the bend isn't re-applied each tick while
+      // held. Deck-scoped — no-op when no deck is focused.
+      if ((e.key === "," || e.key === ".") && !e.ctrlKey && !e.metaKey) {
+        if (!ownRef) return;
+        e.preventDefault();
+        if (e.repeat) return;
+        const dir = e.key === "," ? -1 : 1;
+        ownRef.current?.startNudge?.(dir);
+        return;
+      }
+    };
+    const onKeyUp = (e) => {
+      const t = e.target;
+      if (t) {
+        const tag = (t.tagName || "").toLowerCase();
+        if (tag === "input" || tag === "textarea" || tag === "select" || t.isContentEditable) {
+          return;
+        }
+      }
+      // Release any held nudge — bound to either deck, since a keydown on the
+      // focused deck installs the bend on that deck's ref.
+      if (e.key === "," || e.key === ".") {
+        const focused = focusedRef.current;
+        const ownRef = focused === "B" ? deckBRef : focused === "A" ? deckARef : null;
+        ownRef?.current?.endNudge?.();
+      }
     };
     window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
+    window.addEventListener("keyup", onKeyUp);
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("keyup", onKeyUp);
+    };
   }, []);
 
   // ── Recording ──
@@ -588,6 +627,41 @@ export default function App() {
     }
   }, []);
 
+  // R17 Q2 — read the live value of a target from the deck/master state. The
+  // relative-encoder branch calls this on every tick so deltas are applied
+  // against where the parameter actually is right now, not against a stale
+  // running ref that only mirrors dispatched-MIDI absolute writes. Without
+  // this, a user who moved a slider on screen would see the first jog twist
+  // teleport the parameter back to the relative ref's last value (often the
+  // default — e.g. speed 1.0). Falls back to the per-target default if a
+  // deck ref isn't yet wired (no buffer loaded, etc.).
+  const liveValueForTarget = useCallback((targetId) => {
+    switch (targetId) {
+      case "crossfade":
+        return crossfade;
+      case "masterVol":
+        return masterVol;
+      case "deckA.volume":
+        return deckARef.current?.getVolume?.() ?? defaultForTarget(targetId);
+      case "deckA.filterFreq":
+        return (
+          deckARef.current?.getFilterFreq?.() ?? defaultForTarget(targetId)
+        );
+      case "deckA.speed":
+        return deckARef.current?.getSpeed?.() ?? defaultForTarget(targetId);
+      case "deckB.volume":
+        return deckBRef.current?.getVolume?.() ?? defaultForTarget(targetId);
+      case "deckB.filterFreq":
+        return (
+          deckBRef.current?.getFilterFreq?.() ?? defaultForTarget(targetId)
+        );
+      case "deckB.speed":
+        return deckBRef.current?.getSpeed?.() ?? defaultForTarget(targetId);
+      default:
+        return defaultForTarget(targetId);
+    }
+  }, [crossfade, masterVol]);
+
   const applyMidiCc = useCallback(
     (targetId, mapping, ccValue) => {
       const mode = mapping.mode || "absolute";
@@ -595,16 +669,20 @@ export default function App() {
         dispatchTargetValue(targetId, mapCcToValue(ccValue, targetId));
         return;
       }
-      // Relative mode — accumulate against the stored running value.
+      // Relative mode — accumulate against the *live* value. R17 Q2: reseed
+      // the relative ref from the deck/master each tick so the first twist
+      // after a UI-side change of the same parameter doesn't snap back to
+      // the default. (The mirror-from-dispatchTargetValue path still helps
+      // when consecutive absolute MIDI writes interleave with relative.)
+      const current = liveValueForTarget(targetId);
+      relativeStateRef.current[targetId] = current;
       const delta =
         mode === "relative2c"
           ? decodeRelative2c(ccValue)
           : decodeSignedMag(ccValue);
-      const current =
-        relativeStateRef.current[targetId] ?? defaultForTarget(targetId);
       dispatchTargetValue(targetId, applyRelative(current, delta, targetId));
     },
-    [dispatchTargetValue]
+    [dispatchTargetValue, liveValueForTarget]
   );
 
   const onMidiMessage = useCallback(
@@ -618,10 +696,15 @@ export default function App() {
           prev[inputId] === inputName ? prev : { ...prev, [inputId]: inputName }
         );
       }
-      // Learn mode: capture whichever recognised message arrives first. CC
-      // becomes a kind:"cc" mapping; Note On becomes a kind:"note" mapping.
-      // Note Off is ignored during learn so a button release doesn't replace
-      // the press the user just made.
+      // Learn mode: capture the first CC message. Note On is intentionally
+      // rejected here while runtime routing for note triggers is deferred —
+      // the lower-level midiMap still forwards `kind:"noteon"` (other
+      // consumers may use it), but capturing a note as a mapping would
+      // produce a row labelled "ch1 note36" that silently does nothing at
+      // runtime. The DJ + QA reviewers flagged that as misleading. Instead
+      // we leave the learn target active and surface a hint so the user
+      // knows to twist a CC. Note Off is ignored during learn so a button
+      // release doesn't replace the press the user just made.
       if (learnTargetRef.current) {
         if (message.kind === "cc") {
           const targetId = learnTargetRef.current;
@@ -637,20 +720,14 @@ export default function App() {
           }));
           learnTargetRef.current = null;
           setLearnTarget(null);
+          setLearnHint("");
         } else if (message.kind === "noteon") {
-          const targetId = learnTargetRef.current;
-          setMidiMappings((prev) => ({
-            ...prev,
-            [targetId]: {
-              inputId,
-              channel: message.channel,
-              kind: "note",
-              number: message.note,
-              mode: "absolute",
-            },
-          }));
-          learnTargetRef.current = null;
-          setLearnTarget(null);
+          // R17 Q1 — DO NOT capture; the broader note-routing overhaul is
+          // pending. Tell the user inline. The learn target stays armed so a
+          // following CC still captures.
+          setLearnHint(
+            "Note triggers aren't routed yet — coming in the MIDI overhaul. Use a CC for now."
+          );
         }
         return;
       }
@@ -712,6 +789,7 @@ export default function App() {
     midiUnsubRef.current = null;
     setMidiEnabled(false);
     setLearnTarget(null);
+    setLearnHint("");
     setMidiInputName("");
   };
 
@@ -1000,12 +1078,21 @@ export default function App() {
           mappings={midiMappings}
           inputNames={midiInputNames}
           learnTarget={learnTarget}
-          onStartLearn={setLearnTarget}
-          onCancelLearn={() => setLearnTarget(null)}
+          onStartLearn={(id) => {
+            // R17 Q1 — entering Learn for a new target clears any stale hint
+            // from a prior target's note-rejection.
+            setLearnHint("");
+            setLearnTarget(id);
+          }}
+          onCancelLearn={() => {
+            setLearnTarget(null);
+            setLearnHint("");
+          }}
           onClearMapping={onClearMidiMapping}
           onChangeMode={onChangeMidiMode}
           inputName={midiInputName}
           error={midiError}
+          learnHint={learnHint}
         />
 
         <footer style={{ textAlign: "center", padding: "20px 0 8px" }}>

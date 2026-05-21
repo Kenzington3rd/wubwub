@@ -129,7 +129,11 @@ export default function TheoryPanel({
                   !isLiveKey && liveKeyData?.compatible.includes(item.camelot);
                 let borderColor = "rgba(255,255,255,0.08)";
                 let background = "rgba(255,255,255,0.02)";
-                let color = "#4a5580";
+                // P6 (R16) — neutral-state key text uses text-muted, not
+                // text-dim (#4a5580 → ~2.7:1 vs the card bg, fails WCAG 1.4.3
+                // for small text). Selected / compatible tiers below still
+                // ride their accent colors.
+                let color = "#8892b0";
                 let boxShadow = "none";
                 // A key in any highlighted state (selected / live / compatible)
                 // already carries an accent background; only a plain neutral
@@ -282,6 +286,9 @@ export default function TheoryPanel({
             </div>
             <button
               onClick={() => setTipIdx((i) => (i + 1) % TIPS.length)}
+              // P10 (R16) — reuse the project hover idiom so the button has a
+              // distinct default/hover state, matching the transport pattern.
+              className="wc-btn-hover"
               style={{
                 background: `${PANEL_ACCENT}1a`,
                 border: `1px solid ${PANEL_ACCENT}33`,
