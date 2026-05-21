@@ -1119,9 +1119,8 @@ const Deck = forwardRef(function Deck(
               border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 6,
               padding: "4px 8px",
-              // P7 (R16) — enforce the WCAG 2.5.8 target-size minimum (24×24)
-              // for this compact control without changing font/letter-spacing.
-              minHeight: 24,
+              // Z1 (R23) — all text buttons meet the 38×38 floor.
+              minHeight: 38,
               color: "#8892b0",
               fontSize: 10,
               cursor: "pointer",
@@ -1141,8 +1140,8 @@ const Deck = forwardRef(function Deck(
               border: `1px solid ${color}33`,
               borderRadius: 6,
               padding: "4px 8px",
-              // P7 (R16) — meets the WCAG 2.5.8 target-size minimum (24×24).
-              minHeight: 24,
+              // Z1 (R23) — all text buttons meet the 38×38 floor.
+              minHeight: 38,
               // Disabled label uses text-muted (#8892b0) instead of text-dim
               // (#4a5580 → ~2.7:1 on the deep bg, fails WCAG 1.4.11). The
               // `opacity: 0.6` together with #8892b0 keeps the visual
@@ -1168,8 +1167,8 @@ const Deck = forwardRef(function Deck(
               border: `1px solid ${color}33`,
               borderRadius: 6,
               padding: "4px 8px",
-              // P7 (R16) — meets the WCAG 2.5.8 target-size minimum (24×24).
-              minHeight: 24,
+              // Z1 (R23) — all text buttons meet the 38×38 floor.
+              minHeight: 38,
               // Disabled label uses text-muted (#8892b0) + reduced opacity —
               // never text-dim #4a5580 on the deep bg (fails WCAG 1.4.11).
               color: autoBpmRunning ? color : "#8892b0",
@@ -1193,8 +1192,8 @@ const Deck = forwardRef(function Deck(
               border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 6,
               padding: "4px 6px",
-              // P7 (R16) — meets the WCAG 2.5.8 target-size minimum (24×24).
-              minHeight: 24,
+              // Z1 (R23) — all text buttons meet the 38×38 floor.
+              minHeight: 38,
               // Disabled label uses text-muted + opacity, never text-dim
               // #4a5580 on the deep bg (fails WCAG 1.4.11).
               color: "#8892b0",
@@ -1218,8 +1217,8 @@ const Deck = forwardRef(function Deck(
               border: "1px solid rgba(255,255,255,0.1)",
               borderRadius: 6,
               padding: "4px 6px",
-              // P7 (R16) — meets the WCAG 2.5.8 target-size minimum (24×24).
-              minHeight: 24,
+              // Z1 (R23) — all text buttons meet the 38×38 floor.
+              minHeight: 38,
               color: "#8892b0",
               fontSize: 10,
               cursor: fileName ? "pointer" : "not-allowed",

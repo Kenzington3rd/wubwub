@@ -31,6 +31,9 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
           color: disabled ? "#8892b0" : color,
           borderRadius: 8,
           padding: "4px 10px",
+          // Z1 (R23) — all text buttons meet the 38×38 floor; matches the
+          // sibling cue-chip Jump/Delete buttons on the same row.
+          minHeight: 38,
           fontSize: 10,
           letterSpacing: 1,
           textTransform: "uppercase",

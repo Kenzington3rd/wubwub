@@ -39,9 +39,8 @@ export default function EffectCard({ title, color, settings, onChange, params })
           border: `1px solid ${settings.on ? color : "rgba(255,255,255,0.08)"}`,
           borderRadius: 6,
           padding: "4px 8px",
-          // P8 (R16) — meets the WCAG 2.5.8 target-size minimum (24×24)
-          // without changing the compact ON/OFF visual proportions.
-          minHeight: 24,
+          // Z1 (R23) — all text buttons meet the 38×38 floor.
+          minHeight: 38,
           fontSize: 10,
           letterSpacing: 1,
           textTransform: "uppercase",
