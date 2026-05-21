@@ -74,6 +74,7 @@ wubwub/
 | `C` | Set cue at current position |
 | `1`–`8` | Jump to cue N on focused deck |
 | `M` | Drop a recording cue marker |
+| `,` / `.` | Hold to nudge focused-deck pitch ±4% |
 | `Q W E R A S D F` | Trigger sample pad 1–8 |
 | `←/→` *(waveform focused)* | Seek that waveform ±5 s |
 | `Home/End` *(waveform focused)* | Seek to start / end |

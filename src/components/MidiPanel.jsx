@@ -299,7 +299,7 @@ export default function MidiPanel({
                       role="status"
                       style={{
                         fontSize: 10,
-                        color: "#fbbf24",
+                        color: "#f0c040",
                         padding: "0 8px",
                         lineHeight: 1.4,
                       }}

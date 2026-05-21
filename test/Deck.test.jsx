@@ -760,6 +760,83 @@ describe("Deck — integration tests across many user stories", () => {
     }
   });
 
+  // @us US18 (R18 T3) — Changing the distortion DRIVE knob swaps the
+  // WaveShaper transfer function. Doing that while wet > 0 is the same
+  // class of audible discontinuity the reverb-IR hot-swap had: the curve
+  // changes shape between two consecutive samples, producing a click. The
+  // fix routes the swap through the same duck-swap-restore pattern (debounce
+  // → ramp wet to 0 → swap curve → ramp wet back to user target). This test
+  // pins the contract: after a DRIVE change while distortion is on at a
+  // non-trivial mix, the wet gain is restored to the user's target — NOT
+  // left stranded at 0 (which would silence the distortion forever).
+  it("@us US18: changing distortion DRIVE while wet > 0 doesn't strand wet at 0 (R18 T3)", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 3, sr);
+      await act(async () => {
+        await api.deckRef.current.loadBuffer(buf, "track.mp3");
+      });
+
+      // Turn distortion ON.
+      const distToggle = screen.getByLabelText(/Distortion effect (on|off)/i);
+      await act(async () => fireEvent.click(distToggle));
+
+      // Bump the MIX knob to 0.6 via repeated ArrowUp (default 0.4, step 0.01).
+      // Distortion sits in its own EffectCard; its MIX knob is the second
+      // MIX-labelled slider on the page (after reverb's). Use getAllByRole
+      // and filter by ancestor card title.
+      const knobs = screen.getAllByRole("slider");
+      // Distortion's DRIVE knob has the unique aria-label "DRIVE" — locate
+      // distortion's MIX knob by walking up from DRIVE to the EffectCard's
+      // root div. The card's first child is the toggle button; its sibling
+      // is the knobs container holding MIX + DRIVE.
+      const driveKnob = knobs.find((k) => k.getAttribute("aria-label") === "DRIVE");
+      expect(driveKnob).toBeTruthy();
+      // driveKnob → knob wrapper → knobs row → card root
+      const card = driveKnob.parentElement?.parentElement?.parentElement;
+      expect(card).toBeTruthy();
+      const mixKnob = Array.from(card.querySelectorAll('[role="slider"]')).find(
+        (k) => k.getAttribute("aria-label") === "MIX"
+      );
+      expect(mixKnob).toBeTruthy();
+      // Bump distortion MIX from 0.4 to 0.6 (20 ticks at step 0.01).
+      for (let i = 0; i < 20; i++) {
+        await act(async () => fireEvent.keyDown(mixKnob, { key: "ArrowUp" }));
+      }
+
+      // Locate the WaveShaper's downstream wet GainNode via the audio ctx.
+      const ctx = api.audioCtxRef.current;
+      const shaper = ctx._nodes.find((n) => n.nodeType === "WaveShaperNode");
+      expect(shaper).toBeTruthy();
+      const distortionWet = shaper.connections.find(
+        (n) => n.nodeType === "GainNode"
+      );
+      expect(distortionWet).toBeTruthy();
+      // After ON + mix≈0.6 the wet gain target is ~0.6.
+      expect(distortionWet.gain.value).toBeCloseTo(0.6, 1);
+
+      // Snapshot the curve before, then drive a DRIVE change. The 200 ms
+      // debounce coalesces the spin; advance fake timers to fire it.
+      const curveBefore = shaper.curve;
+      await act(async () => fireEvent.keyDown(driveKnob, { key: "ArrowUp" }));
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      // After the duck-swap-restore: wet must be ramped back to the user's
+      // target (≈ 0.6), NOT stranded at 0. Allow a small tolerance because
+      // setTargetAtTime writes the *target* into .value in the mock.
+      expect(distortionWet.gain.value).toBeGreaterThan(0.5);
+      // The curve was actually swapped — a new Float32Array (or new
+      // reference) is now on the shaper.
+      expect(shaper.curve).not.toBe(curveBefore);
+      expect(shaper.curve).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("@us US24: bass-drop re-entry guard — double-fire does not throw", async () => {
     // Load a buffer via drop so the deck chain is built and BASS DROP enables.
     const { container } = render(<Harness />);

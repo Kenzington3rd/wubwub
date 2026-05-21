@@ -106,7 +106,7 @@ export default function WaveformCanvas({
 
       if (!analyser) {
         ctx2d.clearRect(0, 0, W, H);
-        ctx2d.fillStyle = "rgba(10,14,26,0.85)";
+        ctx2d.fillStyle = "rgba(7,10,20,0.85)";
         ctx2d.fillRect(0, 0, W, H);
         ctx2d.strokeStyle = color + "44";
         ctx2d.lineWidth = 1;
@@ -124,7 +124,7 @@ export default function WaveformCanvas({
       }
       analyser.getByteTimeDomainData(timeData);
 
-      ctx2d.fillStyle = "rgba(10,14,26,0.25)";
+      ctx2d.fillStyle = "rgba(7,10,20,0.25)";
       ctx2d.fillRect(0, 0, W, H);
 
       ctx2d.shadowColor = color;

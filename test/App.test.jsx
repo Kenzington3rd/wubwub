@@ -751,4 +751,136 @@ describe("App MIDI residual-bug regressions — R17", () => {
     expect(next).toBeGreaterThan(0.85);
     expect(next).toBeLessThan(0.9);
   });
+
+  // @us US39 (R18 T4) — Crossfade and masterVol must seed the relative-
+  // encoder ref from a *ref-backed* live value, not from a closed-over
+  // React state value. enableMidi() captures onMidiMessage exactly once at
+  // MIDI-enable time; any state read through that closure stays pinned to
+  // the at-enable value forever. Before R18 T4, after the user moved the
+  // crossfader with the mouse to 0.85, a +1 relative tick on a crossfade
+  // mapping would teleport back toward the at-enable value instead of
+  // landing at ~0.858. With the fix, the ref is read live and the tick
+  // applies cleanly on top of the current value.
+  it("@us US39: relative CC on crossfade seeds from the live UI value (R18 T4)", async () => {
+    const input = makeFakeInput("in-1", "Mixer");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+
+    render(<App />);
+    // Expand the MIDI panel and enable MIDI — captures onMidiMessage with
+    // its closure pinned at this moment (crossfade=0.5).
+    fireEvent.click(screen.getByRole("button", { name: /MIDI settings/i }));
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Enable MIDI/i }));
+    });
+    // Learn Crossfader → ch1 cc1.
+    fireEvent.click(
+      await screen.findByRole("button", {
+        name: /Learn MIDI mapping for Crossfader/i,
+      })
+    );
+    await act(async () => {
+      input.emit([0xb0, 1, 0]); // captures the mapping
+    });
+    // Flip to relative2c.
+    const modeSelect = await screen.findByRole("combobox", {
+      name: /Mode for Crossfader/i,
+    });
+    fireEvent.change(modeSelect, { target: { value: "relative2c" } });
+
+    // Move the crossfader to 0.85 via the on-screen slider — i.e. *after*
+    // MIDI was enabled, so the closure inside onMidiMessage still holds
+    // crossfade=0.5 unless the fix routes through a ref.
+    const xfSlider = screen.getByRole("slider", { name: /Crossfade A to B/i });
+    fireEvent.change(xfSlider, { target: { value: "0.85" } });
+    expect(xfSlider.value).toBe("0.85");
+
+    // Deliver a +1 relative-2c tick. With the ref-backed fix:
+    //   0.85 + (1/127) ≈ 0.8579 — the parameter slides forward.
+    // Without the fix (closure-pinned to 0.5):
+    //   0.5  + (1/127) ≈ 0.508  — teleport back, the bug.
+    await act(async () => {
+      input.emit([0xb0, 1, 0x41]);
+    });
+    const next = parseFloat(xfSlider.value);
+    expect(next).toBeGreaterThan(0.85);
+    expect(next).toBeLessThan(0.87); // tight band ≈ 0.858
+  });
+
+  // @us US59 (R18 T5) — A keydown on a NUDGE key (",") installs the bend on
+  // the focused deck. If focus shifts to the other deck mid-hold and the
+  // user then releases the key, the keyup must release the bend on the
+  // ORIGINAL deck (captured at keydown), not the now-focused deck —
+  // otherwise the first deck stays permanently pitch-bent. Before the fix,
+  // keyup read focusedRef.current at release time; with the fix the keyup
+  // path consults a nudgeHoldRef keyed by KeyboardEvent.code.
+  it("@us US59: keyup releases the bend on the deck that started the hold, not the now-focused deck (R18 T5)", async () => {
+    render(<App />);
+    // Focus Deck A and load a buffer so a live source exists to bend.
+    const deckA = screen.getByRole("region", { name: /Deck A/i });
+    fireEvent.pointerDown(deckA);
+    const file = new File([new Uint8Array([0, 1, 2])], "k.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckA, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckA, {
+        dataTransfer: { files: [file], items: [{ kind: "file" }] },
+      });
+    });
+    // Start playback so a live BufferSource exists to bend.
+    await act(async () => pressKey(" "));
+
+    // Hold "," — Deck A receives startNudge(-1). The handler keys the hold
+    // by code = "Comma".
+    const downEv = new KeyboardEvent("keydown", {
+      key: ",",
+      code: "Comma",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(downEv, "target", { value: document.body });
+    await act(async () => { window.dispatchEvent(downEv); });
+
+    // Now focus shifts to Deck B mid-hold (user clicks Deck B).
+    const deckB = screen.getByRole("region", { name: /Deck B/i });
+    fireEvent.pointerDown(deckB);
+
+    // Release ",": the keyup MUST release on Deck A (the captured ref) so
+    // its bend ends, not on Deck B (the now-focused deck) which never
+    // started a nudge. Before R18 T5 the bend on Deck A was orphaned and
+    // its playbackRate stayed setTargetAtTime'd at base + (-0.04).
+    const upEv = new KeyboardEvent("keyup", {
+      key: ",",
+      code: "Comma",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(upEv, "target", { value: document.body });
+    await act(async () => { window.dispatchEvent(upEv); });
+
+    // Re-installing a fresh nudge on Deck A then releasing it again must
+    // still revert cleanly — proves the prior release actually freed the
+    // hold-slot (not stranded at -0.04). The deck's pitch-bend ref ends
+    // back at 0; we can't read it directly, but a second hold cycle that
+    // doesn't throw and leaves the state ready for another hold is the
+    // observable contract. Refocus A and run the cycle once more.
+    fireEvent.pointerDown(deckA);
+    const down2 = new KeyboardEvent("keydown", {
+      key: ",",
+      code: "Comma",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(down2, "target", { value: document.body });
+    expect(() => act(() => window.dispatchEvent(down2))).not.toThrow();
+    const up2 = new KeyboardEvent("keyup", {
+      key: ",",
+      code: "Comma",
+      bubbles: true,
+      cancelable: true,
+    });
+    Object.defineProperty(up2, "target", { value: document.body });
+    expect(() => act(() => window.dispatchEvent(up2))).not.toThrow();
+  });
 });

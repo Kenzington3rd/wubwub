@@ -125,6 +125,12 @@ const Deck = forwardRef(function Deck(
   const bassDropTimeoutRef = useRef(null);
   const wobbleNodesRef = useRef(null);
   const reverbSizeDebounceRef = useRef(null);
+  // R18 T3 — debounce for the distortion DRIVE curve hot-swap. Mirrors the
+  // reverb-size debounce: a rapid knob spin would otherwise rebuild the
+  // WaveShaper transfer function on every onChange tick and produce an
+  // audible step whenever wet > 0. The debounce coalesces fast spins into
+  // one swap, and the swap itself uses the duck-swap-restore pattern.
+  const distortionDriveDebounceRef = useRef(null);
   const filterFreqRef = useRef(20000);
   // R17 Q2 — mirror of `volume` for the MIDI relative-encoder getter so the
   // App can always read the *current* deck volume at CC-dispatch time without
@@ -179,13 +185,20 @@ const Deck = forwardRef(function Deck(
   }, [volume, crossfadeGain, audioCtxRef, chainTick]);
 
   // ─── EQ ───
+  // R18 T1 — direct `.value =` writes on a live AudioParam produce audible
+  // zipper noise on rapid knob turns (each write is a step in the param's
+  // automation curve). Mirror the LPF-sweep / master-volume convention and
+  // schedule a short-tau setTargetAtTime instead. 0.02 s matches the
+  // rampGain default for gain params and keeps the response visually instant
+  // while smoothing the inter-sample interpolation.
   useEffect(() => {
     const chain = chainRef.current;
-    if (!chain) return;
-    chain.eqLow.gain.value = eq.low;
-    chain.eqMid.gain.value = eq.mid;
-    chain.eqHigh.gain.value = eq.high;
-  }, [eq, chainTick]);
+    const ctx = audioCtxRef.current;
+    if (!chain || !ctx) return;
+    chain.eqLow.gain.setTargetAtTime(eq.low, ctx.currentTime, 0.02);
+    chain.eqMid.gain.setTargetAtTime(eq.mid, ctx.currentTime, 0.02);
+    chain.eqHigh.gain.setTargetAtTime(eq.high, ctx.currentTime, 0.02);
+  }, [eq, audioCtxRef, chainTick]);
 
   // ─── Filter sweep ───
   useEffect(() => {
@@ -250,18 +263,50 @@ const Deck = forwardRef(function Deck(
     rampGain(chain.delayFb.gain, on ? clamp(feedback, 0, 0.9) : 0, ctx, 0.05);
   }, [effects.delay.on, effects.delay.mix, effects.delay.time, effects.delay.feedback, audioCtxRef, chainTick]);
 
-  // ─── Effects: distortion ───
+  // ─── Effects: distortion mix/on ───
+  // Split from the drive-curve swap below: mix/on changes ramp the wet/dry
+  // gain pair the usual way; the drive change goes through a duck-swap-
+  // restore (see below) so a curve hot-swap mid-signal is inaudible.
   useEffect(() => {
     const chain = chainRef.current;
     const ctx = audioCtxRef.current;
     if (!chain || !ctx) return;
-    const { on, mix, drive } = effects.distortion;
+    const { on, mix } = effects.distortion;
     const targetWet = on ? mix : 0;
     const targetDry = on ? 1 - mix : 1;
     rampGain(chain.distortionWet.gain, targetWet, ctx);
     rampGain(chain.distortionDry.gain, targetDry, ctx);
-    chain.distortion.curve = buildDistortionCurve(drive);
-  }, [effects.distortion.on, effects.distortion.mix, effects.distortion.drive, audioCtxRef, chainTick]);
+  }, [effects.distortion.on, effects.distortion.mix, audioCtxRef, chainTick]);
+
+  // ─── Effects: distortion drive (rebuild curve, debounced) ───
+  // R18 T3 — instantly assigning `chain.distortion.curve = new Float32Array`
+  // while wet > 0 produces an audible discontinuity at the swap sample (the
+  // WaveShaper transfer function changes shape between two consecutive input
+  // samples). Mirror the reverb-size pattern: when wet is non-trivial, ramp
+  // wet to 0, swap the curve, then ramp wet back to the user's target. When
+  // wet is already ~0 the swap is silent and we skip the duck. The 200 ms
+  // debounce coalesces rapid knob spins into a single swap and gives the
+  // ~3 ms ramps plenty of headroom on either side.
+  useEffect(() => {
+    const chain = chainRef.current;
+    const ctx = audioCtxRef.current;
+    if (!chain || !ctx) return;
+    clearTimeout(distortionDriveDebounceRef.current);
+    distortionDriveDebounceRef.current = setTimeout(() => {
+      const wetParam = chain.distortionWet.gain;
+      const { on, mix, drive } = effects.distortion;
+      const targetWet = on ? mix : 0;
+      const liveWet = wetParam.value;
+      if (liveWet > 0.001) {
+        rampGain(wetParam, 0, ctx, 0.003);
+        chain.distortion.curve = buildDistortionCurve(drive);
+        rampGain(wetParam, targetWet, ctx, 0.003);
+      } else {
+        chain.distortion.curve = buildDistortionCurve(drive);
+      }
+    }, 200);
+    return () => clearTimeout(distortionDriveDebounceRef.current);
+  }, [effects.distortion.drive, effects.distortion.on, effects.distortion.mix, audioCtxRef, chainTick]);
 
   // ─── Source lifecycle ───
   const stopAndDisconnectSource = useCallback(() => {
@@ -513,12 +558,28 @@ const Deck = forwardRef(function Deck(
     if (sourceRef.current && isPlayingRef.current) {
       // Keep any held pitch-bend layered on top of the new base speed.
       const effRate = clamp(speed + bendRef.current, 0.5, 2.0);
-      sourceRef.current.playbackRate.value = effRate;
       const c = audioCtxRef.current;
-      // A3 — anchor against the effective rate so the position interval (also
-      // multiplying by effRate) stays consistent across a speed change made
-      // while a NUDGE bend is held.
-      if (c) startTimeRef.current = c.currentTime - currentTimeRef.current / effRate;
+      // R18 T2 — a direct `.value =` write on the live source's playbackRate
+      // produces audible zipper noise under rapid slider drags. Use the same
+      // setTargetAtTime tau applyBend uses for the same param (0.015 s) so
+      // both pitch-change paths share a single smoothing constant. The
+      // re-anchor below must still treat the *target* effRate as the rate the
+      // source is moving toward — the position interval also uses effRate —
+      // otherwise the displayed time would lag the audible pitch ramp.
+      if (c) {
+        sourceRef.current.playbackRate.setTargetAtTime(
+          effRate,
+          c.currentTime,
+          0.015
+        );
+        // A3 — anchor against the effective rate so the position interval
+        // (also multiplying by effRate) stays consistent across a speed
+        // change made while a NUDGE bend is held.
+        startTimeRef.current = c.currentTime - currentTimeRef.current / effRate;
+      } else {
+        // No ctx (shouldn't happen mid-playback, but be defensive).
+        sourceRef.current.playbackRate.value = effRate;
+      }
     }
   }, [speed, audioCtxRef]);
 
@@ -792,6 +853,7 @@ const Deck = forwardRef(function Deck(
       clearInterval(timeIntervalRef.current);
       clearTimeout(bassDropTimeoutRef.current);
       clearTimeout(reverbSizeDebounceRef.current);
+      clearTimeout(distortionDriveDebounceRef.current);
       if (wobbleNodesRef.current) {
         try { wobbleNodesRef.current.osc.stop(); } catch {}
         try { wobbleNodesRef.current.depthGain.disconnect(); } catch {}
@@ -1081,7 +1143,11 @@ const Deck = forwardRef(function Deck(
               </span>
             )}
             {bpmConfidence != null && (
-              <span style={{ fontSize: 9, color }} aria-label="BPM detection confidence">
+              // R18 T7 — no aria-label on a non-interactive <span>. The
+              // confidence percentage is already announced via the SR-only
+              // role="status" live region below; carrying an aria-label on
+              // a static span just bloats the AT tree without adding info.
+              <span style={{ fontSize: 9, color }}>
                 {Math.round(bpmConfidence * 100)}%
               </span>
             )}

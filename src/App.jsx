@@ -131,6 +131,16 @@ export default function App() {
   // Monotonic id source for crate entries.
   const crateIdRef = useRef(0);
   const masterVolRef = useRef(0.85);
+  // R18 T4 — crossfade mirror ref for the MIDI relative-encoder reseed path.
+  // `enableMidi(onMidiMessage)` captures its callback once and never
+  // refreshes; subsequent UI-state changes to `crossfade` don't update the
+  // closure the handler holds. Without a ref, the relative-encoder path
+  // reads a stale `crossfade` and teleports the parameter back toward the
+  // at-enable value on the first twist after a mouse drag. The deck targets
+  // already route through `deckRef.current?.getX?.()` (which read live refs
+  // inside the Deck component), so this fixes the crossfade/masterVol gap.
+  // masterVolRef already exists above; keep it in sync the same way.
+  const crossfadeRef = useRef(0.5);
   const workletLoadingRef = useRef(null);
   const recordTogglingRef = useRef(false);
   // Stable handle to the latest onDropMarker so the keydown handler (deps: [])
@@ -143,6 +153,11 @@ export default function App() {
 
   // Keep masterVolRef in sync so ensureMasterCtx doesn't need masterVol in deps.
   useEffect(() => { masterVolRef.current = masterVol; }, [masterVol]);
+  // R18 T4 — mirror crossfade into a ref so the MIDI relative-encoder reseed
+  // sees live values across any path that mutates `crossfade` (mouse drag,
+  // keyboard, snap, settings import). Without this the closure inside
+  // onMidiMessage stays pinned to the at-enable value.
+  useEffect(() => { crossfadeRef.current = crossfade; }, [crossfade]);
 
   const isMobile = useMatchMedia("(max-width: 720px)");
 
@@ -344,6 +359,28 @@ export default function App() {
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
+    // R18 T5 — track active NUDGE holds by KeyboardEvent.code so a keyup or
+    // window-blur can release the bend on the deck the keydown installed it
+    // on — independent of which deck has focus at release time. Keyed by
+    // `code` (not `key`) because the user might press "," and "." together
+    // and we want each release to release only its own deck. Each entry is
+    // `{ deckRef, dir }`; deckRef is captured at keydown so a mid-hold
+    // focus change can't strand the bend on the original deck.
+    const nudgeHoldRef = { current: {} };
+    const releaseHold = (code) => {
+      const hold = nudgeHoldRef.current[code];
+      if (!hold) return;
+      hold.deckRef.current?.endNudge?.();
+      delete nudgeHoldRef.current[code];
+    };
+    const releaseAllHolds = () => {
+      for (const code of Object.keys(nudgeHoldRef.current)) {
+        const hold = nudgeHoldRef.current[code];
+        try { hold.deckRef.current?.endNudge?.(); } catch {}
+      }
+      nudgeHoldRef.current = {};
+    };
+
     const onKey = (e) => {
       const t = e.target;
       if (!t) return;
@@ -435,11 +472,22 @@ export default function App() {
       // bend semantics: keydown applies the bend, keyup releases. `e.repeat`
       // tail-clicks are ignored so the bend isn't re-applied each tick while
       // held. Deck-scoped — no-op when no deck is focused.
+      //
+      // R18 T5 — capture the active deckRef into nudgeHoldRef[e.code] at
+      // keydown. The keyup path releases the bend on the *captured* deck,
+      // NOT focusedRef.current — otherwise focusing the other deck mid-hold
+      // strands the bend on the original deck forever (its endNudge would
+      // never run). Keyed by `code` so "," and "." can be held together.
       if ((e.key === "," || e.key === ".") && !e.ctrlKey && !e.metaKey) {
         if (!ownRef) return;
         e.preventDefault();
         if (e.repeat) return;
+        // If this code was already held (shouldn't happen with e.repeat
+        // gated), defensively release the prior hold first so we never
+        // accumulate stale entries.
+        if (nudgeHoldRef.current[e.code]) releaseHold(e.code);
         const dir = e.key === "," ? -1 : 1;
+        nudgeHoldRef.current[e.code] = { deckRef: ownRef, dir };
         ownRef.current?.startNudge?.(dir);
         return;
       }
@@ -452,19 +500,30 @@ export default function App() {
           return;
         }
       }
-      // Release any held nudge — bound to either deck, since a keydown on the
-      // focused deck installs the bend on that deck's ref.
+      // R18 T5 — release on the deck captured at keydown, not the deck that
+      // happens to be focused now. Without this, holding NUDGE on Deck A
+      // then clicking Deck B mid-hold and releasing left Deck A pitch-bent.
       if (e.key === "," || e.key === ".") {
-        const focused = focusedRef.current;
-        const ownRef = focused === "B" ? deckBRef : focused === "A" ? deckARef : null;
-        ownRef?.current?.endNudge?.();
+        releaseHold(e.code);
       }
+    };
+    // R18 T6 — window blur (Alt+Tab away, system focus loss, etc.) is the
+    // other path where no keyup is ever delivered. Without this, holding
+    // NUDGE then Alt+Tab away would strand the bend at -0.04 / +0.04
+    // forever — the bendRef on the Deck would never reach zero, the
+    // playbackRate would stay at the bent value (setTargetAtTime'd into
+    // place), and the deck would play permanently off-pitch. Release every
+    // held nudge on blur and clear the map.
+    const onBlur = () => {
+      releaseAllHolds();
     };
     window.addEventListener("keydown", onKey);
     window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onBlur);
     return () => {
       window.removeEventListener("keydown", onKey);
       window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onBlur);
     };
   }, []);
 
@@ -635,12 +694,21 @@ export default function App() {
   // teleport the parameter back to the relative ref's last value (often the
   // default — e.g. speed 1.0). Falls back to the per-target default if a
   // deck ref isn't yet wired (no buffer loaded, etc.).
+  // R18 T4 — read every target through a ref. enableMidi captures
+  // onMidiMessage exactly once, so any closure here over React state would
+  // see only the value that existed at MIDI-enable time. Deck targets
+  // already used ref-backed getters; crossfade and masterVol used to read
+  // closed-over state and would teleport the parameter back to the
+  // at-enable value on the first relative twist after a UI-side change.
+  // Routing both through refs (mirrored on every UI mutation) closes that
+  // gap. The deps are empty so the callback identity is stable forever —
+  // matches the contract enableMidi expects.
   const liveValueForTarget = useCallback((targetId) => {
     switch (targetId) {
       case "crossfade":
-        return crossfade;
+        return crossfadeRef.current;
       case "masterVol":
-        return masterVol;
+        return masterVolRef.current;
       case "deckA.volume":
         return deckARef.current?.getVolume?.() ?? defaultForTarget(targetId);
       case "deckA.filterFreq":
@@ -660,7 +728,7 @@ export default function App() {
       default:
         return defaultForTarget(targetId);
     }
-  }, [crossfade, masterVol]);
+  }, []);
 
   const applyMidiCc = useCallback(
     (targetId, mapping, ccValue) => {
