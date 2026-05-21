@@ -297,6 +297,7 @@ export default function TheoryPanel({
                 border: `1px solid ${PANEL_ACCENT}33`,
                 borderRadius: 8,
                 padding: "6px 16px",
+                minHeight: 38,
                 color: PANEL_ACCENT,
                 fontSize: 11,
                 cursor: "pointer",

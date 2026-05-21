@@ -157,6 +157,7 @@ export default function MidiPanel({
                   color: enabled ? "#60a5fa" : "#8892b0",
                   borderRadius: 6,
                   padding: "4px 10px",
+                  minHeight: 38,
                   fontSize: 11,
                   cursor: "pointer",
                   fontFamily: "'Exo 2', sans-serif",

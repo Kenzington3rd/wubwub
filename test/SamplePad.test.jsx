@@ -3,10 +3,13 @@ import { useRef, useEffect } from "react";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import SamplePad from "../src/components/SamplePad.jsx";
 
-function Harness({ onMount, onRefs }) {
+function Harness({ onMount, onRefs, tapReady = true }) {
   const audioCtxRef = useRef(new AudioContext());
   const outputNodeRef = useRef(audioCtxRef.current.createGain());
-  const recordTapRef = useRef(audioCtxRef.current.createGain());
+  // A6 — start with no tap when tapReady=false so the test can fill the ref
+  // later, simulating the master bus coming online after a pad's gain node
+  // has already been lazily built. Mirrors the Looper deferred-attach test.
+  const recordTapRef = useRef(tapReady ? audioCtxRef.current.createGain() : null);
   const ref = useRef(null);
   useEffect(() => { if (onMount) onMount(ref); }, []);
   if (onRefs) onRefs({ audioCtxRef, outputNodeRef, recordTapRef });
@@ -120,6 +123,67 @@ describe("SamplePad — US31, US32, US33", () => {
     await waitFor(() => {
       expect(screen.queryByRole("alert")).not.toBeInTheDocument();
     });
+  });
+
+  it("@us US61 (A6): a pad whose gain was built before the record tap existed still reaches the tap once it comes online", async () => {
+    // A6 — ensureGain caches a pad's GainNode the first time it's triggered.
+    // If recordTapRef.current was null at that moment, the tap connection was
+    // silently skipped. The cached gain must NOT stay orphaned: a later
+    // trigger must reconnect to the tap once it exists, or "Clean" recording
+    // will miss sample-pad audio forever after the pad is loaded.
+    let api;
+    let refs;
+    render(
+      <Harness
+        tapReady={false}
+        onMount={(r) => { api = r; }}
+        onRefs={(r) => { refs = r; }}
+      />
+    );
+    // Load a sample into pad 1 (Q).
+    const padDiv = screen.getByText("Q").closest("div").parentElement;
+    const fakeAudio = new File([new Uint8Array([0, 1, 2])], "kick.wav", {
+      type: "audio/wav",
+    });
+    await act(async () => {
+      fireEvent.drop(padDiv, {
+        dataTransfer: { files: [fakeAudio], items: [{ kind: "file" }] },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getAllByText("+ Load").length).toBe(7);
+    });
+
+    // First trigger — record tap is NOT ready yet. The pad gain is created
+    // and wired to the master output, but NOT to the (still-null) tap.
+    await act(async () => {
+      api.current.triggerByKey("q");
+    });
+    const ctx = refs.audioCtxRef.current;
+    let src = ctx._lastStartedSource;
+    const padGain = src.connections[0];
+    expect(padGain).toBeTruthy();
+    expect(padGain.connections).toContain(refs.outputNodeRef.current);
+    // The tap was null when the gain was built — no stale connection.
+    expect(refs.recordTapRef.current).toBeNull();
+    expect(padGain.connections).toHaveLength(1);
+
+    // Now the master bus comes online and the record tap is built. Filling
+    // the ref simulates the App's late master-bus setup — exactly the "tap
+    // built later" sequence A6 covers.
+    refs.recordTapRef.current = ctx.createGain();
+
+    // Second trigger — ensureGain finds the cached gain and the now-ready
+    // tap, and attaches the tap connection on this call.
+    await act(async () => {
+      api.current.triggerByKey("q");
+    });
+    src = ctx._lastStartedSource;
+    // The pad gain is the SAME cached node (still has the output connection),
+    // but it has now picked up the deferred tap connection too.
+    expect(src.connections[0]).toBe(padGain);
+    expect(padGain.connections).toContain(refs.outputNodeRef.current);
+    expect(padGain.connections).toContain(refs.recordTapRef.current);
   });
 
   it("@us US61: a triggered pad fans its output into the pre-limiter record tap", async () => {

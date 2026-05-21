@@ -157,6 +157,79 @@ describe("buildCueSheet — US60 (W1.3)", () => {
     expect(text).toContain("WAVECRAFT MIX CUE SHEET");
     expect(text).toContain("Markers: 0");
   });
+
+  it("@us US60: an empty marker list emits no MM:SS — Marker N lines", () => {
+    // The header is fine, but a stray "Marker 0" line would confuse a parser.
+    // The body after the header must contain no marker lines at all.
+    const text = buildCueSheet([], "mix.webm");
+    expect(text).not.toMatch(/\d{2}:\d{2} — Marker/);
+  });
+
+  it("@us US60: a single marker at t=0 renders as 00:00 — Marker 1", () => {
+    const text = buildCueSheet([{ elapsedMs: 0 }], "mix.webm");
+    expect(text).toContain("00:00 — Marker 1");
+    // And it carries the trailing newline contract so the file ends cleanly.
+    expect(text.endsWith("\n")).toBe(true);
+  });
+
+  it("@us US60: minute-crossover boundary — 59.999 s stays 00:59, 60.000 s becomes 01:00", () => {
+    // The minute crossover is exclusive at 60_000 ms: 59_999 floors to 59 s
+    // (still 00:59), but exactly 60_000 ms rolls to 01:00. A stale rounding
+    // bug (round-vs-floor) would surface here as a "01:00 — Marker 1" for
+    // the 59_999 case.
+    const text = buildCueSheet(
+      [{ elapsedMs: 0 }, { elapsedMs: 59_999 }, { elapsedMs: 60_000 }],
+      "mix.webm"
+    );
+    expect(text).toContain("00:00 — Marker 1");
+    expect(text).toContain("00:59 — Marker 2");
+    expect(text).toContain("01:00 — Marker 3");
+  });
+
+  it("@us US60: fractional seconds floor toward 0 — 999 ms is still 00:00, 1000 ms is 00:01", () => {
+    // Sub-second drift inside the same wall-clock second must not show up as
+    // the next second. Math.floor(ms/1000) is the contract; a Math.round bug
+    // would flip 500–999 ms into the next second.
+    const text = buildCueSheet(
+      [{ elapsedMs: 500 }, { elapsedMs: 999 }, { elapsedMs: 1000 }],
+      "mix.webm"
+    );
+    expect(text).toContain("00:00 — Marker 1");
+    expect(text).toContain("00:00 — Marker 2");
+    expect(text).toContain("00:01 — Marker 3");
+  });
+
+  it("@us US60: hours don't break formatting — a marker past 60 minutes still renders MM:SS without truncation", () => {
+    // The format is MM:SS with no hour field; very long mixes (over an hour)
+    // simply roll past 60 in the minute slot. The minute field is NOT zero-
+    // padded beyond two digits for the >60-min case, so a 3-hour marker
+    // legitimately reads "180:00" — verify the formatter doesn't overflow,
+    // truncate, or insert an unexpected hour separator.
+    const threeHours = 3 * 60 * 60 * 1000; // 10_800_000 ms
+    const text = buildCueSheet(
+      [{ elapsedMs: threeHours }, { elapsedMs: threeHours + 7_000 }],
+      "long-mix.webm"
+    );
+    expect(text).toContain("180:00 — Marker 1");
+    expect(text).toContain("180:07 — Marker 2");
+    // No hour separator slipped into the marker lines themselves — extract
+    // just the lines that name a marker and check those (the header's
+    // "Exported:" timestamp legitimately contains H:MM:SS wall-clock).
+    const markerLines = text.split("\n").filter((l) => l.includes(" — Marker "));
+    for (const l of markerLines) {
+      expect(l).not.toMatch(/\d+:\d{2}:\d{2}/);
+    }
+  });
+
+  it("@us US60: negative elapsedMs (clock skew defensive case) clamps to 00:00", () => {
+    // The recorder shouldn't emit a negative marker, but the formatter is
+    // the last line of defense — a Math.max(0, …) inside fmtCueTime keeps
+    // a bad input from rendering as "-1:-1" or NaN.
+    const text = buildCueSheet([{ elapsedMs: -1 }, { elapsedMs: -5_000 }], "mix.webm");
+    expect(text).toContain("00:00 — Marker 1");
+    expect(text).toContain("00:00 — Marker 2");
+    expect(text).not.toMatch(/-\d/);
+  });
 });
 
 describe("downloadBlob — US37", () => {
