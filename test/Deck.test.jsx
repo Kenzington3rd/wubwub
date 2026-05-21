@@ -867,4 +867,194 @@ describe("Deck — integration tests across many user stories", () => {
       });
     }).not.toThrow();
   });
+
+  // @us US6 (R18 T1) — turning an EQ knob must schedule through setTargetAtTime
+  // on the BiquadFilter's gain AudioParam, never a direct `.value =` write. A
+  // direct write is one step in the param's automation curve and produces
+  // audible zipper noise under a fast spin. The mock records every scheduling
+  // call into `scheduledValues`, so the test asserts the last recorded entry
+  // is a `setTarget` with the new knob value.
+  it("@us US6: EQ knob changes schedule via setTargetAtTime (R18 T1)", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+    const ctx = api.audioCtxRef.current;
+    // eqLow is the first BiquadFilter in the deck chain (chain.js order:
+    // eqLow lowshelf, eqMid peaking, eqHigh highshelf, filter lowpass).
+    const lowShelf = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowshelf"
+    );
+    expect(lowShelf).toBeTruthy();
+
+    // Spin the LOW knob via the keyboard slider contract (step 1 dB per arrow).
+    const knobs = screen.getAllByRole("slider");
+    const lowKnob = knobs.find((k) => k.getAttribute("aria-label") === "LOW");
+    expect(lowKnob).toBeTruthy();
+    await act(async () => fireEvent.keyDown(lowKnob, { key: "ArrowUp" }));
+
+    // The most-recent scheduling entry on eqLow.gain must be a setTarget,
+    // NOT a direct value write (which the mock would not record).
+    const last = lowShelf.gain.scheduledValues.at(-1);
+    expect(last).toBeTruthy();
+    expect(last.type).toBe("setTarget");
+  });
+
+  // @us US59 (R18 T2) — the speed slider drives a live BufferSource's
+  // playbackRate. A direct `.value =` write would zipper under a rapid drag.
+  // The fix routes the change through setTargetAtTime (tau matches the bend
+  // smoothing) so both pitch-change paths share one constant.
+  it("@us US59: speed slider schedules playbackRate via setTargetAtTime (R18 T2)", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+
+    const src = api.audioCtxRef.current._lastStartedSource;
+    expect(src).toBeTruthy();
+    // Snapshot the schedule queue length so we only look at the entry
+    // produced by the upcoming speed change.
+    const before = src.playbackRate.scheduledValues.length;
+
+    // Push the speed via the imperative setter — it routes through the same
+    // useEffect the slider does.
+    await act(async () => { api.deckRef.current.setSpeed(1.2); });
+
+    const after = src.playbackRate.scheduledValues.slice(before);
+    // At least one new entry — and it must be a setTarget, not a direct write.
+    expect(after.length).toBeGreaterThan(0);
+    expect(after.at(-1).type).toBe("setTarget");
+  });
+
+  // @us US18 (V1 R19) — the reverb-size duck-swap-restore race. The prior fix
+  // anchored both setTargetAtTime calls at ctx.currentTime so the restore
+  // ramp replaced the duck ramp instantly; the convolver still saw a non-zero
+  // input across the buffer swap. The fix pins wet to 0 with setValueAtTime
+  // before the swap, then ramps wet back. This test asserts the recorded
+  // schedule contains a setValueAtTime(0, …) entry BEFORE the ramp-back's
+  // setTargetAtTime — proof the duck actually lands.
+  it("@us US18: reverb-size swap pins wet to 0 via setValueAtTime before the IR swap (V1 R19)", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 3, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+      // Turn reverb on with a non-zero mix so wet > 0 before the swap.
+      const reverbToggle = screen.getByLabelText(/Reverb effect (on|off)/i);
+      await act(async () => fireEvent.click(reverbToggle));
+      // Default mix is 0.3 — already > 0.001 → triggers the pin-and-restore path.
+
+      const ctx = api.audioCtxRef.current;
+      const conv = ctx._nodes.find((n) => n.nodeType === "ConvolverNode");
+      const reverbWet = conv.connections.find((n) => n.nodeType === "GainNode");
+      // Snapshot the schedule queue so we only inspect entries the size swap adds.
+      const before = reverbWet.gain.scheduledValues.length;
+
+      // Spin SIZE — fires the 200 ms debounce path.
+      const knobs = screen.getAllByRole("slider");
+      const sizeKnob = knobs.find((k) => k.getAttribute("aria-label") === "SIZE");
+      await act(async () => fireEvent.keyDown(sizeKnob, { key: "ArrowUp" }));
+      await act(async () => { vi.advanceTimersByTime(250); });
+
+      const after = reverbWet.gain.scheduledValues.slice(before);
+      // The duck-pin entry: setValueAtTime(0, …) lands BEFORE the ramp-back.
+      const setZeroIdx = after.findIndex(
+        (e) => e.type === "setValue" && e.value === 0
+      );
+      const rampBackIdx = after.findIndex(
+        (e) => e.type === "setTarget" && e.target > 0
+      );
+      expect(setZeroIdx).toBeGreaterThanOrEqual(0);
+      expect(rampBackIdx).toBeGreaterThan(setZeroIdx);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // @us US6 (V5 R19) — user moves an EQ knob during a running bass drop. The
+  // drop owns the eqLow schedule (multi-leg linearRamp). Without the fix the
+  // user's setTargetAtTime queues behind the drop and the knob appears to do
+  // nothing until t3. The fix cancel-and-holds first so the user's value lands
+  // immediately. The schedule queue must contain a `cancelAndHold` entry
+  // recorded BEFORE the user's setTargetAtTime.
+  it("@us US6: EQ change during a bass drop cancel-and-holds the schedule (V5 R19)", async () => {
+    let api;
+    const { container } = render(<Harness onMount={(a) => { api = a; }} />);
+    // Load a buffer so the drop can fire.
+    const deckDiv = container.querySelector('[role="region"]');
+    const fakeAudio = new File([new Uint8Array([0, 1, 2])], "track.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckDiv, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckDiv, {
+        dataTransfer: { files: [fakeAudio], items: [{ kind: "file" }] },
+      });
+    });
+
+    const bassDrop = await waitFor(() => {
+      const btn = screen.getByRole("button", { name: /BASS DROP/i });
+      expect(btn).not.toBeDisabled();
+      return btn;
+    });
+    await act(async () => fireEvent.click(bassDrop));
+
+    const ctx = api.audioCtxRef.current;
+    const lowShelf = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowshelf"
+    );
+    // Snapshot the schedule length so we only inspect entries the user EQ
+    // change adds (the drop's ramps are already queued before this point).
+    const before = lowShelf.gain.scheduledValues.length;
+
+    // User moves LOW while the drop is still running.
+    const knobs = screen.getAllByRole("slider");
+    const lowKnob = knobs.find((k) => k.getAttribute("aria-label") === "LOW");
+    await act(async () => fireEvent.keyDown(lowKnob, { key: "ArrowUp" }));
+
+    const after = lowShelf.gain.scheduledValues.slice(before);
+    // cancelAndHoldAtTime (or its fallback cancelScheduledValues + setValueAtTime)
+    // lands BEFORE the user's setTargetAtTime so the user value wins now.
+    const cahIdx = after.findIndex(
+      (e) => e.type === "cancelAndHold" || e.type === "cancel"
+    );
+    const setTargetIdx = after.findIndex((e) => e.type === "setTarget");
+    expect(cahIdx).toBeGreaterThanOrEqual(0);
+    expect(setTargetIdx).toBeGreaterThan(cahIdx);
+  });
+
+  // @us US24 (V4 R19) — the BASS DROP button must announce its engaged state.
+  // While the drop is active the label flips ("DROPPING") and the button gets
+  // aria-pressed=true so screen readers know it's currently engaged. The
+  // button also has type="button" so wrapping it in a form would never submit.
+  it("@us US24: BASS DROP button carries aria-pressed + type=button (V4 R19)", async () => {
+    const { container } = render(<Harness />);
+    const deckDiv = container.querySelector('[role="region"]');
+    const fakeAudio = new File([new Uint8Array([0, 1, 2])], "track.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.dragOver(deckDiv, { dataTransfer: { items: [{ kind: "file" }] } });
+      fireEvent.drop(deckDiv, {
+        dataTransfer: { files: [fakeAudio], items: [{ kind: "file" }] },
+      });
+    });
+    const bassDrop = await waitFor(() => {
+      const btn = screen.getByRole("button", { name: /BASS DROP/i });
+      expect(btn).not.toBeDisabled();
+      return btn;
+    });
+    expect(bassDrop).toHaveAttribute("type", "button");
+    expect(bassDrop).toHaveAttribute("aria-pressed", "false");
+    await act(async () => fireEvent.click(bassDrop));
+    // After firing, the button is engaged → aria-pressed=true.
+    expect(bassDrop).toHaveAttribute("aria-pressed", "true");
+  });
 });

@@ -74,7 +74,13 @@ describe("MidiPanel — US39 (Web MIDI supported)", () => {
     fireEvent.click(screen.getByRole("button", { name: /^MIDI/i }));
     const enableBtn = screen.getByRole("button", { name: /Enable MIDI/i });
     expect(enableBtn).toBeInTheDocument();
-    expect(enableBtn).toHaveAttribute("aria-pressed", "false");
+    // V2 (R19) — the toggle's accessible state is carried by its CHANGING
+    // label ("Enable MIDI" → "Disable MIDI"), not aria-pressed. The two were
+    // contradictory: aria-pressed=true on a "Disable MIDI" label reads as
+    // "this toggle is currently on" while the label is an action verb.
+    expect(enableBtn).not.toHaveAttribute("aria-pressed");
+    // type="button" so wrapping in a form would never accidentally submit.
+    expect(enableBtn).toHaveAttribute("type", "button");
   });
 });
 

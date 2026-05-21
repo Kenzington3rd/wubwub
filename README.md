@@ -48,6 +48,7 @@ wubwub/
 │   ├── data.js                     # Camelot wheel, genre BPMs, presets, themes
 │   ├── settings.js                 # versioned settings export / import
 │   ├── audio/                      # chain, effects, crossfade, BPM, key, recorder
+│   ├── hooks/                      # useMatchMedia
 │   ├── midi/                       # MIDI controller mapping + Learn mode
 │   ├── components/                 # Deck, Crossfader, MasterBus, Looper, etc.
 │   ├── fonts/                      # .woff2 files + injectFonts()

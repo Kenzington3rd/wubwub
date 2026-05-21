@@ -867,6 +867,10 @@ export default function App() {
       delete next[targetId];
       return next;
     });
+    // V6 (R19) — also clear any stale learn hint. Without this, if the user
+    // is mid-learn on a different target (hint shown) and clicks Clear on a
+    // separate mapping, the hint persists and reads as the wrong context.
+    setLearnHint("");
   };
 
   // Per-mapping CC mode change ("absolute" / "relative2c" / "signedMag").
@@ -950,6 +954,12 @@ export default function App() {
   // unknown / malformed fields, so this never throws on bad input.
   const onImportSettings = useCallback((config) => {
     if (!config) return;
+    // V6 (R19) — cancel any in-flight learn before the mappings are replaced.
+    // Otherwise the imported mappings overwrite midiMappings while learnTarget
+    // is still armed on the old (now-gone) target, so the next incoming CC
+    // would write a fresh mapping for a target the user no longer expects.
+    setLearnTarget(null);
+    setLearnHint("");
     if (config.deckAColor) setDeckAColor(config.deckAColor);
     if (config.deckBColor) setDeckBColor(config.deckBColor);
     if (config.crossfadeCurve) setCrossfadeCurve(config.crossfadeCurve);

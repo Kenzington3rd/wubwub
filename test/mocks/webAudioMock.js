@@ -44,6 +44,14 @@ class MockAudioParam {
     this.scheduledValues.push({ type: "cancel", time: t });
     return this;
   }
+  cancelAndHoldAtTime(t) {
+    // V5 (R19) — newer Web Audio spec. The engine freezes whatever value the
+    // existing automation is producing at `t`, then drops every later event.
+    // Mock just records the call (the existing `.value` is already a final-
+    // state snapshot for inspection); tests assert on the recorded entry.
+    this.scheduledValues.push({ type: "cancelAndHold", time: t });
+    return this;
+  }
 }
 
 class MockAudioNode {

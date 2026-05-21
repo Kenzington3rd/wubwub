@@ -132,6 +132,18 @@ const Deck = forwardRef(function Deck(
   // one swap, and the swap itself uses the duck-swap-restore pattern.
   const distortionDriveDebounceRef = useRef(null);
   const filterFreqRef = useRef(20000);
+  // V5 (R19) — mirror the EQ knob values into refs so the bass-drop's t3
+  // recovery endpoint reads the user's CURRENT value (not the closure value
+  // captured when triggerBassDrop was called). Without these refs, moving an
+  // EQ knob during a running drop is "snapped back" to the old value the
+  // moment the drop's recovery ramp lands. The mirror useEffect below also
+  // breaks the closed-loop: when a drop is running, the EQ/filter effects
+  // cancel the live schedule before re-applying setTargetAtTime so the user
+  // change takes effect immediately while the bass-drop schedule still owns
+  // the recovery point.
+  const eqLowRef = useRef(0);
+  const eqMidRef = useRef(0);
+  const eqHighRef = useRef(0);
   // R17 Q2 — mirror of `volume` for the MIDI relative-encoder getter so the
   // App can always read the *current* deck volume at CC-dispatch time without
   // depending on the imperative handle being re-created (it isn't gated on
@@ -158,6 +170,14 @@ const Deck = forwardRef(function Deck(
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
   useEffect(() => { filterFreqRef.current = filterFreq; }, [filterFreq]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
+  // V5 (R19) — EQ ref mirrors. Kept on every tick so the bass-drop's t3
+  // recovery reads the LIVE user value even when the user moved the knob
+  // during the drop's automation window.
+  useEffect(() => {
+    eqLowRef.current = eq.low;
+    eqMidRef.current = eq.mid;
+    eqHighRef.current = eq.high;
+  }, [eq]);
 
   // ─── Audio graph construction ───
   const buildChain = useCallback(async () => {
@@ -184,6 +204,26 @@ const Deck = forwardRef(function Deck(
     rampGain(chain.gain.gain, volume * crossfadeGain, ctx);
   }, [volume, crossfadeGain, audioCtxRef, chainTick]);
 
+  // V5 (R19) — apply a user-driven AudioParam change while another automation
+  // schedule (e.g. a running bass drop) owns the same param. A plain
+  // setTargetAtTime would queue BEHIND the existing schedule and only land
+  // after the bass-drop's recovery ramp completed — the user's change appears
+  // to "snap back". Prefer cancelAndHoldAtTime (newer spec) so the engine
+  // freezes whatever value the existing automation is currently producing,
+  // then we schedule the user's value from there. Falls back to
+  // cancelScheduledValues + setValueAtTime(currentValue) on older engines.
+  const reapplyParamThroughAutomation = useCallback((param, target, ctx, tau) => {
+    const t = ctx.currentTime;
+    if (typeof param.cancelAndHoldAtTime === "function") {
+      param.cancelAndHoldAtTime(t);
+    } else {
+      const current = param.value;
+      param.cancelScheduledValues(t);
+      param.setValueAtTime(current, t);
+    }
+    param.setTargetAtTime(target, t, tau);
+  }, []);
+
   // ─── EQ ───
   // R18 T1 — direct `.value =` writes on a live AudioParam produce audible
   // zipper noise on rapid knob turns (each write is a step in the param's
@@ -195,18 +235,35 @@ const Deck = forwardRef(function Deck(
     const chain = chainRef.current;
     const ctx = audioCtxRef.current;
     if (!chain || !ctx) return;
-    chain.eqLow.gain.setTargetAtTime(eq.low, ctx.currentTime, 0.02);
-    chain.eqMid.gain.setTargetAtTime(eq.mid, ctx.currentTime, 0.02);
-    chain.eqHigh.gain.setTargetAtTime(eq.high, ctx.currentTime, 0.02);
-  }, [eq, audioCtxRef, chainTick]);
+    // V5 (R19) — during a bass drop the EQ-low schedule is owned by the drop
+    // (a multi-leg linearRamp set). A plain setTargetAtTime here would queue
+    // behind those ramps and not take effect until t3 — the user-perceived
+    // "snap back". Cancel-and-hold first so the user's change applies now.
+    if (bassDropRunningRef.current) {
+      reapplyParamThroughAutomation(chain.eqLow.gain, eq.low, ctx, 0.02);
+      reapplyParamThroughAutomation(chain.eqMid.gain, eq.mid, ctx, 0.02);
+      reapplyParamThroughAutomation(chain.eqHigh.gain, eq.high, ctx, 0.02);
+    } else {
+      chain.eqLow.gain.setTargetAtTime(eq.low, ctx.currentTime, 0.02);
+      chain.eqMid.gain.setTargetAtTime(eq.mid, ctx.currentTime, 0.02);
+      chain.eqHigh.gain.setTargetAtTime(eq.high, ctx.currentTime, 0.02);
+    }
+  }, [eq, audioCtxRef, chainTick, reapplyParamThroughAutomation]);
 
   // ─── Filter sweep ───
   useEffect(() => {
     const chain = chainRef.current;
     const ctx = audioCtxRef.current;
     if (!chain || !ctx) return;
-    chain.filter.frequency.setTargetAtTime(filterFreq, ctx.currentTime, 0.03);
-  }, [filterFreq, audioCtxRef, chainTick]);
+    // V5 (R19) — same contention path as EQ: while a bass drop is running its
+    // LPF schedule owns the param. Cancel-and-hold so the user's slider move
+    // applies immediately, not after t3.
+    if (bassDropRunningRef.current) {
+      reapplyParamThroughAutomation(chain.filter.frequency, filterFreq, ctx, 0.03);
+    } else {
+      chain.filter.frequency.setTargetAtTime(filterFreq, ctx.currentTime, 0.03);
+    }
+  }, [filterFreq, audioCtxRef, chainTick, reapplyParamThroughAutomation]);
 
   // ─── Effects: reverb mix/on ───
   useEffect(() => {
@@ -227,17 +284,23 @@ const Deck = forwardRef(function Deck(
     if (!chain || !ctx) return;
     clearTimeout(reverbSizeDebounceRef.current);
     reverbSizeDebounceRef.current = setTimeout(() => {
-      // P1 (R16) — swapping the convolver buffer mid-tail truncates the live
-      // decay and produces an audible thump whenever wet > 0. Duck the wet
-      // gain to 0 over ~10 ms first, swap the buffer cleanly, then ramp wet
-      // back to the user's target. The 200 ms debounce gives plenty of
-      // headroom for the two short ramps. If wet is already ~0 we skip the
-      // duck and just swap (no audible click possible).
+      // P1 (R16) / V1 (R19) — swapping the convolver buffer mid-tail truncates
+      // the live decay and produces an audible thump whenever wet > 0. The
+      // earlier two-ramp pattern (ramp to 0, swap, ramp back) anchored BOTH
+      // setTargetAtTime calls at the same ctx.currentTime, so the restore
+      // ramp replaced the duck ramp on the same param at the same instant —
+      // the duck never actually happened. Synchronous-pin approach: pin wet
+      // to 0 instantaneously with setValueAtTime, swap the buffer while the
+      // convolver sees a 0-input window, then ramp wet back to target.
+      // setValueAtTime + setTargetAtTime applied back-to-back are an atomic
+      // step+ramp in the Web Audio engine, so the swap window is always
+      // covered by zero input. If wet is already ~0 we skip the pin and
+      // ramp-back and just swap (no audible click possible).
       const wetParam = chain.reverbWet.gain;
       const targetWet = effects.reverb.on ? effects.reverb.mix : 0;
       const liveWet = wetParam.value;
       if (liveWet > 0.001) {
-        rampGain(wetParam, 0, ctx, 0.003);
+        wetParam.setValueAtTime(0, ctx.currentTime);
         // A5 — decay omitted so it scales with SIZE.
         chain.reverbConv.buffer = buildReverbIR(ctx, effects.reverb.size);
         rampGain(wetParam, targetWet, ctx, 0.003);
@@ -293,12 +356,18 @@ const Deck = forwardRef(function Deck(
     if (!chain || !ctx) return;
     clearTimeout(distortionDriveDebounceRef.current);
     distortionDriveDebounceRef.current = setTimeout(() => {
+      // V1 (R19) — same race the reverb-size swap had: a ramp-to-0 followed
+      // by an immediate ramp-back, both anchored at ctx.currentTime, leaves
+      // the restore ramp replacing the duck ramp on the same param at the
+      // same instant — the duck never happened. Synchronous-pin: setValueAtTime
+      // jams wet to 0 atomically, the curve swap lands while the WaveShaper
+      // sees a 0-input window, then ramp wet back to target.
       const wetParam = chain.distortionWet.gain;
       const { on, mix, drive } = effects.distortion;
       const targetWet = on ? mix : 0;
       const liveWet = wetParam.value;
       if (liveWet > 0.001) {
-        rampGain(wetParam, 0, ctx, 0.003);
+        wetParam.setValueAtTime(0, ctx.currentTime);
         chain.distortion.curve = buildDistortionCurve(drive);
         rampGain(wetParam, targetWet, ctx, 0.003);
       } else {
@@ -700,9 +769,18 @@ const Deck = forwardRef(function Deck(
 
     chain.eqLow.gain.cancelScheduledValues(now);
     // EQ low: hold user value, kill, snap-hold at kill, recover post-drop, restore.
-    const t1kill = safeRamp(chain.eqLow.gain, eq.low, preset.eqLowKill, now, t1 - 0.1, "linear");
+    // V5 (R19) — read EQ low from the ref so a knob move during the drop's
+    // automation window lands on the recovery endpoint instead of being
+    // snapped back to the closure value captured at triggerBassDrop call time.
+    const eqLowAtStart = eqLowRef.current;
+    const t1kill = safeRamp(chain.eqLow.gain, eqLowAtStart, preset.eqLowKill, now, t1 - 0.1, "linear");
     safeRamp(chain.eqLow.gain, preset.eqLowKill, preset.eqLowPostDrop, t1kill, t2, "linear");
-    safeRamp(chain.eqLow.gain, preset.eqLowPostDrop, eq.low, t2, t3, "linear");
+    // Recovery endpoint reads the LIVE eqLowRef value at the time the t3 ramp
+    // is scheduled (which is now — Web Audio doesn't re-poll closure vars at
+    // ramp time). The user-driven EQ effect above cancel-and-holds and lays
+    // down its own setTargetAtTime when the knob moves, which now wins
+    // because the drop's t3 ramp was overwritten by the user's schedule.
+    safeRamp(chain.eqLow.gain, preset.eqLowPostDrop, eqLowRef.current, t2, t3, "linear");
 
     // Wobble preset: LFO modulating filter freq after the drop
     if (preset.wobble) {
@@ -749,7 +827,10 @@ const Deck = forwardRef(function Deck(
       // flip matches the audible end of the drop (the audio ramp ends at
       // now + buildSec + 0.05 + decaySec).
     }, (preset.buildSec + 0.05 + preset.decaySec) * 1000);
-  }, [audioCtxRef, bassDropPreset, eq.low]);
+    // V5 (R19) — eq.low intentionally not in deps: read via eqLowRef in the
+    // recovery ramp so the user's CURRENT value wins, not the closure value
+    // at trigger-time.
+  }, [audioCtxRef, bassDropPreset]);
 
   // ─── BPM ───
   const tapTimesRef = useRef([]);
@@ -1419,8 +1500,10 @@ const Deck = forwardRef(function Deck(
       {/* Bass drop */}
       <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
         <button
+          type="button"
           onClick={triggerBassDrop}
           disabled={!fileName || bassDropActive}
+          aria-pressed={bassDropActive}
           style={{
             flex: 1,
             background: bassDropActive

@@ -147,8 +147,8 @@ export default function MidiPanel({
           {MIDI_SUPPORTED && (
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
               <button
+                type="button"
                 onClick={enabled ? onDisable : onEnable}
-                aria-pressed={enabled}
                 style={{
                   background: enabled ? "#60a5fa22" : "rgba(255,255,255,0.05)",
                   border: `1px solid ${enabled ? "#60a5fa55" : "rgba(255,255,255,0.1)"}`,

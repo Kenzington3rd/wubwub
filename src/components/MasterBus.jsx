@@ -335,6 +335,7 @@ export default function MasterBus({
       </button>
 
       <button
+        type="button"
         onClick={onToggleRecord}
         disabled={!recordSupported}
         aria-pressed={isRecording}
