@@ -1314,6 +1314,7 @@ const Deck = forwardRef(function Deck(
           border: `1px dashed ${color}44`,
           borderRadius: 10,
           padding: "10px 12px",
+          minHeight: 38,
           color: fileName ? "#ccd6f6" : "#8892b0",
           fontSize: 12,
           cursor: "pointer",
@@ -1416,7 +1417,7 @@ const Deck = forwardRef(function Deck(
               {...ariaPressedProps}
               style={{
                 width: 38,
-                height: 38,
+                minHeight: 38,
                 borderRadius: 10,
                 border: "none",
                 background: btn.active ? `${color}33` : "rgba(255,255,255,0.05)",
@@ -1595,6 +1596,7 @@ const Deck = forwardRef(function Deck(
             border: `1px solid ${bassDropActive ? color : color + "44"}`,
             borderRadius: 10,
             padding: "10px 16px",
+            minHeight: 38,
             cursor: fileName ? "pointer" : "not-allowed",
             color: bassDropActive ? "#070a14" : color,
             fontFamily: "'Audiowide', sans-serif",

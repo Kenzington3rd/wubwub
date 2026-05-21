@@ -49,12 +49,12 @@ and STYLE_GUIDE.md (code).
   `6–8px`. Icon-only controls have a minimum 38×38px hit area (via padding or
   `min-width` / `min-height`) and must carry an `aria-label`. **All interactive
   text buttons have a minimum 38×38px hit area, regardless of label size or
-  context.** Sanctioned exceptions:
+  context.** This includes native `<select>` elements: every `<select>` in the
+  app currently targets the 38px floor (BassDropMenu, Looper bars, Crossfader
+  curve, MidiPanel mode) — there is no sanctioned 30px-select exemption in
+  effect. Sanctioned exceptions:
   - **ThemePicker swatches** — 24×24 hit area (compact packed targets, see
     existing §3 note below).
-  - **Native `<select>` elements** in tight inline rows paired with full-size
-    buttons (BassDropMenu, Looper bars) — 30px high (vertical layout
-    constraint).
   Text buttons use Audiowide for primary actions (BASS DROP), Exo 2 elsewhere.
   - **ThemePicker swatches.** The accent swatches are visually 16×16px chips,
     but the `<button>` carrying each one adds 4px symmetric padding around

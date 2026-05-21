@@ -118,6 +118,8 @@ export default function MidiPanel({
           display: "flex",
           alignItems: "center",
           gap: 8,
+          padding: "8px 0",
+          minHeight: 38,
         }}
       >
         <span
@@ -241,6 +243,7 @@ export default function MidiPanel({
                             borderRadius: 4,
                             fontSize: 10,
                             padding: "1px 4px",
+                            minHeight: 38,
                             cursor: "pointer",
                           }}
                         >

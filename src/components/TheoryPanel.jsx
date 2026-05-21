@@ -67,6 +67,7 @@ export default function TheoryPanel({
               style={{
                 flex: 1,
                 padding: "10px 8px",
+                minHeight: 38,
                 border: "none",
                 cursor: "pointer",
                 fontFamily: "'Exo 2', sans-serif",
