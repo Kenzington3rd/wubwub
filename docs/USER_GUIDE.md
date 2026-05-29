@@ -155,14 +155,16 @@ the waveform focused:
 | Key | Action |
 |---|---|
 | `←` / `→` | Seek that track 5 seconds back / forward |
-| `↑` / `↓` | Same as `←` / `→` |
 | `Home` | Jump to the start of the track |
 | `End` | Jump to the end of the track |
+| `↑` / `↓` | **Pass through** — the canvas does NOT consume these. They still nudge the focused deck's volume per the global shortcut. |
 
-While the waveform is focused these keys seek *it* — the crossfader and volume
-arrow shortcuts above are paused so the same press can't do two things. `Tab`
-away from the waveform to use those again. (An empty deck with no track loaded
-isn't focusable — there's nothing to seek.)
+While the waveform is focused, the `←` / `→` keys seek *it* — the crossfader
+arrow shortcut above is paused so the same press can't do two things. `Tab`
+away from the waveform to use the crossfader arrows again. `↑` / `↓` are
+intentionally let through so volume can still be tweaked without leaving the
+waveform. (An empty deck with no track loaded isn't focusable — there's
+nothing to seek.)
 
 ## MIDI controllers
 

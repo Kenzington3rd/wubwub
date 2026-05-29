@@ -56,3 +56,26 @@
 Auto-BPM + auto-key detection, ½×/2× BPM nudge, drag-and-drop load, cue points,
 MIDI mapping with learn mode, mix recording, three crossfade curves, looper,
 sample pad, PWA + single-file builds.
+
+---
+
+## R23 — end-to-end verification pass (`DONE`)
+
+Full interactive-element inventory across every screen, file-path / asset
+existence audit, and behavior assertions for every keyboard shortcut that
+previously only had "does not throw" coverage. Outcome:
+
+- New `test/App.e2e.test.jsx` adds 22 integration tests covering keyboard
+  shortcut outcomes (ArrowUp/Down deck volume, Shift+Arrow snap, C-cue,
+  digit-key jump, Space play toggle, M-key marker), the crossfade curve and
+  theme picker reaching state, the record → drop-marker → stop download flow,
+  the settings export → import round-trip, the crate drag-drop → quick-load
+  flow, the empty-vs-loaded waveform slider transition, and deck focus.
+- The complete control-coverage matrix is in `docs/E2E_VERIFICATION.md`.
+- File-path verification: every static reference (`src/fonts/*.woff2`,
+  `src/worklets/looper-worklet.js`, `public/icons/*`) was confirmed against the
+  filesystem and the production `dist/sw.js` precache manifest (13 entries,
+  342 KiB raw); no stale `public/fonts/` or `public/worklets/` references
+  anywhere in the repo. `vite.config.js`'s `includeAssets` is already correct.
+- Bundle-size budgets remain green (75.5 KB gzip JS / 90 KB budget,
+  342.3 KB precache / 400 KB budget). Test count went from 361 → 383.

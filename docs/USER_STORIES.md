@@ -129,3 +129,22 @@ Persona: bedroom DJ who mixes local files in the browser. Sometimes streams, som
 - **D4** — User files never leave the device
 
 These are enforced architecturally (CSP meta tag, code review) rather than via tests. The closest "test" is the network audit during build verification: `dist/` should reference no external origins.
+
+---
+
+## R23 end-to-end verification pass
+
+The R23 verification pass produced [`E2E_VERIFICATION.md`](./E2E_VERIFICATION.md),
+a per-control matrix covering every interactive element across every screen
+with `file:line` source pointers and the specific test that pins the outcome.
+That document is the canonical answer to "is this button verified to work?"
+and is regenerated whenever a control's contract changes.
+
+The R23 work added `test/App.e2e.test.jsx` — 22 multi-step integration
+tests that close the "does not throw → asserts the outcome" gap on every
+global keyboard shortcut (ArrowUp/Down deck volume, Shift+Arrow snap, C-cue,
+digit-key jump, Space play toggle, M-key marker), plus full record → marker
+→ stop, settings export → import round-trip, crate drag-drop → quick-load,
+and the empty-vs-loaded waveform slider transition.
+
+Total suite at the end of R23: 30 test files, 383 tests, all passing.
