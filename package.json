@@ -11,7 +11,10 @@
     "size": "vite build && node scripts/check-bundle-size.mjs",
     "preview": "vite preview",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify:build": "vite build && vitest run test/build.test.js test/csp.test.js",
+    "verify:single": "vite build --mode single --outDir dist-single && vitest run test/build-single.test.js",
+    "verify:all": "npm run verify:build && npm run verify:single && npm test"
   },
   "dependencies": {
     "react": "^18.3.1",

@@ -10,11 +10,16 @@ WAVECRAFT is a dual-deck DJ mixing app that runs entirely in your browser. **Not
 ```bash
 npm install
 npm run dev            # http://localhost:5173
-npm test               # vitest, 380+ tests
+npm test               # vitest, 430+ tests
 npm run build          # → dist/ (multi-file PWA, precached for offline)
 npm run build:single   # → dist-single/index.html (one self-contained file)
 npm run size           # build + bundle-size budget check (reruns the build internally)
 npm run preview        # serve the production build locally
+
+# Full I/O contract verification (Phase B):
+npm run verify:build   # build + run dist/ artifact tests (manifest, sw.js, CSP)
+npm run verify:single  # build:single + run dist-single/ artifact tests
+npm run verify:all     # verify:build + verify:single + npm test
 ```
 
 `npm run size` runs `vite build` internally before checking the bundle budget,
@@ -91,6 +96,7 @@ wubwub/
 
 Full status, longer-form mission, danger-zones list: see [`CLAUDE.md`](CLAUDE.md).
 Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md). Worklist: [`docs/BACKLOG.md`](docs/BACKLOG.md).
+I/O contract (every output → UI source, every input → UI sink): [`docs/IO_CONTRACT.md`](docs/IO_CONTRACT.md).
 
 ## Contributing
 

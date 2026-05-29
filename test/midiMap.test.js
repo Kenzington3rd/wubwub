@@ -365,3 +365,232 @@ describe("applyRelative — US39 (bug C3)", () => {
     );
   });
 });
+
+// Phase B5 — adversarial MIDI coverage. The earlier tests in this file
+// establish the happy path + the known-bug regressions. The block below
+// hammers every message-shape branch in `midiMap.js` with the kinds of
+// traffic real controllers actually emit (and a few that should NEVER make
+// it through). Every assertion targets a specific `kindNibble`/length branch
+// at midiMap.js:65-107 so a future refactor that touches that switch will
+// trip exactly one test per loosened guard.
+describe("enableMidi — Phase B5 adversarial coverage (@us US39)", () => {
+  afterEach(() => {
+    delete navigator.requestMIDIAccess;
+    vi.restoreAllMocks();
+  });
+
+  it("@us US39 (B5): a single-byte message is dropped (length < 2 guard)", async () => {
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    input.emitRaw([0xb0]); // status byte only
+    input.emitRaw([0xf8]); // realtime clock, no data
+    input.emitRaw([]); // entirely empty
+    expect(onMidi).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it("@us US39 (B5): a 2-byte Note Off is dropped (strict 3-byte guard)", async () => {
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    input.emitRaw([0x80, 60]); // Note Off missing velocity
+    input.emitRaw([0x90, 60]); // Note On missing velocity
+    expect(onMidi).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it("@us US39 (B5): a run of pitch-bend messages is dropped silently (0xE0 branch)", async () => {
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    // Simulate a jog wheel spamming pitch-bend.
+    for (let i = 0; i < 32; i++) {
+      input.emitRaw([0xe0, i & 0x7f, (i * 3) & 0x7f]);
+    }
+    expect(onMidi).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it("@us US39 (B5): channel pressure (0xD0) is dropped", async () => {
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    input.emitRaw([0xd0, 64]); // channel pressure on ch 0
+    input.emitRaw([0xd3, 90]); // channel pressure on ch 3
+    expect(onMidi).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it("@us US39 (B5): sysex (0xF0) is dropped — feature-flagged sysex:false at requestMIDIAccess", async () => {
+    // Verifies two contracts:
+    //   1. The request asks for sysex:false (browser will not deliver sysex).
+    //   2. Even if a malformed message with status 0xF0 were injected, the
+    //      handler's switch on (status & 0xF0) drops it (none of the matched
+    //      kindNibbles are 0xF0; falls into the trailing "drop" comment).
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    const requestSpy = vi.fn().mockResolvedValue(access);
+    navigator.requestMIDIAccess = requestSpy;
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    expect(requestSpy).toHaveBeenCalledWith({ sysex: false });
+    // Direct injection: a (defective) sysex start byte should still be dropped.
+    input.emitRaw([0xf0, 0x7d, 0x01, 0x02, 0xf7]);
+    expect(onMidi).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it("@us US39 (B5): CCs on every channel 0–15 are forwarded with the correct channel field", async () => {
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    for (let ch = 0; ch < 16; ch++) {
+      input.emitCc(ch, 7, 64);
+    }
+    expect(onMidi).toHaveBeenCalledTimes(16);
+    for (let ch = 0; ch < 16; ch++) {
+      expect(onMidi.mock.calls[ch][0]).toMatchObject({
+        kind: "cc",
+        channel: ch,
+        cc: 7,
+        value: 64,
+      });
+    }
+    unsub();
+  });
+
+  it("@us US39 (B5): every CC value 0–127 round-trips through the handler", async () => {
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    for (let v = 0; v < 128; v++) input.emitCc(0, 11, v);
+    expect(onMidi).toHaveBeenCalledTimes(128);
+    for (let v = 0; v < 128; v++) {
+      expect(onMidi.mock.calls[v][0].value).toBe(v);
+    }
+    unsub();
+  });
+
+  it("@us US39 (B5): mid-stream device disconnect stops further messages from that input", async () => {
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+
+    // Burst of normal traffic.
+    for (let v = 0; v < 10; v++) input.emitCc(0, 7, v);
+    expect(onMidi).toHaveBeenCalledTimes(10);
+
+    // Device drops off mid-stream.
+    access.fireStateChange({ ...input, type: "input", state: "disconnected" });
+    // Any further messages from the (now-disconnected) input must not reach
+    // onMidi — the handler was removed when statechange fired.
+    onMidi.mockClear();
+    for (let v = 0; v < 10; v++) input.emitCc(0, 7, v);
+    expect(onMidi).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it("@us US39 (B5): learn-mode survives a stuck-on key — a held note-on does not double-deliver", async () => {
+    // Real controllers re-send Note On when a pad is held with aftertouch
+    // engines that emit polyphonic key pressure (which we drop as 0xA0).
+    // Make sure repeated identical Note Ons each deliver as discrete events
+    // (no de-dup hidden in the handler) so a UI consumer can decide how to
+    // treat them.
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    for (let i = 0; i < 5; i++) input.emitNoteOn(0, 36, 100);
+    expect(onMidi).toHaveBeenCalledTimes(5);
+    // And a polyphonic-key-pressure (0xA0) burst is silently dropped.
+    onMidi.mockClear();
+    for (let i = 0; i < 5; i++) input.emitRaw([0xa0, 36, 80 + i]);
+    expect(onMidi).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it("@us US39 (B5): a Note Off (0x80) is parsed even when the spec's velocity byte is the legal 0", async () => {
+    // A real controller will send 0x80 status with velocity=0 for release
+    // (Note Off velocity is "release velocity", spec-allowed to be 0). Our
+    // emitNoteOff helper uses exactly that shape — assert the handler reads
+    // the note number, not the velocity, and forwards as noteoff.
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    input.emitNoteOff(0, 60);
+    expect(onMidi).toHaveBeenCalledTimes(1);
+    expect(onMidi.mock.calls[0][0]).toEqual({
+      kind: "noteoff",
+      channel: 0,
+      note: 60,
+    });
+    unsub();
+  });
+
+  it("@us US39 (B5): a Note On with velocity 0 normalises to noteoff (spec quirk)", async () => {
+    // Already covered above for the C2-bug-regression; repeated here so the
+    // adversarial block is self-contained and the spec-quirk passage is
+    // explicit in coverage.
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    input.emitNoteOn(0, 60, 0);
+    expect(onMidi).toHaveBeenCalledWith(
+      { kind: "noteoff", channel: 0, note: 60 },
+      "in-1",
+      "Pad"
+    );
+    unsub();
+  });
+
+  it("@us US39 (B5): each kindNibble branch we DON'T handle stays silent (0xA0/0xC0/0xD0/0xE0/0xF0)", async () => {
+    // Single shot through the four unhandled status nibbles. If a refactor
+    // accidentally widens the switch to match one of them, exactly one of
+    // these assertions trips. Pairs with the per-byte tests above.
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    for (const status of [0xa0, 0xc0, 0xd0, 0xe0, 0xf0]) {
+      input.emitRaw([status, 0x40, 0x20]);
+    }
+    expect(onMidi).not.toHaveBeenCalled();
+    unsub();
+  });
+
+  it("@us US39 (B5): unsubscribe after a disconnect+reconnect leaves zero handlers", async () => {
+    // Belt-and-suspenders: after a full unplug→replug cycle, the eventual
+    // unsubscribe must still tear down every active handler.
+    const input = makeFakeInput("in-1", "Pad");
+    const access = makeFakeAccess([input]);
+    navigator.requestMIDIAccess = vi.fn().mockResolvedValue(access);
+    const onMidi = vi.fn();
+    const unsub = await enableMidi(onMidi);
+    access.fireStateChange({ ...input, type: "input", state: "disconnected" });
+    access.fireStateChange({ ...input, type: "input", state: "connected" });
+    expect(input.listenerCount()).toBe(1);
+    unsub();
+    expect(input.listenerCount()).toBe(0);
+  });
+});

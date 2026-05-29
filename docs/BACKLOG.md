@@ -79,3 +79,49 @@ previously only had "does not throw" coverage. Outcome:
   anywhere in the repo. `vite.config.js`'s `includeAssets` is already correct.
 - Bundle-size budgets remain green (75.5 KB gzip JS / 90 KB budget,
   342.3 KB precache / 400 KB budget). Test count went from 361 → 383.
+
+## R24 — I/O contract + close the verification gap (`DONE`)
+
+Closes the "structural-evidence only" rows from R23's matrix into automated
+checks wherever it's reasonable from a headless test environment.
+
+- `docs/IO_CONTRACT.md` — full output/input matrix. Every output the app
+  produces is paired with the UI affordance that triggers it; every input is
+  paired with the UI surface that accepts it. Every row links a test.
+- `test/build.test.js` — Phase B1. Validates `dist/manifest.webmanifest`
+  parses as JSON with all required fields; asserts 192/512 PNGs exist on
+  disk; asserts `dist/sw.js` and `dist/registerSW.js` are present; asserts
+  the built `index.html` retains the CSP + Permissions-Policy meta tags and
+  no `<script src>` / `<link rel=stylesheet>` references an external URL.
+- `test/build-single.test.js` — Phase B2. Validates `dist-single/index.html`
+  exists with NO external `<script src>` or `<link rel=stylesheet>`; fonts
+  are inlined as `data:font/woff2;base64`; apple-touch-icon is inlined as
+  `data:image/png;base64`; CSP still pins `connect-src 'none'`; no
+  registerSW / manifest leak in single-file mode.
+- `test/csp.test.js` — Phase B3. Parses CSP from both `index.html` AND
+  `vite.config.js#CSP_CONTENT` (canonical source) and asserts every
+  directive: `connect-src 'none'`, `frame-src 'none'`, `object-src 'none'`,
+  `base-uri 'self'`, `form-action 'none'`, no `'unsafe-eval'` in
+  `script-src`, `worker-src` includes `blob:` (the looper worklet).
+- `test/limiter.test.jsx` — Phase B4. Asserts the App.jsx-built master
+  compressor is configured with brickwall limiter-class params
+  (threshold −9, ratio 20, knee 0, attack 0.003, release 0.1), confirms
+  the topology delivers every deck's analyser tap to the compressor, and
+  walks the path comp → trim → masterGain → destination to confirm there
+  is exactly ONE limiter on the master bus.
+- `test/midiMap.test.js` (extended) — Phase B5. Adversarial coverage: 1-byte
+  message drop, 2-byte Note Off / Note On drop (strict 3-byte guard),
+  pitch-bend (0xE0) drop, channel pressure (0xD0) drop, sysex (0xF0)
+  rejection (with `requestMIDIAccess({sysex:false})` asserted), CCs across
+  all 16 channels, CC values 0-127, mid-stream disconnect, learn-mode
+  stuck-on key, every unhandled kind-nibble.
+- `test/focus-rings.test.js` — Phase B6. Asserts `src/index.css` declares a
+  `*:focus-visible` rule with the documented #ccd6f6 outline + 2px offset
+  token and that `:focus` is not used as a fallback.
+- `test/animations.test.js` — Phase B7. Asserts `@keyframes beatPulse` is
+  declared with opacity + transform stops AND at least one component sets
+  `animation: beatPulse …`. Also asserts the `prefers-reduced-motion`
+  override is in place.
+- New npm scripts: `verify:build`, `verify:single`, `verify:all`.
+- Final tally: 36 test files / 435 tests, all passing. Build still 75.5 KB
+  gzip JS / 90 KB budget. `npm run size` PASS.

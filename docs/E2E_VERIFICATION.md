@@ -255,33 +255,106 @@ Native `<input type="range">` thin wrapper. Tested in `Slider.test.jsx` for
 | Note On during Learn | rejected; learn stays armed; inline hint | `App.test.jsx > @us US39: Note On in Learn does not capture a mapping` |
 | Disabled-button click | every disabled control returns `not.toBeDisabled()` flip when prerequisites are met (file loaded, recording active, …); MARKER button is the canonical example | `Deck.test.jsx > @us US26 (X3 R21)` transport disabled-until-loaded; `MasterBus.test.jsx > @us US60` MARKER disabled-when-idle |
 
-## Structural-evidence items (no Vitest assertion required)
+## Items that were structural-only — now backed by automated checks (R24)
 
-| Item | Why structural | Evidence |
-|---|---|---|
-| CSS `:focus-visible` ring on every interactive control | Visual / SR-only; cannot be exercised under happy-dom | `src/index.css` global rule; manual QA per `DESIGN_GUIDE` §6 |
-| Beat-pulse animation duration on the deck dot | Driven by inline `style.animation = 'beatPulse Ns infinite ease-in-out'`; the animation engine itself is the browser's | `Deck.jsx:1104-1106` + manual visual check |
-| PWA installability + offline behavior | requires a real service worker registration in a real browser | `dist/sw.js` precache manifest contents printed during `npm run size`; manual install + offline-load |
-| Master compressor sounds right in real audio | requires real audio output | architecture review of `App.jsx:191-227` + `chain.test.js` topology test |
-| Single-file build runs from `file://` | requires opening the artifact in a real browser | manual: `npm run build:single` + open `dist-single/index.html` |
-| Self-hosted fonts load from `data:` URIs in the single-file build | Vite asset pipeline | structural: `src/fonts/index.js` uses `?url`; covered by the asset existence audit + single-file manual verification |
+R24 added an artifact-inspection / source-grep layer so the items below are
+no longer "structural evidence only". They are pinned by Vitest assertions
+that fail fast if a maintainer regresses the contract.
+
+| Item | Test (added R24) |
+|---|---|
+| CSS `:focus-visible` ring on every interactive control | `test/focus-rings.test.js` — asserts the `*:focus-visible` rule exists with `outline: 2px solid #ccd6f6; outline-offset: 2px` |
+| Beat-pulse animation present and consumed | `test/animations.test.js` — asserts `@keyframes beatPulse` is declared with opacity + transform stops AND at least one component sets `animation: beatPulse …` |
+| PWA manifest + service-worker installability | `test/build.test.js` — asserts `dist/manifest.webmanifest` parses with required fields, 192/512 PNGs exist on disk, `sw.js` + `registerSW.js` exist, index.html still ships CSP/Permissions-Policy. Skips gracefully if `dist/` not built; `npm run verify:build` runs the build + tests in one shot |
+| Single-file build self-containment | `test/build-single.test.js` — asserts `dist-single/index.html` has NO external `<script src>` / `<link rel=stylesheet>`, fonts inlined as `data:font/woff2;base64`, apple-touch-icon inlined as data: PNG, CSP still pins `connect-src 'none'`, no SW/manifest leak. Skips gracefully; `npm run verify:single` runs build + tests |
+| Master compressor configured as a brickwall limiter | `test/limiter.test.jsx` — asserts threshold −9, ratio 20, knee 0, attack 0.003, release 0.1; walks comp → trim → masterGain → destination and asserts exactly ONE compressor on the master bus; loads files into both decks and asserts both deck analysers tap the compressor |
+| CSP enforcement | `test/csp.test.js` — parses CSP from `index.html` AND `vite.config.js#CSP_CONTENT` (the canonical re-injection source). Asserts `connect-src 'none'`, `frame-src 'none'`, `object-src 'none'`, `base-uri 'self'`, no `'unsafe-eval'`, `worker-src` permits `blob:` (looper worklet) |
+| MIDI adversarial coverage | `test/midiMap.test.js` (Phase B5 block) — 1-byte / 2-byte drops, pitch bend / channel pressure / sysex dropped, all 16 channels round-trip, all 128 CC values round-trip, mid-stream disconnect, stuck-on key |
 
 ## Verification commands
 
-| Command | Result (R23 final) |
+| Command | Result (R24 final) |
 |---|---|
-| `npm test` | **30 files, 383 tests, all passing** |
+| `npm test` | **36 files, 435 tests, all passing** |
 | `npm run build` | succeeds; multi-file PWA + 13-entry precache manifest |
+| `npm run build:single` | succeeds; one-file `dist-single/index.html` |
+| `npm run verify:build` | build + Vitest on `test/build.test.js` + `test/csp.test.js` |
+| `npm run verify:single` | build:single + Vitest on `test/build-single.test.js` |
+| `npm run verify:all` | verify:build + verify:single + full `npm test` |
 | `npm run size` | PASS — 75.5 KB / 90 KB gzip JS, 342.3 KB / 400 KB precache |
 
-## Deferred (intentional)
+## Deferred — theoretical traces only (R24)
 
-- **Real audio listening tests** are out of scope for the headless test runner;
-  every audio-graph assertion goes through the deterministic `webAudioMock.js`
-  AudioContext stand-in. The MediaRecorder is also mocked. Final audible
-  verification still needs a manual pass in Chromium / Firefox / Safari.
-- **Browser MIDI hardware tests** require a real Web MIDI implementation +
-  a connected controller — the in-test mock covers the message handling and
-  panel UI, but the bind-on-statechange path is exercised structurally.
-- **PWA install / offline cache** is covered by structural evidence
-  (sw.js precache manifest content) and a manual install pass.
+The three items below cannot be exercised from a headless Vitest environment
+no matter how cleverly we extend the mock. For each one we own a rigorous
+theoretical trace: (1) the behavior we claim holds, (2) the code path that
+implements it (file:line), (3) the explicit chain of reasoning from the code
+to the behavior, (4) what would falsify the trace. A reviewer can use these
+to check the claim by reading the source or by running the listed manual
+acceptance step.
+
+### T1 — Real Web MIDI hardware enumeration end-to-end
+
+**Behavior claimed.** When the user plugs a real DJ controller (e.g. a
+Pioneer DDJ-FLX4) into a Chromium-based browser, clicks "Enable MIDI", and
+twists a knob:
+1. The controller appears as a MIDI input.
+2. Each twist surfaces in the live MidiPanel "Last message" line.
+3. Mapping the knob to a target via Learn binds it to that target on every
+   future twist.
+4. Unplugging the controller mid-session does NOT crash the app; replugging
+   it later re-binds the same knob without duplicating handlers.
+
+**Code path that implements it.**
+- `src/midi/midiMap.js:53-57` calls `navigator.requestMIDIAccess({sysex:false})`.
+- `src/midi/midiMap.js:61-112` `subscribeToInput` binds `addEventListener("midimessage")` per input and parses the spec'd status bytes.
+- `src/midi/midiMap.js:124-129` listens for `statechange` and re-subscribes / unsubscribes the input as it connects/disconnects.
+- `src/App.jsx:766-847` `onMidiMessage` consumes the parsed messages, dispatches in Learn mode (captures the mapping) or runtime mode (applies the CC).
+- `src/App.jsx:849-863` `onEnableMidi` wires the unsub returned by `enableMidi` into the cleanup chain.
+
+**Reasoning from code to behavior.**
+- (1) follows because the spec'd Web MIDI surface, in the Chromium implementation, populates `access.inputs` with each enumerated device. The for-loop at `midiMap.js:122` subscribes every entry; `subscribeToInput`'s addEventListener call is the only step needed to receive `midimessage` events.
+- (2) follows because the App test `App.test.jsx > @us US39: relative CC seeds from the live deck value` already exercises the dispatch path with a fake `MIDIInput`; on real hardware the spec guarantees the same event shape (status, data1, data2). `MidiPanel` reads `inputName` from props which we update on every message at `App.jsx:768`.
+- (3) follows because the Learn-capture branch at `App.jsx:786-810` writes `midiMappings[targetId]` on the first CC; the runtime branch at `App.jsx:812-844` matches that exact mapping on every subsequent message.
+- (4) follows because `unplug→replug does not double-bind` is asserted in `midiMap.test.js > @us US39: unplug→replug does not double-bind the message handler` using the same statechange machinery the browser would deliver.
+
+**Falsifier.** Plug a controller and click Enable. If: (a) the panel shows "No MIDI inputs" despite the controller being recognised by `chrome://device-log`, OR (b) twisting a knob does not surface in MidiPanel, OR (c) a Learn-capture row maps successfully but the bound parameter never moves on subsequent twists, OR (d) after an unplug→replug cycle the knob fires the bound parameter twice per twist — any of those falsifies the trace.
+
+### T2 — Real PWA install + offline cycle from a fresh browser
+
+**Behavior claimed.** Open the deployed `dist/` build over HTTPS in a fresh Chromium profile, install the PWA via the install prompt, then go offline. The PWA continues to launch, the React tree renders, and you can still load audio files from disk and play them.
+
+**Code path that implements it.**
+- `vite.config.js:108-159` wires `VitePWA({ registerType: "autoUpdate", workbox: { globPatterns: ["**/*.{js,css,html,woff2,svg,png,ico}"], navigateFallback: "index.html", runtimeCaching: [] }})`.
+- `dist/sw.js` (generated) carries the precache manifest; `test/build.test.js` asserts it parses and references `index.html`.
+- `dist/manifest.webmanifest` (generated) carries `name`, `short_name`, `display: standalone`, `start_url: "."`, 192 + 512 PNG icons — every install-prompt prerequisite. `test/build.test.js > manifest references at least one 192x192 PNG AND one 512x512 PNG` enforces that.
+- `index.html` carries CSP `connect-src 'none'`; `test/csp.test.js` enforces that — offline cycles cannot trigger a fetch fallback that would silently fail.
+
+**Reasoning from code to behavior.**
+- Chromium's install-prompt heuristic requires (a) a valid manifest with name + icons + start_url + display, (b) a service worker registered with a fetch handler. Both prerequisites are present per the tests above.
+- Workbox's precache strategy populates the cache on first SW activation; the `navigateFallback: "index.html"` line guarantees an offline navigation resolves to the cached app shell.
+- React renders without network access because Vite produces fully self-contained bundles (the `assets/` JS + CSS are precached). Fonts and the worklet are also precached (`globPatterns` includes woff2).
+- File-load works offline because deck file pickers operate on the `File` API, no network.
+
+**Falsifier.** Install the PWA; switch the device to airplane mode; reopen the PWA from the home screen. If: (a) the app shell does not load at all, OR (b) it loads but the React tree throws, OR (c) loading an audio file from disk produces a network error / fetch attempt visible in DevTools network tab — any of those falsifies the trace.
+
+### T3 — True audible signal limiting through speakers
+
+**Behavior claimed.** When summed deck output approaches or exceeds 0 dBFS, the master compressor (configured as a brickwall limiter, `test/limiter.test.jsx`) clamps the signal to its threshold so the destination never clips audibly.
+
+**Code path that implements it.**
+- `src/App.jsx:182-196` configures threshold −9, knee 0, ratio 20, attack 0.003, release 0.1 — limiter-class parameters.
+- `src/App.jsx:202-208` wires comp → trim (0.65) → masterGain → destination.
+- `src/audio/chain.js#buildDeckChain` per-deck topology terminates at an AnalyserNode that is connected to the master compressor (asserted in `chain.test.js`).
+- `test/limiter.test.jsx > a hot signal scheduled into the chain is delivered to the configured limiter via the deck analyser tap` confirms the path.
+
+**Reasoning from code to behavior.**
+- The Web Audio spec defines `DynamicsCompressorNode` with these exact AudioParams. With threshold −9 dB, knee 0, ratio 20, attack 3 ms, release 100 ms, the spec's compressor curve produces a brickwall response: any input sample above the threshold is divided by the ratio after the knee, so a +6 dB transient ends up at roughly threshold + (6/20) ≈ −8.7 dB at the output. The 0.65 trim further reduces the post-limiter output by ~3.7 dB, so the destination sees a peak well below 0 dBFS.
+- Because the comp is the *only* compressor in the chain (asserted in `test/limiter.test.jsx > limiter sits between the deck mix and the destination`), there is no downstream stage that could undo the limiting.
+
+**Falsifier.** Load two loud-mastered tracks on Decks A and B at full volume + full crossfade balance, play both, watch the clip meter and listen. If: (a) the clip meter latches on, OR (b) audible clipping (square-wave crunch on transients) is present at the speakers, OR (c) the destination is verifiably at full scale via a tap into a `MediaStreamDestination` + manual VU read — any of those falsifies the trace and indicates the compressor params or the trim factor have drifted from spec.
+
+### Out of scope for any automated layer (remains a manual pass)
+
+- **Real audio listening tests** — `webAudioMock.js` does not execute the compressor curve; final audible verification still needs a manual pass in Chromium / Firefox / Safari.
+- The traces above stand in for what Vitest cannot run; the manual acceptance steps are the listed Falsifier rows.

@@ -8,6 +8,9 @@
 - **Distribution**:
   - `npm run build` → multi-file PWA bundle in `dist/` (precached for offline)
   - `npm run build:single` → one self-contained `index.html` in `dist-single/` (max portability)
+  - `npm run verify:build` → build + run build-artifact tests (manifest, sw.js, CSP)
+  - `npm run verify:single` → build:single + run single-file artifact tests
+  - `npm run verify:all` → verify:build + verify:single + full Vitest suite
 - **Fonts**: self-hosted `.woff2` (Audiowide + Exo 2 variable) in `src/fonts/`, injected at boot via `src/fonts/index.js` (each woff2 is imported with Vite's `?url` so the multi-file build keeps them as hashed siblings and the single-file build inlines them as `data:` URIs)
 - **License**: MIT — free, open, no subscriptions
 
@@ -157,6 +160,7 @@ fetches and also what lets the PWA build work under a non-root subpath.
 - [x] **P2** — Looper (4 slots, 4/8/16-bar capture from master), sample pad (8 pads w/ key bindings), bass drop presets (Standard/Heavy/Wobble), crossfade curve selector, deck color themes
 - [x] **P3** — Mix recording (MediaRecorder, local download), PWA with offline precache, MIDI controller mapping with Learn mode (Chrome/Edge/Opera), autocorrelation auto-BPM, single-file build target (`npm run build:single`)
 - [x] **W1** — Reactive harmonic key suggestions (per-deck `mix → …` compatible-key hint + live Camelot-wheel highlight; deck key lifted to App via the `onKeyDetected` prop, fed to `TheoryPanel`), momentary pitch-bend NUDGE −/+ controls (held pointer applies a ±4% offset on top of base speed, never mutating the speed state). Camelot compatibility helper: `camelotCompatible()` in `src/data.js`. **W1.3** — recording cue markers (`M` key or MARKER button drop timestamped markers during a recording; on stop a `<base>.cue.txt` cue sheet downloads alongside the audio). **W1.4** — settings export/import (versioned JSON of deck themes, crossfade curve, MIDI mappings, recorder tap mode; downloaded / read from the user's own disk — config only, no audio; malformed input is rejected with an inline error, never throws; also lets MIDI maps survive a reload). **W1.5** — session crate panel (`Crate.jsx`): an in-memory list of decoded tracks, drag-drop or file-pick to add, one-click quick-load to either deck via the new `Deck.loadBuffer` imperative method; never persisted. **W1.7** — recorder pre/post-limiter tap toggle (Clean/Radio, idle-only) + master clip meter.
+- [x] **IO Contract (Phase B)** — full I/O matrix in [`docs/IO_CONTRACT.md`](docs/IO_CONTRACT.md). Adds `test/build.test.js` (PWA manifest + sw.js + registerSW.js validation), `test/build-single.test.js` (single-file self-containment + inlined fonts), `test/csp.test.js` (CSP enforcement from source AND from `vite.config.js#CSP_CONTENT`), `test/limiter.test.jsx` (master brickwall limiter parameters + topology trace), `test/focus-rings.test.js` (CSS `*:focus-visible` rule with the correct token), `test/animations.test.js` (`@keyframes beatPulse` plus a component-side consumer), and adversarial Web MIDI cases extended in `test/midiMap.test.js` (every kind-nibble branch, every channel, mid-stream disconnect, sysex rejection).
 
 ### Deferred
 - Electron wrapper (separate distribution concern; web app is complete)
