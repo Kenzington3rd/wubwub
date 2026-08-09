@@ -56,6 +56,23 @@ normal, and results depend on how the original track was mixed. It's built
 for *scraping*: isolate the part you want, listen through, and grab the
 moments worth keeping.
 
+## Bites — keep the good parts
+
+The **BITE** row under each deck's cue panel pulls a slice out of the loaded
+track:
+
+1. Play or seek to the start of the moment you want and hit **SET IN**; seek
+   to the end and hit **SET OUT**. The region lights up on the waveform.
+2. **▶ LOOP** previews the region on repeat — through the deck's EQ, effects,
+   and any active ISOLATE mode, so what you hear is what you'll get.
+3. Keep it: **→ PAD** puts it on a sample pad (pick the pad number), **→
+   CRATE** shelves it for quick-loading to a deck, **WAV** downloads it to
+   your disk as a clean 16-bit WAV file.
+
+Combine with ISOLATE for component scraping: isolate VOCAL, mark the phrase,
+and the extracted bite is the isolated vocal — not the full mix. Edges get a
+tiny fade so bites never click. The region clears when you load a new track.
+
 ## Effects rack
 
 Each deck has Reverb, Delay, and Distortion. Click an effect's title to toggle it

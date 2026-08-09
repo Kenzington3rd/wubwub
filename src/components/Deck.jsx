@@ -14,6 +14,9 @@ import EffectCard from "./EffectCard.jsx";
 import CuePanel from "./CuePanel.jsx";
 import BassDropMenu from "./BassDropMenu.jsx";
 import { buildDeckChain, disconnectChain } from "../audio/chain.js";
+import { encodeWav, sliceBuffer } from "../audio/wavEncode.js";
+import { renderIsolated } from "../audio/isolationRender.js";
+import { downloadBlob } from "../audio/recorder.js";
 import { buildReverbIR, buildDistortionCurve, clamp, rampGain } from "../audio/effects.js";
 import { detectBpm } from "../audio/bpmDetect.js";
 import { detectKey } from "../audio/keyDetect.js";
@@ -45,6 +48,27 @@ const SR_ONLY = {
 // BiquadFilter gain param accepts values past the UI range.
 const EQ_KILL_DB = -26;
 
+// W3.6 — shared style for the bite-row buttons.
+function biteBtnStyle(active, color, enabled) {
+  return {
+    background: active ? `${color}22` : "rgba(255,255,255,0.05)",
+    border: `1px solid ${active ? color : `${color}33`}`,
+    color: !enabled ? "#8892b0" : active ? color : "#8892b0",
+    borderRadius: 6,
+    padding: "4px 10px",
+    minHeight: 38,
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: 1,
+    cursor: enabled ? "pointer" : "not-allowed",
+    opacity: enabled ? 1 : 0.6,
+    fontFamily: "'Exo 2', sans-serif",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+  };
+}
+
 function formatTime(s) {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
@@ -66,6 +90,10 @@ const Deck = forwardRef(function Deck(
     // rendering in isolated component tests).
     assign,
     onAssignChange,
+    // W3.6 — sound-bite routing (same adoption paths the VOX panel uses).
+    // Optional; the BITE send buttons that need them hide when absent.
+    onSendToCrate,
+    onSendToPad,
     focused,
     onFocus,
     onSync,
@@ -177,6 +205,15 @@ const Deck = forwardRef(function Deck(
   // otherwise one of "bass" | "vocal" | "instrumental" | "drums". Mutually
   // exclusive (radio-style) — engaging one disengages the others.
   const [isolate, setIsolate] = useState(null);
+  // W3.6 — sound-bite region (seconds). Set from the playhead via the IN /
+  // OUT buttons; drawn on the waveform via biteRegionRef; extracted as an
+  // in-memory slice (through the active isolation mode, if any).
+  const [bite, setBite] = useState({ in: null, out: null });
+  const [bitePreviewing, setBitePreviewing] = useState(false);
+  const [bitePad, setBitePad] = useState(0);
+  const biteRegionRef = useRef({ in: null, out: null });
+  const bitePreviewSourceRef = useRef(null);
+  const biteCountRef = useRef(0);
   // R17 Q2 — mirror of `volume` for the MIDI relative-encoder getter so the
   // App can always read the *current* deck volume at CC-dispatch time without
   // depending on the imperative handle being re-created (it isn't gated on
@@ -322,6 +359,72 @@ const Deck = forwardRef(function Deck(
       gate.gain.setTargetAtTime(isolate === mode ? 1 : 0, t, 0.02);
     }
   }, [isolate, audioCtxRef, chainTick]);
+
+  // ─── W3.6 — sound-bite region ───
+  useEffect(() => { biteRegionRef.current = bite; }, [bite]);
+
+  const stopBitePreview = useCallback(() => {
+    const src = bitePreviewSourceRef.current;
+    if (src) {
+      try { src.stop(); } catch {}
+      try { src.disconnect(); } catch {}
+      bitePreviewSourceRef.current = null;
+    }
+    setBitePreviewing(false);
+  }, []);
+
+  // Loop-preview the region through the deck's own chain (EQ, effects and
+  // any active isolation apply — so what you hear is what extraction saves).
+  const toggleBitePreview = useCallback(() => {
+    if (bitePreviewSourceRef.current) {
+      stopBitePreview();
+      return;
+    }
+    const ctx = audioCtxRef.current;
+    const chain = chainRef.current;
+    const buf = bufferRef.current;
+    const { in: bIn, out: bOut } = biteRegionRef.current;
+    if (!ctx || !chain || !buf || bIn == null || bOut == null || bOut <= bIn) return;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    src.loopStart = bIn;
+    src.loopEnd = bOut;
+    src.connect(chain.gain);
+    bitePreviewSourceRef.current = src;
+    setBitePreviewing(true);
+    src.start(0, bIn);
+  }, [audioCtxRef, stopBitePreview]);
+
+  // Extract the region: in-memory slice with equal-power edge fades; if an
+  // isolation mode is engaged, the slice renders offline through the same
+  // isolation path so the saved bite IS the isolated component.
+  const extractBite = useCallback(async () => {
+    const ctx = audioCtxRef.current;
+    const buf = bufferRef.current;
+    const { in: bIn, out: bOut } = biteRegionRef.current;
+    if (!ctx || !buf || bIn == null || bOut == null || bOut <= bIn) return null;
+    let slice = sliceBuffer(ctx, buf, bIn, bOut);
+    if (!slice) return null;
+    if (isolate) slice = await renderIsolated(slice, isolate);
+    const n = ++biteCountRef.current;
+    const base = (fileName || "track").replace(/\.[^.]+$/, "");
+    return { buffer: slice, name: `${base} bite ${n}${isolate ? ` (${isolate})` : ""}` };
+  }, [audioCtxRef, isolate, fileName]);
+
+  const sendBite = useCallback(
+    async (where) => {
+      stopBitePreview();
+      const bitePkg = await extractBite();
+      if (!bitePkg) return;
+      if (where === "crate") onSendToCrate?.(bitePkg.buffer, bitePkg.name);
+      else if (where === "pad") onSendToPad?.(bitePad, bitePkg.buffer, bitePkg.name);
+      else if (where === "wav") {
+        downloadBlob(encodeWav(bitePkg.buffer), `${bitePkg.name.replace(/\s+/g, "-")}.wav`);
+      }
+    },
+    [extractBite, onSendToCrate, onSendToPad, bitePad, stopBitePreview]
+  );
 
   // ─── Filter sweep ───
   useEffect(() => {
@@ -589,6 +692,11 @@ const Deck = forwardRef(function Deck(
       setBpmConfidence(null);
       setDetectedKey(null);
       onKeyDetected?.(null);
+      // W3.6 — a new track invalidates any pending bite region / preview.
+      try { bitePreviewSourceRef.current?.stop(); } catch {}
+      bitePreviewSourceRef.current = null;
+      setBitePreviewing(false);
+      setBite({ in: null, out: null });
     },
     [stopAndDisconnectSource, onKeyDetected]
   );
@@ -1025,6 +1133,10 @@ const Deck = forwardRef(function Deck(
   useEffect(() => {
     return () => {
       stopAndDisconnectSource();
+      // W3.6 — release any looping bite-preview source.
+      try { bitePreviewSourceRef.current?.stop(); } catch {}
+      try { bitePreviewSourceRef.current?.disconnect(); } catch {}
+      bitePreviewSourceRef.current = null;
       clearInterval(timeIntervalRef.current);
       clearTimeout(bassDropTimeoutRef.current);
       clearTimeout(reverbSizeDebounceRef.current);
@@ -1075,6 +1187,9 @@ const Deck = forwardRef(function Deck(
       getFilterFreq: () => filterFreqRef.current,
       setCue: setCueAtCurrent,
       jumpCue,
+      // W3.6 — expose the seek primitive (seconds). Used by tests and any
+      // future external control; mirrors the waveform click-to-seek contract.
+      seekTo: (sec) => seekTo(sec, { autoplay: isPlayingRef.current }),
       syncTo: (otherBpm) => {
         if (!otherBpm) return;
         setSpeedState((s) => clamp(s * (otherBpm / Math.max(40, bpmRef.current)), 0.5, 2.0));
@@ -1468,6 +1583,7 @@ const Deck = forwardRef(function Deck(
         currentTimeRef={currentTimeRef}
         durationRef={durationRef}
         cuesRef={cuesRef}
+        biteRegionRef={biteRegionRef}
         onSeek={fileName ? handleSeek : undefined}
         ariaLabel={`Seek position in deck ${id} track`}
       />
@@ -1486,6 +1602,121 @@ const Deck = forwardRef(function Deck(
         onJump={jumpCue}
         onDelete={deleteCue}
       />
+
+      {/* W3.6 — sound-bite extraction: mark IN/OUT at the playhead, preview
+          the loop, then keep the slice (pad / crate / WAV download). */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 9, color: "#8892b0", letterSpacing: 1, textTransform: "uppercase" }}>
+          Bite
+        </span>
+        <button
+          type="button"
+          disabled={!fileName}
+          onClick={() => {
+            stopBitePreview();
+            setBite((b) => {
+              const t = currentTimeRef.current;
+              // Setting IN past OUT clears OUT — regions are always forward.
+              return { in: t, out: b.out != null && b.out > t ? b.out : null };
+            });
+          }}
+          aria-label={`Set bite in point on deck ${id}`}
+          style={biteBtnStyle(bite.in != null, color, fileName)}
+        >
+          {bite.in != null ? `IN ${formatTime(bite.in)}` : "SET IN"}
+        </button>
+        <button
+          type="button"
+          disabled={!fileName || bite.in == null}
+          onClick={() => {
+            stopBitePreview();
+            setBite((b) => {
+              const t = currentTimeRef.current;
+              return t > (b.in ?? 0) ? { ...b, out: t } : b;
+            });
+          }}
+          aria-label={`Set bite out point on deck ${id}`}
+          style={biteBtnStyle(bite.out != null, color, fileName && bite.in != null)}
+        >
+          {bite.out != null ? `OUT ${formatTime(bite.out)}` : "SET OUT"}
+        </button>
+        {bite.in != null && bite.out != null && (
+          <>
+            <button
+              type="button"
+              onClick={toggleBitePreview}
+              aria-pressed={bitePreviewing}
+              aria-label={`Preview the bite on deck ${id}`}
+              style={biteBtnStyle(bitePreviewing, color, true)}
+            >
+              {bitePreviewing ? "■ STOP" : "▶ LOOP"}
+            </button>
+            {onSendToPad && (
+              <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => sendBite("pad")}
+                  aria-label={`Send the bite to sample pad ${bitePad + 1}`}
+                  style={biteBtnStyle(false, color, true)}
+                >
+                  → PAD
+                </button>
+                <select
+                  value={bitePad}
+                  onChange={(e) => setBitePad(Number(e.target.value))}
+                  aria-label={`Sample pad for deck ${id} bites`}
+                  style={{
+                    background: "rgba(15,18,35,0.6)",
+                    color: "#8892b0",
+                    border: "1px solid rgba(136,146,176,0.25)",
+                    borderRadius: 6,
+                    fontSize: 10,
+                    minHeight: 38,
+                    padding: "2px 6px",
+                    fontFamily: "'Exo 2', sans-serif",
+                    cursor: "pointer",
+                  }}
+                >
+                  {Array.from({ length: 8 }, (_, i) => (
+                    <option key={i} value={i} style={{ background: "#0d1225" }}>
+                      {i + 1}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            )}
+            {onSendToCrate && (
+              <button
+                type="button"
+                onClick={() => sendBite("crate")}
+                aria-label={`Send the bite to the crate from deck ${id}`}
+                style={biteBtnStyle(false, color, true)}
+              >
+                → CRATE
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => sendBite("wav")}
+              aria-label={`Download the bite as WAV from deck ${id}`}
+              style={biteBtnStyle(false, color, true)}
+            >
+              <Icon name="download" size={10} /> WAV
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                stopBitePreview();
+                setBite({ in: null, out: null });
+              }}
+              aria-label={`Clear the bite region on deck ${id}`}
+              style={biteBtnStyle(false, color, true)}
+            >
+              ×
+            </button>
+          </>
+        )}
+      </div>
 
       {/* Transport */}
       <div style={{ display: "flex", justifyContent: "center", gap: 6 }} role="group" aria-label={`Deck ${id} transport`}>

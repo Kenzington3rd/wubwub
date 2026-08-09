@@ -1217,6 +1217,8 @@ export default function App() {
             crossfadeGain={deckGains.A}
             assign={deckAssigns.A}
             onAssignChange={(v) => onAssignChange("A", v)}
+            onSendToCrate={onVoxToCrate}
+            onSendToPad={onVoxToPad}
             focused={focusedDeck === "A"}
             onFocus={focusA}
             onSync={() => onSyncDeck("A")}
@@ -1244,6 +1246,8 @@ export default function App() {
             crossfadeGain={deckGains.B}
             assign={deckAssigns.B}
             onAssignChange={(v) => onAssignChange("B", v)}
+            onSendToCrate={onVoxToCrate}
+            onSendToPad={onVoxToPad}
             focused={focusedDeck === "B"}
             onFocus={focusB}
             onSync={() => onSyncDeck("B")}
@@ -1261,6 +1265,8 @@ export default function App() {
             crossfadeGain={deckGains.C}
             assign={deckAssigns.C}
             onAssignChange={(v) => onAssignChange("C", v)}
+            onSendToCrate={onVoxToCrate}
+            onSendToPad={onVoxToPad}
             focused={focusedDeck === "C"}
             onFocus={focusC}
             onSync={() => onSyncDeck("C")}

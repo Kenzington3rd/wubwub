@@ -29,6 +29,9 @@ export default function WaveformCanvas({
   currentTimeRef,
   durationRef,
   cuesRef,
+  // W3.6 — optional bite region ({ in, out } seconds, or nulls). Drawn as a
+  // translucent band under the cue markers.
+  biteRegionRef,
   onSeek,
   ariaLabel,
 }) {
@@ -157,6 +160,23 @@ export default function WaveformCanvas({
         grad.addColorStop(1, color + "11");
         ctx2d.fillStyle = grad;
         ctx2d.fillRect(i * (barW + 1), H - barH, barW, barH);
+      }
+
+      // W3.6 — bite region band (under the cue markers / playhead)
+      const bite = biteRegionRef?.current;
+      if (duration > 0 && bite && bite.in != null) {
+        const x0 = (bite.in / duration) * W;
+        const x1 = bite.out != null ? (bite.out / duration) * W : x0;
+        ctx2d.fillStyle = color + "1e";
+        if (x1 > x0) ctx2d.fillRect(x0, 0, x1 - x0, H);
+        ctx2d.strokeStyle = color + "aa";
+        ctx2d.lineWidth = 1.5;
+        for (const x of bite.out != null ? [x0, x1] : [x0]) {
+          ctx2d.beginPath();
+          ctx2d.moveTo(x, 0);
+          ctx2d.lineTo(x, H);
+          ctx2d.stroke();
+        }
       }
 
       // Cue markers

@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import Deck from "../src/components/Deck.jsx";
 import { MockAudioBuffer } from "./mocks/webAudioMock.js";
 
-function Harness({ id = "A", onMount, color = "#00f5d4", onKeyDetected }) {
+function Harness({ id = "A", onMount, color = "#00f5d4", onKeyDetected, deckProps = {} }) {
   const audioCtxRef = useRef(null);
   const masterCompressorRef = useRef(null);
   const deckRef = useRef(null);
@@ -29,6 +29,7 @@ function Harness({ id = "A", onMount, color = "#00f5d4", onKeyDetected }) {
 
   return (
     <Deck
+      {...deckProps}
       ref={deckRef}
       id={id}
       color={color}
@@ -1676,5 +1677,58 @@ describe("Deck isolation mode — US68", () => {
   it("@us US68: isolation buttons are disabled until a track is loaded", () => {
     render(<Harness />);
     expect(screen.getByRole("button", { name: /Isolate bass on deck A/i })).toBeDisabled();
+  });
+});
+
+// ─── W3.6 — sound-bite extraction (US69) ───
+describe("Deck sound bites — US69", () => {
+  async function loadedDeck(extraProps = {}) {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} deckProps={extraProps} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 4, sr);
+    buf.getChannelData(0).fill(0.5);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+    return api;
+  }
+
+  it("@us US69: SET IN then SET OUT marks a region; OUT is disabled first", async () => {
+    await loadedDeck();
+    const inBtn = screen.getByRole("button", { name: /Set bite in point on deck A/i });
+    const outBtn = screen.getByRole("button", { name: /Set bite out point on deck A/i });
+    expect(outBtn).toBeDisabled();
+    await act(async () => { fireEvent.click(inBtn); });
+    expect(outBtn).not.toBeDisabled();
+  });
+
+  it("@us US69: a bite routes to the crate as a decoded slice", async () => {
+    const onSendToCrate = vi.fn();
+    let api;
+    render(
+      <Harness onMount={(a) => { api = a; }} deckProps={{ onSendToCrate }} />
+    );
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 4, sr);
+    buf.getChannelData(0).fill(0.5);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+
+    // IN at t=0, seek to 2 s, OUT — a deterministic 2-second region.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set bite in point on deck A/i }));
+    });
+    await act(async () => { api.deckRef.current.seekTo(2); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set bite out point on deck A/i }));
+    });
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: /Send the bite to the crate from deck A/i })
+      );
+    });
+    expect(onSendToCrate).toHaveBeenCalledTimes(1);
+    const [slice, name] = onSendToCrate.mock.calls[0];
+    expect(slice.length).toBe(sr * 2);
+    expect(name).toMatch(/song bite 1/);
   });
 });
