@@ -1003,3 +1003,77 @@ describe("App MIDI residual-bug regressions — R17", () => {
     expect(() => act(() => window.dispatchEvent(up2))).not.toThrow();
   });
 });
+
+// ─── W3.8 — three decks + crossfader assign (US65) ───
+describe("App three-deck integration — US65", () => {
+  it("@us US65: App renders Deck C with its own region, transport, and theme picker", () => {
+    render(<App />);
+    expect(screen.getByText("DECK C")).toBeInTheDocument();
+    expect(screen.getByRole("region", { name: /Deck C/i })).toBeInTheDocument();
+    // MasterBus carries a third ThemePicker row for Deck C.
+    expect(
+      screen.getAllByRole("button", { name: /Deck C color/i }).length
+    ).toBeGreaterThan(0);
+  });
+
+  it("@us US65: default assigns are A→A, B→B, C→THRU (aria-pressed state)", () => {
+    render(<App />);
+    const pressed = (deck, pos) =>
+      screen
+        .getByRole("button", {
+          name:
+            pos === "THRU"
+              ? new RegExp(`Assign deck ${deck} to THRU`, "i")
+              : new RegExp(`Assign deck ${deck} to crossfader side ${pos}`, "i"),
+        })
+        .getAttribute("aria-pressed");
+    expect(pressed("A", "A")).toBe("true");
+    expect(pressed("A", "THRU")).toBe("false");
+    expect(pressed("B", "B")).toBe("true");
+    expect(pressed("C", "THRU")).toBe("true");
+    expect(pressed("C", "A")).toBe("false");
+  });
+
+  it("@us US65: clicking an assign segment moves the deck's assign (aria-pressed flips)", () => {
+    render(<App />);
+    const cToB = screen.getByRole("button", {
+      name: /Assign deck C to crossfader side B/i,
+    });
+    act(() => { fireEvent.click(cToB); });
+    expect(cToB.getAttribute("aria-pressed")).toBe("true");
+    expect(
+      screen
+        .getByRole("button", { name: /Assign deck C to THRU/i })
+        .getAttribute("aria-pressed")
+    ).toBe("false");
+  });
+
+  it("@us US65: a crate entry can quick-load to Deck C", async () => {
+    render(<App />);
+    const crate = screen.getByRole("region", { name: /Session crate/i });
+    const file = new File([new Uint8Array([9, 9, 9])], "vox-take.mp3", {
+      type: "audio/mpeg",
+    });
+    await act(async () => {
+      fireEvent.drop(crate, {
+        dataTransfer: { files: [file], items: [{ kind: "file" }] },
+      });
+    });
+    await screen.findByText("vox-take.mp3");
+    const loadC = screen.getByRole("button", {
+      name: /Load "vox-take.mp3" to deck C/i,
+    });
+    await act(async () => { fireEvent.click(loadC); });
+    await waitFor(() => {
+      expect(screen.getAllByText("vox-take.mp3").length).toBeGreaterThanOrEqual(2);
+    });
+  });
+
+  it("@us US65: Space toggles play on a focused Deck C (focus model generalizes)", async () => {
+    render(<App />);
+    const deckC = screen.getByRole("region", { name: /Deck C/i });
+    act(() => { fireEvent.pointerDown(deckC); });
+    // With no track loaded this must be a safe no-op, not a crash.
+    expect(() => act(() => pressKey(" "))).not.toThrow();
+  });
+});

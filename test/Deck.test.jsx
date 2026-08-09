@@ -178,7 +178,7 @@ describe("Deck — integration tests across many user stories", () => {
 
   it("@us US25 (sync button disabled gating)", () => {
     render(<Harness />);
-    const syncBtn = screen.getByRole("button", { name: /Sync deck A to other deck/i });
+    const syncBtn = screen.getByRole("button", { name: /Sync deck A to the dominant playing deck/i });
     expect(syncBtn).toBeDisabled();
   });
 

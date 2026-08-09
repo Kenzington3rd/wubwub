@@ -35,6 +35,7 @@ export default function Crate({
   onLoadToDeck,
   deckAColor,
   deckBColor,
+  deckCColor,
 }) {
   const fileInputRef = useRef(null);
   const [isDragOver, setIsDragOver] = useState(false);
@@ -309,6 +310,8 @@ export default function Crate({
               {[
                 { deck: "A", color: deckAColor },
                 { deck: "B", color: deckBColor },
+                // W3.8 — third deck's quick-load, present only when threaded.
+                ...(deckCColor ? [{ deck: "C", color: deckCColor }] : []),
               ].map(({ deck, color }) => (
                 <button
                   key={deck}

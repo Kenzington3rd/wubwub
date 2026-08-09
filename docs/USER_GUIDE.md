@@ -52,9 +52,34 @@ Pick a preset (Standard / Heavy / Wobble) from the dropdown, then hit **BASS
 DROP**. It runs an automated filter sweep + EQ kick. Wobble adds an LFO wobble
 on the filter after the drop.
 
-## Crossfader
+## Three decks
 
-The center column. Drag to blend Deck A ↔ Deck B. The dropdown picks the curve:
+WAVECRAFT has three full decks — A (cyan), B (purple), and C (green by
+default). All three have the identical feature set: transport, EQ, effects,
+cues, bass drop, NUDGE, BPM/key detection. On wide screens they sit in one
+row (C wraps below at mid widths; on mobile everything stacks).
+
+With three decks, **SYNC** targets the *dominant playing* deck — the other
+deck that's currently audible loudest through the crossfader. If nothing else
+is playing, it falls back to any deck with a track loaded.
+
+## Crossfader & assign
+
+The crossfader is still a two-ended control. Each deck header carries a small
+3-position **assign** switch — `A · — · B` — that decides how that deck
+relates to it:
+
+- **A** — the deck follows the crossfader's A side (fades out as you push right).
+- **B** — the deck follows the B side (fades in as you push right).
+- **—** (THRU) — the deck ignores the crossfader completely and plays at its
+  volume fader. Perfect for an acapella or texture riding on Deck C while you
+  blend beats between A and B.
+
+Defaults are A→A, B→B, C→THRU, which behaves exactly like the classic
+two-deck setup until you touch the switches. Assigns are saved by Settings
+Export.
+
+The dropdown under the fader picks the curve:
 - **Equal Power** (default) — constant loudness through the blend.
 - **Linear** — even amplitude; good for stems of the same track.
 - **Constant 3 dB** — brighter, present.

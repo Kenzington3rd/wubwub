@@ -32,8 +32,10 @@ export default function MasterBus({
   onMasterVolChange,
   deckAColor,
   deckBColor,
+  deckCColor,
   onDeckAColorChange,
   onDeckBColorChange,
+  onDeckCColorChange,
   isRecording,
   onToggleRecord,
   recordSupported,
@@ -233,6 +235,10 @@ export default function MasterBus({
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", alignItems: "center" }}>
         <ThemePicker deckId="A" value={deckAColor} onChange={onDeckAColorChange} />
         <ThemePicker deckId="B" value={deckBColor} onChange={onDeckBColorChange} />
+        {/* W3.8 — Deck C's picker renders only when the app threads it. */}
+        {deckCColor && onDeckCColorChange && (
+          <ThemePicker deckId="C" value={deckCColor} onChange={onDeckCColorChange} />
+        )}
       </div>
 
       {/* W1.7 — recorder tap toggle. Disabled while recording: the tap point

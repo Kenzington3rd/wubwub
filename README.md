@@ -5,6 +5,20 @@
 
 WAVECRAFT is a dual-deck DJ mixing app that runs entirely in your browser. **Nothing leaves the device** — no analytics, no telemetry, no CDN dependencies at runtime, no subscriptions, no accounts. Drop a couple of audio files in, mix, record, download. That's it.
 
+## Download the app (no tools required)
+
+Grab the latest build from the [Releases page](https://github.com/Kenzington3rd/wubwub/releases):
+
+- **`wavecraft.html`** — the entire app in one file. Download it, double-click
+  it, mix. Works fully offline, from a USB stick, from anywhere. No install,
+  no terminal, no dependencies.
+- **`wavecraft-pwa.zip`** — the installable PWA build. Unzip it onto any
+  static host, open it in a Chromium browser, and use the address-bar install
+  icon to get a proper dock/home-screen app that works offline.
+
+Releases are cut by the `Release` workflow (`.github/workflows/release.yml`) —
+trigger it manually from the Actions tab with a version tag, or push a `v*` tag.
+
 ## Quick start
 
 ```bash
@@ -93,6 +107,7 @@ wubwub/
 - **P2** looper (4 slots, master-tap capture), 8-pad sampler, bass drop presets, crossfade curves, deck color themes.
 - **P3** mix recording (MediaRecorder + local download), PWA + offline precache, MIDI Learn (Chrome/Edge/Opera), autocorrelation BPM, single-file build.
 - **W1** harmonic key suggestions, momentary pitch-bend NUDGE, recording cue markers + `.cue.txt`, settings export/import, session crate, recorder pre/post-limiter tap.
+- **W3.8** third deck (Deck C) with per-deck crossfader assign (A / THRU / B) — assigned decks follow the classic two-ended crossfade curves, THRU bypasses the fader entirely. Defaults reproduce the two-deck behavior exactly.
 
 Full status, longer-form mission, danger-zones list: see [`CLAUDE.md`](CLAUDE.md).
 Roadmap: [`docs/ROADMAP.md`](docs/ROADMAP.md). Worklist: [`docs/BACKLOG.md`](docs/BACKLOG.md).

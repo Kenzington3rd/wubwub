@@ -11,6 +11,7 @@
 // the user didn't choose to save.
 
 import { COLOR_THEMES, CROSSFADE_CURVES } from "./data.js";
+import { CROSSFADE_ASSIGNS } from "./audio/crossfade.js";
 import { MIDI_MODES } from "./midi/midiMap.js";
 
 // Bumped to 2 in Round 9 — the MIDI mapping shape grew an `inputId` (so two
@@ -19,12 +20,18 @@ import { MIDI_MODES } from "./midi/midiMap.js";
 // ("absolute" | "relative2c" | "signedMag") for jog-wheel encoders. V1 files
 // (no inputId, no kind, no mode) still import — missing fields fill in with
 // sane defaults (inputId undefined, kind "cc", mode "absolute").
-export const SETTINGS_VERSION = 2;
+// Bumped to 3 in W3.8 — three decks. Adds `deckCColor` and `deckAssigns`
+// ({ A/B/C → "A" | "THRU" | "B" }, the per-deck crossfader-assign switches).
+// V1/V2 files (two-deck era) still import — the new fields simply fill in
+// with defaults (C green, assigns A→A / B→B / C→THRU, i.e. legacy behavior).
+export const SETTINGS_VERSION = 3;
 export const SETTINGS_APP = "WAVECRAFT";
 
 const VALID_THEME_VALUES = new Set(COLOR_THEMES.map((t) => t.value));
 const VALID_CURVES = new Set(Object.keys(CROSSFADE_CURVES));
 const VALID_TAP_MODES = new Set(["pre", "post"]);
+const VALID_ASSIGNS = new Set(CROSSFADE_ASSIGNS);
+const DECK_IDS = ["A", "B", "C"];
 const VALID_KINDS = new Set(["cc", "note"]);
 const VALID_MODES = new Set(MIDI_MODES);
 
@@ -39,9 +46,11 @@ const MAX_INPUT_ID_LEN = 256;
 export function buildSettings({
   deckAColor,
   deckBColor,
+  deckCColor,
   crossfadeCurve,
   midiMappings,
   recordTapMode,
+  deckAssigns,
 } = {}) {
   return {
     app: SETTINGS_APP,
@@ -49,10 +58,13 @@ export function buildSettings({
     exportedAt: new Date().toISOString(),
     deckAColor,
     deckBColor,
+    deckCColor,
     crossfadeCurve,
     // Shallow copy so the export can't be mutated by later state changes.
     midiMappings: midiMappings ? { ...midiMappings } : {},
     recordTapMode,
+    // W3.8 — per-deck crossfader-assign switches ({ A, B, C }).
+    deckAssigns: deckAssigns ? { ...deckAssigns } : undefined,
   };
 }
 
@@ -138,6 +150,20 @@ export function parseSettings(jsonText) {
   }
   if (typeof raw.deckBColor === "string" && VALID_THEME_VALUES.has(raw.deckBColor)) {
     config.deckBColor = raw.deckBColor;
+  }
+  if (typeof raw.deckCColor === "string" && VALID_THEME_VALUES.has(raw.deckCColor)) {
+    config.deckCColor = raw.deckCColor;
+  }
+  // W3.8 — crossfader assigns. Only well-formed { A/B/C: "A"|"THRU"|"B" }
+  // entries survive; unknown deck ids and invalid values are dropped so a
+  // corrupt file can't wedge a deck into an unreachable state.
+  if (raw.deckAssigns && typeof raw.deckAssigns === "object" && !Array.isArray(raw.deckAssigns)) {
+    const clean = {};
+    for (const id of DECK_IDS) {
+      const v = raw.deckAssigns[id];
+      if (typeof v === "string" && VALID_ASSIGNS.has(v)) clean[id] = v;
+    }
+    if (Object.keys(clean).length > 0) config.deckAssigns = clean;
   }
   if (typeof raw.crossfadeCurve === "string" && VALID_CURVES.has(raw.crossfadeCurve)) {
     config.crossfadeCurve = raw.crossfadeCurve;
