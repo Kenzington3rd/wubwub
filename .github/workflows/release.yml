@@ -1,0 +1,56 @@
+# Builds the downloadable app artifacts and publishes them as a GitHub
+# Release, so users can grab WAVECRAFT from the Releases page without any
+# tooling:
+#   wavecraft.html    — the single-file build. Download, double-click, mix.
+#   wavecraft-pwa.zip — the multi-file PWA build, for hosting on any static
+#                       server (then installable from the browser).
+#
+# Runs only when explicitly asked (workflow_dispatch) or when a v* tag is
+# pushed — it never burns Actions minutes on ordinary pushes.
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version tag (e.g. v1.0.0)"
+        required: true
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Verify (tests + both builds + artifact checks)
+        run: npm run verify:all
+
+      - name: Package artifacts
+        run: |
+          cp dist-single/index.html wavecraft.html
+          (cd dist && zip -r ../wavecraft-pwa.zip .)
+
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ github.event.inputs.version || github.ref_name }}
+        run: |
+          gh release create "$VERSION" \
+            wavecraft.html wavecraft-pwa.zip \
+            --title "WAVECRAFT $VERSION" \
+            --notes "**wavecraft.html** — the whole app in one file. Download it, double-click it, mix. Runs entirely in your browser, fully offline, nothing leaves your device. (Note: mic input, when it ships, needs the PWA build — file:// can't access the microphone.)
+
+          **wavecraft-pwa.zip** — the installable PWA build. Unzip onto any static host (GitHub Pages works), open it in Chrome/Edge, and use the address-bar install icon to get a dock/home-screen app that works offline."

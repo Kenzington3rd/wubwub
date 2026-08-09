@@ -5,6 +5,20 @@
 
 WAVECRAFT is a dual-deck DJ mixing app that runs entirely in your browser. **Nothing leaves the device** — no analytics, no telemetry, no CDN dependencies at runtime, no subscriptions, no accounts. Drop a couple of audio files in, mix, record, download. That's it.
 
+## Download the app (no tools required)
+
+Grab the latest build from the [Releases page](https://github.com/Kenzington3rd/wubwub/releases):
+
+- **`wavecraft.html`** — the entire app in one file. Download it, double-click
+  it, mix. Works fully offline, from a USB stick, from anywhere. No install,
+  no terminal, no dependencies.
+- **`wavecraft-pwa.zip`** — the installable PWA build. Unzip it onto any
+  static host, open it in a Chromium browser, and use the address-bar install
+  icon to get a proper dock/home-screen app that works offline.
+
+Releases are cut by the `Release` workflow (`.github/workflows/release.yml`) —
+trigger it manually from the Actions tab with a version tag, or push a `v*` tag.
+
 ## Quick start
 
 ```bash
