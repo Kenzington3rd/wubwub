@@ -26,7 +26,8 @@
 
 ## Wave 2 — valuable, more work (deferred)
 
-- Looper / sample-pad WAV export (M — needs a small `AudioBuffer`→WAV encoder)
+- Looper / sample-pad WAV export (M — needs a small `AudioBuffer`→WAV encoder;
+  the encoder itself is now built under W3.6, which folds this item in)
 - Audio-engine perf HUD + configurable `latencyHint` (S+S, build together)
 - Contributor architecture doc + audio-graph diagram (S)
 - Browser / Web Audio compatibility matrix + consolidated feature detection (S)
@@ -170,8 +171,83 @@ indicator's behavior). Depth 0 = bypass (gain exactly 1.0).
 disabling leaves gain at exactly 1.0; no scheduling pile-up on long
 sessions (curve windows re-armed in bounded chunks).
 
-**Batch-run order.** W3.3 → W3.2 → W3.1 → W3.5 → W3.4 (small/independent
-first, spike-gated last). Commit per ticket, one push, one PR at the end.
+### W3.6 — Sound-bite extraction (waveform region → pad / crate / WAV) · Size M · `LEGIT`
+
+**Problem.** The user wants to pull specific pieces out of a loaded track —
+a vocal phrase, a drum hit, a chord stab — and *keep* them: reusable inside
+the session and savable to their own disk. Today the only extraction path is
+the master looper (fixed 4/8/16-bar capture of the *mix*, not a slice of a
+single track), and nothing can be exported except the mix recording.
+
+**Scope.**
+- Region selection on the deck waveform: drag to select (pointer), or set
+  IN/OUT points from the current playhead (buttons + keys), with the region
+  drawn as an overlay on the existing canvas. Loop-preview the region before
+  committing.
+- Extraction = copying the selected sample range out of the deck's decoded
+  `AudioBuffer` into a new `AudioBuffer` (pure in-memory slice; optional
+  short equal-power fade at each edge to avoid clicks).
+- **Send to:** Sample Pad N (plays via existing pad machinery, key-bound) ·
+  Crate (named `«track» bite 1`, quick-loadable to a deck) · **Download as
+  WAV** (user-initiated save to their own disk — same contract as the mix
+  recording download; no auto-persistence, nothing in localStorage/OPFS).
+- Requires a small `AudioBuffer` → WAV encoder — this is the same encoder
+  Wave 2's "looper / sample-pad WAV export" item needs, so build it once as
+  `src/audio/wavEncode.js` and fold that Wave 2 item into this ticket.
+- Composes with W3.7: if an isolation mode is active, "extract" renders the
+  region *through* the isolation filters (offline render of the slice), so
+  the saved bite is the isolated component, not the full mix.
+
+**Out of scope.** Beat-quantized region snapping (needs beat-phase data the
+app doesn't capture); multi-region playlists; MP3/OGG encoding (WAV only —
+zero-dependency).
+
+**Acceptance.** Select a 2 s region → send to pad 3 → `E` triggers it;
+same region → WAV download → the file round-trips through the deck loader
+at identical length; IO_CONTRACT gains an output row (WAV bite) and the
+new UI affordances; `verify:all` green.
+
+### W3.7 — Component isolation mode (bass / drums / vocal / instrumental) · Size M · `LEGIT`
+
+**Problem.** "Filter a track down to its components" — solo just the vocal,
+just the bassline, or just the drums of a loaded track, to listen through it
+and scrape the bites worth keeping (with W3.6).
+
+**Scope.**
+- Per-deck ISOLATE mode with four one-tap targets, implemented with pure
+  Web Audio (no ML, no model download — hard constraints intact):
+  - **BASS** — steep lowpass (cascaded biquads, ≥ 24 dB/oct at ~180 Hz).
+  - **VOCAL** — mid (center-channel) extraction via `ChannelSplitter` →
+    M = (L+R)/2, band-passed to the vocal range (~200 Hz–8 kHz); pop vocals
+    are overwhelmingly center-panned.
+  - **INSTRUMENTAL** — side extraction (karaoke trick): S = (L−R)/2,
+    which cancels center-panned content.
+  - **DRUMS** — best-effort: side + full-band with a transient-favoring
+    tilt; honest-UI label it "percussive" (kick often sits center with the
+    bass — bleed is expected).
+- Topology: an isolation sub-graph inserted at ONE point in the deck chain
+  (post-source, pre-EQ), bypassed by default via dry/wet gain pairs — the
+  existing effects-bypass convention; never disconnect/reconnect. Chain
+  order change ⇒ **Audio Engine Architect review** (danger zone).
+- Honest-limitations copy in the UI and USER_GUIDE: this is EQ/phase math,
+  not stem separation — bleed is normal, quality depends on the mix's
+  panning. True ML stems remain the separate spike (see "Spike before
+  committing"); this ticket is deliberately the zero-dependency 80%.
+- Mutually exclusive targets (radio-button style); OFF restores unity.
+
+**Out of scope.** ML source separation (spike-gated); per-component
+gain mixing (it's a solo, not a stem mixer); isolation on the sample pads.
+
+**Acceptance.** Each target audibly isolates its band/channel on a stereo
+test fixture (constructed tones panned center/side in tests — assert via
+`OfflineAudioContext` render, e.g. side-panned tone survives INSTRUMENTAL
+and is ≥ 20 dB down in VOCAL); OFF is bit-transparent (dry path gain 1.0);
+works upstream of W3.6 extraction; `verify:all` green.
+
+**Batch-run order.** W3.3 → W3.2 → W3.7 → W3.6 → W3.1 → W3.5 → W3.4
+(small/independent first; W3.7 before W3.6 so bite extraction can render
+through isolation; spike-gated last). Commit per ticket, one push, one PR
+at the end.
 
 ## Spike before committing
 
