@@ -214,6 +214,14 @@ const Deck = forwardRef(function Deck(
   const biteRegionRef = useRef({ in: null, out: null });
   const bitePreviewSourceRef = useRef(null);
   const biteCountRef = useRef(0);
+  // W3.5 — sidechain-style PUMP: { on, depth 0..1 }. When on, the chain's
+  // pumpGain is driven by one setValueCurveAtTime window per beat (fast dip →
+  // exponential recovery), armed a few beats ahead by an interval timer and
+  // re-read from the live effective BPM so tempo/speed changes track. Phase
+  // is free-running (no beat-grid alignment), matching the beat indicator.
+  const [pump, setPump] = useState({ on: false, depth: 0.6 });
+  const pumpTimerRef = useRef(null);
+  const pumpArmedUntilRef = useRef(0);
   // R17 Q2 — mirror of `volume` for the MIDI relative-encoder getter so the
   // App can always read the *current* deck volume at CC-dispatch time without
   // depending on the imperative handle being re-created (it isn't gated on
@@ -425,6 +433,72 @@ const Deck = forwardRef(function Deck(
     },
     [extractBite, onSendToCrate, onSendToPad, bitePad, stopBitePreview]
   );
+
+  // ─── W3.5 — PUMP scheduler ───
+  // Arms one gain-curve window per beat on chain.pumpGain, keeping ~4 beats
+  // of schedule in flight (re-armed by an interval, so long sessions never
+  // pile up an unbounded queue). The interval timer only PLANS the windows —
+  // the audio-thread automation runs them; no setTimeout ever touches audio.
+  useEffect(() => {
+    const chain = chainRef.current;
+    const ctx = audioCtxRef.current;
+    if (!chain || !ctx || !chain.pumpGain) return;
+    const param = chain.pumpGain.gain;
+
+    if (!pump.on || pump.depth <= 0) {
+      // Bypass: drop any scheduled windows and return to exactly 1.0.
+      clearInterval(pumpTimerRef.current);
+      pumpTimerRef.current = null;
+      try { param.cancelScheduledValues(ctx.currentTime); } catch {}
+      param.setTargetAtTime(1, ctx.currentTime, 0.02);
+      pumpArmedUntilRef.current = 0;
+      return;
+    }
+
+    // One beat's curve: instant dip to (1 - depth), exponential recovery
+    // to 1.0 across the beat. 64 points is plenty for a gain envelope.
+    const makeCurve = (depth) => {
+      const N = 64;
+      const curve = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        const phase = i / (N - 1);
+        curve[i] = 1 - depth * Math.exp(-5 * phase);
+      }
+      curve[N - 1] = 1;
+      return curve;
+    };
+
+    const arm = () => {
+      const now = ctx.currentTime;
+      // Effective BPM = detected BPM × current speed; re-read every arm pass
+      // so SYNC / speed-slider changes retune the pump within a beat or two.
+      const effBpm = Math.max(40, bpmRef.current * (speedRef.current || 1));
+      const period = 60 / effBpm;
+      const curve = makeCurve(pump.depth);
+      let t = Math.max(pumpArmedUntilRef.current, now + 0.02);
+      // Keep ~4 beats armed ahead.
+      while (t < now + 4 * period) {
+        try {
+          param.setValueCurveAtTime(curve, t, period * 0.98);
+        } catch {
+          // Overlapping-window race (e.g. depth changed mid-arm) — skip this
+          // window; the next arm pass recovers.
+        }
+        t += period;
+      }
+      pumpArmedUntilRef.current = t;
+    };
+
+    // Fresh engage: clear stale schedule, start phase now.
+    try { param.cancelScheduledValues(ctx.currentTime); } catch {}
+    pumpArmedUntilRef.current = 0;
+    arm();
+    pumpTimerRef.current = setInterval(arm, 500);
+    return () => {
+      clearInterval(pumpTimerRef.current);
+      pumpTimerRef.current = null;
+    };
+  }, [pump, audioCtxRef, chainTick]);
 
   // ─── Filter sweep ───
   useEffect(() => {
@@ -2051,6 +2125,29 @@ const Deck = forwardRef(function Deck(
           {bassDropActive ? "DROPPING" : "BASS DROP"}
         </button>
         <BassDropMenu preset={bassDropPreset} onChange={setBassDropPreset} color={color} />
+        {/* W3.5 — sidechain-style PUMP: beat-rate ducking at the effective
+            BPM. Free-running phase (matches the beat indicator's behavior). */}
+        <button
+          type="button"
+          onClick={() => setPump((p) => ({ ...p, on: !p.on }))}
+          disabled={!fileName}
+          aria-pressed={pump.on}
+          aria-label={`Toggle pump ducking on deck ${id}`}
+          title="Duck this deck's level on every beat (sidechain-style pump)"
+          style={biteBtnStyle(pump.on, color, !!fileName)}
+        >
+          PUMP
+        </button>
+        <Knob
+          value={pump.depth}
+          onChange={(v) => setPump((p) => ({ ...p, depth: v }))}
+          min={0}
+          max={1}
+          step={0.01}
+          label="DEPTH"
+          color={color}
+          size={36}
+        />
       </div>
     </div>
   );

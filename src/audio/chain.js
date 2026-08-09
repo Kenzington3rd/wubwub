@@ -6,6 +6,7 @@ import { buildReverbIR, buildDistortionCurve } from "./effects.js";
  * Signal flow:
  *   gain → [W3.7 isolation stage: dry ∥ bass/vocal/inst/drums gates] → isoOut
  *     → eqLow → eqMid → eqHigh → filter
+ *     → pumpGain (W3.5 — beat-rate ducking; idle 1.0)
  *     → reverb(dry/wet, parallel) → reverbOut
  *     → delay(dry/wet, parallel; wet path has feedback loop) → delayOut
  *     → distortion(dry/wet, parallel) → distortionOut
@@ -145,6 +146,12 @@ export function buildDeckChain(ctx, outputNode, recordTap) {
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 2048;
 
+  // W3.5 — PUMP gain. A unity gain between the filter sweep and the effects
+  // rack whose value the Deck modulates with beat-rate setValueCurveAtTime
+  // windows (sidechain-style ducking). Idle value is exactly 1.0 (bypass).
+  const pumpGain = ctx.createGain();
+  pumpGain.gain.value = 1;
+
   // ─── Wire it ───
   // W3.7 — isolation stage sits between the deck gain and the EQ.
   gain.connect(isoDry);
@@ -174,9 +181,11 @@ export function buildDeckChain(ctx, outputNode, recordTap) {
   eqMid.connect(eqHigh);
   eqHigh.connect(filter);
 
-  // Reverb stage: filter feeds both dry path and wet path
-  filter.connect(reverbDry);
-  filter.connect(reverbConv);
+  // Reverb stage: filter feeds the pump gain, which feeds both reverb paths
+  // (W3.5 — pump sits post-EQ/filter, pre-effects).
+  filter.connect(pumpGain);
+  pumpGain.connect(reverbDry);
+  pumpGain.connect(reverbConv);
   reverbConv.connect(reverbWet);
   reverbDry.connect(reverbOut);
   reverbWet.connect(reverbOut);
@@ -222,6 +231,7 @@ export function buildDeckChain(ctx, outputNode, recordTap) {
     isoDrumInv,
     isoDrumSum,
     isoDrumTilt,
+    pumpGain,
     eqLow,
     eqMid,
     eqHigh,

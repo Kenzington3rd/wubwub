@@ -98,6 +98,15 @@ With three decks, **SYNC** targets the *dominant playing* deck — the other
 deck that's currently audible loudest through the crossfader. If nothing else
 is playing, it falls back to any deck with a track loaded.
 
+## Pump
+
+Next to BASS DROP, the **PUMP** button ducks the deck's level on every beat —
+the classic sidechain "breathing" EDM feel — with the **DEPTH** knob setting
+how hard it ducks. The rate follows the deck's effective BPM (detected BPM ×
+speed), so it keeps time after SYNC or a speed change. The pulse is
+free-running (it doesn't lock to the track's bar grid — same as the beat
+indicator), so engage it on a downbeat for the tightest feel.
+
 ## Crossfader & assign
 
 The crossfader is still a two-ended control. Each deck header carries a small

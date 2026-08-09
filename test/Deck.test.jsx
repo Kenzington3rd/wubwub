@@ -1732,3 +1732,60 @@ describe("Deck sound bites — US69", () => {
     expect(name).toMatch(/song bite 1/);
   });
 });
+
+// ─── W3.5 — PUMP (US70) ───
+describe("Deck pump — US70", () => {
+  async function loadedDeck() {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+    return api;
+  }
+
+  const findPumpGain = (ctx) => {
+    // pumpGain is the gain node fed by the lowpass sweep filter (20 kHz).
+    const sweep = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowpass" && n.frequency.value === 20000
+    );
+    return sweep.connections.find((n) => n.gain);
+  };
+
+  it("@us US70: engaging PUMP arms per-beat setValueCurve windows (dip to 1-depth, recover to 1)", async () => {
+    const api = await loadedDeck();
+    const ctx = api.audioCtxRef.current;
+    const pumpBtn = screen.getByRole("button", { name: /Toggle pump ducking on deck A/i });
+    await act(async () => { fireEvent.click(pumpBtn); });
+    expect(pumpBtn.getAttribute("aria-pressed")).toBe("true");
+
+    const pumpGain = findPumpGain(ctx);
+    const curves = pumpGain.gain.scheduledValues.filter((s) => s.type === "setValueCurve");
+    expect(curves.length).toBeGreaterThanOrEqual(3); // ~4 beats armed ahead
+    const c = curves[0].curve;
+    expect(c[0]).toBeCloseTo(1 - 0.6, 2); // default depth 0.6 dips to 0.4
+    expect(c[c.length - 1]).toBe(1); // recovers to unity
+    // Windows are beat-length: default 128 BPM → ~0.46 s.
+    expect(curves[0].duration).toBeCloseTo((60 / 128) * 0.98, 2);
+  });
+
+  it("@us US70: disengaging PUMP cancels the schedule and returns the gain to exactly 1", async () => {
+    const api = await loadedDeck();
+    const ctx = api.audioCtxRef.current;
+    const pumpBtn = screen.getByRole("button", { name: /Toggle pump ducking on deck A/i });
+    await act(async () => { fireEvent.click(pumpBtn); });
+    await act(async () => { fireEvent.click(pumpBtn); });
+    expect(pumpBtn.getAttribute("aria-pressed")).toBe("false");
+    const pumpGain = findPumpGain(ctx);
+    const last = pumpGain.gain.scheduledValues.at(-1);
+    expect(last.type).toBe("setTarget");
+    expect(last.target).toBe(1);
+  });
+
+  it("@us US70: PUMP is disabled until a track is loaded", () => {
+    render(<Harness />);
+    expect(
+      screen.getByRole("button", { name: /Toggle pump ducking on deck A/i })
+    ).toBeDisabled();
+  });
+});

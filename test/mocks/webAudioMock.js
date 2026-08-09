@@ -40,6 +40,17 @@ class MockAudioParam {
     this.scheduledValues.push({ type: "expRamp", value: v, time: t });
     return this;
   }
+  setValueCurveAtTime(curve, t, duration) {
+    // W3.5 — record the window; the final curve point becomes the value.
+    this.value = curve[curve.length - 1];
+    this.scheduledValues.push({
+      type: "setValueCurve",
+      curve: Array.from(curve),
+      time: t,
+      duration,
+    });
+    return this;
+  }
   cancelScheduledValues(t) {
     this.scheduledValues.push({ type: "cancel", time: t });
     return this;

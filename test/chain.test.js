@@ -214,3 +214,17 @@ describe("buildDeckChain isolation stage — US68", () => {
     expect(chain.isoDrumTilt.connections).toContain(chain.isoOut);
   });
 });
+
+// ─── W3.5 — PUMP gain (US70) ───
+describe("buildDeckChain pump gain — US70", () => {
+  it("@us US70: pumpGain idles at exactly 1.0 between the filter and the reverb stage", () => {
+    const ctx = new AudioContext();
+    const chain = buildDeckChain(ctx, ctx.createGain());
+    expect(chain.pumpGain.gain.value).toBe(1);
+    expect(chain.filter.connections).toContain(chain.pumpGain);
+    expect(chain.pumpGain.connections).toContain(chain.reverbDry);
+    expect(chain.pumpGain.connections).toContain(chain.reverbConv);
+    // The filter no longer feeds the reverb stage directly.
+    expect(chain.filter.connections).not.toContain(chain.reverbDry);
+  });
+});
