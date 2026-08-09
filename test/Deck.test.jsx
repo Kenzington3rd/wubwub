@@ -4,7 +4,7 @@ import { render, screen, fireEvent, waitFor, act } from "@testing-library/react"
 import Deck from "../src/components/Deck.jsx";
 import { MockAudioBuffer } from "./mocks/webAudioMock.js";
 
-function Harness({ id = "A", onMount, color = "#00f5d4", onKeyDetected }) {
+function Harness({ id = "A", onMount, color = "#00f5d4", onKeyDetected, deckProps = {} }) {
   const audioCtxRef = useRef(null);
   const masterCompressorRef = useRef(null);
   const deckRef = useRef(null);
@@ -29,6 +29,7 @@ function Harness({ id = "A", onMount, color = "#00f5d4", onKeyDetected }) {
 
   return (
     <Deck
+      {...deckProps}
       ref={deckRef}
       id={id}
       color={color}
@@ -1519,5 +1520,272 @@ describe("Deck — integration tests across many user stories", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+// ─── W3.3 — EQ kill switches (US66) ───
+describe("Deck EQ kills — US66", () => {
+  it("@us US66: killing a band schedules the kill floor without moving the knob", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+    const ctx = api.audioCtxRef.current;
+    const lowShelf = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowshelf"
+    );
+
+    // Raise the LOW knob to +3 first so we can prove the knob doesn't move.
+    const lowKnob = screen
+      .getAllByRole("slider")
+      .find((k) => k.getAttribute("aria-label") === "LOW");
+    for (let i = 0; i < 3; i++) {
+      await act(async () => fireEvent.keyDown(lowKnob, { key: "ArrowUp" }));
+    }
+    const knobBefore = lowKnob.getAttribute("aria-valuenow");
+
+    const kill = screen.getByRole("button", { name: /Kill low EQ on deck A/i });
+    expect(kill.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => { fireEvent.click(kill); });
+
+    // aria-pressed flips; the scheduled value is the -26 dB kill floor via
+    // setTargetAtTime (never an instant write); the knob is untouched.
+    expect(kill.getAttribute("aria-pressed")).toBe("true");
+    const last = lowShelf.gain.scheduledValues.at(-1);
+    expect(last.type).toBe("setTarget");
+    expect(last.target).toBe(-26);
+    expect(lowKnob.getAttribute("aria-valuenow")).toBe(knobBefore);
+  });
+
+  it("@us US66: un-killing restores the knob's exact prior gain", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+    const ctx = api.audioCtxRef.current;
+    const highShelf = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "highshelf"
+    );
+    const highKnob = screen
+      .getAllByRole("slider")
+      .find((k) => k.getAttribute("aria-label") === "HIGH");
+    for (let i = 0; i < 5; i++) {
+      await act(async () => fireEvent.keyDown(highKnob, { key: "ArrowUp" }));
+    }
+    const knobValue = Number(highKnob.getAttribute("aria-valuenow"));
+
+    const kill = screen.getByRole("button", { name: /Kill high EQ on deck A/i });
+    await act(async () => { fireEvent.click(kill); });
+    await act(async () => { fireEvent.click(kill); });
+
+    expect(kill.getAttribute("aria-pressed")).toBe("false");
+    const last = highShelf.gain.scheduledValues.at(-1);
+    expect(last.type).toBe("setTarget");
+    expect(last.target).toBe(knobValue);
+  });
+
+  it("@us US66: turning a knob while its band is killed keeps the band killed", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+    const ctx = api.audioCtxRef.current;
+    const midPeak = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "peaking"
+    );
+    const kill = screen.getByRole("button", { name: /Kill mid EQ on deck A/i });
+    await act(async () => { fireEvent.click(kill); });
+
+    const midKnob = screen
+      .getAllByRole("slider")
+      .find((k) => k.getAttribute("aria-label") === "MID");
+    await act(async () => fireEvent.keyDown(midKnob, { key: "ArrowUp" }));
+
+    // The knob moved, but the effective scheduled gain stays at the floor.
+    const last = midPeak.gain.scheduledValues.at(-1);
+    expect(last.target).toBe(-26);
+  });
+});
+
+// ─── W3.7 — component isolation (US68) ───
+describe("Deck isolation mode — US68", () => {
+  async function loadDeck() {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+    return api;
+  }
+
+  it("@us US68: engaging VOCAL ramps dry→0 and the vocal gate→1 via setTargetAtTime", async () => {
+    const api = await loadDeck();
+    const chain = api.deckRef.current ? null : null;
+    const ctx = api.audioCtxRef.current;
+    const vocalBtn = screen.getByRole("button", { name: /Isolate vocal on deck A/i });
+    await act(async () => { fireEvent.click(vocalBtn); });
+    expect(vocalBtn.getAttribute("aria-pressed")).toBe("true");
+
+    // Find the iso gains: the vocal gate is the mono-forced gain feeding the
+    // 200 Hz highpass.
+    const hp = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "highpass" && n.frequency.value === 200
+    );
+    const vocalGate = ctx._nodes.find((n) => n.connections?.includes(hp));
+    expect(vocalGate).toBeTruthy();
+    const lastGate = vocalGate.gain.scheduledValues.at(-1);
+    expect(lastGate.type).toBe("setTarget");
+    expect(lastGate.target).toBe(1);
+  });
+
+  it("@us US68: switching modes is radio-style; OFF restores the dry path to exactly 1", async () => {
+    const api = await loadDeck();
+    const ctx = api.audioCtxRef.current;
+    const bassBtn = screen.getByRole("button", { name: /Isolate bass on deck A/i });
+    const percBtn = screen.getByRole("button", { name: /Isolate perc on deck A/i });
+
+    await act(async () => { fireEvent.click(bassBtn); });
+    await act(async () => { fireEvent.click(percBtn); });
+    expect(bassBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(percBtn.getAttribute("aria-pressed")).toBe("true");
+
+    // Toggle PERC off — every gate targets 0 and the dry path targets 1.
+    await act(async () => { fireEvent.click(percBtn); });
+    expect(percBtn.getAttribute("aria-pressed")).toBe("false");
+    const lp180s = ctx._nodes.filter(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowpass" && n.frequency.value === 180
+    );
+    expect(lp180s.length).toBe(2);
+    const bassGate = ctx._nodes.find((n) => n.connections?.includes(lp180s[0]));
+    expect(bassGate.gain.scheduledValues.at(-1).target).toBe(0);
+    // Dry gain: the gain node whose latest schedule targets 1 and which
+    // feeds a gain that feeds eqLow (lowshelf).
+    const lowshelf = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowshelf"
+    );
+    const isoOut = ctx._nodes.find((n) => n.connections?.includes(lowshelf) && n.nodeType !== "BiquadFilterNode");
+    const isoDry = ctx._nodes.find((n) => n.connections?.includes(isoOut) && n.gain?.scheduledValues?.length);
+    expect(isoDry.gain.scheduledValues.at(-1).target).toBe(1);
+  });
+
+  it("@us US68: isolation buttons are disabled until a track is loaded", () => {
+    render(<Harness />);
+    expect(screen.getByRole("button", { name: /Isolate bass on deck A/i })).toBeDisabled();
+  });
+});
+
+// ─── W3.6 — sound-bite extraction (US69) ───
+describe("Deck sound bites — US69", () => {
+  async function loadedDeck(extraProps = {}) {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} deckProps={extraProps} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 4, sr);
+    buf.getChannelData(0).fill(0.5);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+    return api;
+  }
+
+  it("@us US69: SET IN then SET OUT marks a region; OUT is disabled first", async () => {
+    await loadedDeck();
+    const inBtn = screen.getByRole("button", { name: /Set bite in point on deck A/i });
+    const outBtn = screen.getByRole("button", { name: /Set bite out point on deck A/i });
+    expect(outBtn).toBeDisabled();
+    await act(async () => { fireEvent.click(inBtn); });
+    expect(outBtn).not.toBeDisabled();
+  });
+
+  it("@us US69: a bite routes to the crate as a decoded slice", async () => {
+    const onSendToCrate = vi.fn();
+    let api;
+    render(
+      <Harness onMount={(a) => { api = a; }} deckProps={{ onSendToCrate }} />
+    );
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 4, sr);
+    buf.getChannelData(0).fill(0.5);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+
+    // IN at t=0, seek to 2 s, OUT — a deterministic 2-second region.
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set bite in point on deck A/i }));
+    });
+    await act(async () => { api.deckRef.current.seekTo(2); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set bite out point on deck A/i }));
+    });
+
+    await act(async () => {
+      fireEvent.click(
+        screen.getByRole("button", { name: /Send the bite to the crate from deck A/i })
+      );
+    });
+    expect(onSendToCrate).toHaveBeenCalledTimes(1);
+    const [slice, name] = onSendToCrate.mock.calls[0];
+    expect(slice.length).toBe(sr * 2);
+    expect(name).toMatch(/song bite 1/);
+  });
+});
+
+// ─── W3.5 — PUMP (US70) ───
+describe("Deck pump — US70", () => {
+  async function loadedDeck() {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+    return api;
+  }
+
+  const findPumpGain = (ctx) => {
+    // pumpGain is the gain node fed by the lowpass sweep filter (20 kHz).
+    const sweep = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowpass" && n.frequency.value === 20000
+    );
+    return sweep.connections.find((n) => n.gain);
+  };
+
+  it("@us US70: engaging PUMP arms per-beat setValueCurve windows (dip to 1-depth, recover to 1)", async () => {
+    const api = await loadedDeck();
+    const ctx = api.audioCtxRef.current;
+    const pumpBtn = screen.getByRole("button", { name: /Toggle pump ducking on deck A/i });
+    await act(async () => { fireEvent.click(pumpBtn); });
+    expect(pumpBtn.getAttribute("aria-pressed")).toBe("true");
+
+    const pumpGain = findPumpGain(ctx);
+    const curves = pumpGain.gain.scheduledValues.filter((s) => s.type === "setValueCurve");
+    expect(curves.length).toBeGreaterThanOrEqual(3); // ~4 beats armed ahead
+    const c = curves[0].curve;
+    expect(c[0]).toBeCloseTo(1 - 0.6, 2); // default depth 0.6 dips to 0.4
+    expect(c[c.length - 1]).toBe(1); // recovers to unity
+    // Windows are beat-length: default 128 BPM → ~0.46 s.
+    expect(curves[0].duration).toBeCloseTo((60 / 128) * 0.98, 2);
+  });
+
+  it("@us US70: disengaging PUMP cancels the schedule and returns the gain to exactly 1", async () => {
+    const api = await loadedDeck();
+    const ctx = api.audioCtxRef.current;
+    const pumpBtn = screen.getByRole("button", { name: /Toggle pump ducking on deck A/i });
+    await act(async () => { fireEvent.click(pumpBtn); });
+    await act(async () => { fireEvent.click(pumpBtn); });
+    expect(pumpBtn.getAttribute("aria-pressed")).toBe("false");
+    const pumpGain = findPumpGain(ctx);
+    const last = pumpGain.gain.scheduledValues.at(-1);
+    expect(last.type).toBe("setTarget");
+    expect(last.target).toBe(1);
+  });
+
+  it("@us US70: PUMP is disabled until a track is loaded", () => {
+    render(<Harness />);
+    expect(
+      screen.getByRole("button", { name: /Toggle pump ducking on deck A/i })
+    ).toBeDisabled();
   });
 });

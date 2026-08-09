@@ -35,7 +35,7 @@ const CSP_CONTENT =
   "base-uri 'self';";
 
 const PERMISSIONS_POLICY =
-  "geolocation=(), camera=(), microphone=(), interest-cohort=(), " +
+  "geolocation=(), camera=(), microphone=(self), interest-cohort=(), " +
   "browsing-topics=(), payment=(), usb=(), serial=(), bluetooth=(), hid=()";
 
 /**

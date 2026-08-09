@@ -45,7 +45,7 @@
 > run (implementation + tests + docs + a single push/PR) to minimize CI/Git
 > activity. Ranked by value to the use case.
 
-### W3.1 — Pitch-preserving time-stretch ("KEYLOCK" mode) · Size L · `LEGIT`
+### W3.1 — Pitch-preserving time-stretch ("KEYLOCK" mode) · Size L · `IN PROGRESS` (DSP core + worklet landed; transport integration pending Audio Engine Architect review)
 
 **Problem.** Deck tempo is varispeed-only (`AudioBufferSource.playbackRate`,
 clamped 0.5–2.0 in `Deck.jsx`). Taking a ~105 BPM vocal to 128 BPM raises the
@@ -78,7 +78,7 @@ render-ahead.
 unchanged perceived pitch; VARI mode is behaviorally identical to today;
 `verify:all` green; bundle budget respected (worklet is small, pure JS).
 
-### W3.2 — Voice / mic recording into decks, crate, and sample pads · Size M · `LEGIT`
+### W3.2 — Voice / mic recording into decks, crate, and sample pads · Size M · `DONE`
 
 **Problem.** The user wants to record *their own voice* performing the lyrical
 parts, then speed the vocal up (varispeed today, KEYLOCK once W3.1 lands) and
@@ -120,7 +120,7 @@ BPM/key detection. On `file://`: panel renders the capability notice, app
 otherwise unaffected. New IO_CONTRACT row + tests (mock `getUserMedia`,
 denial path, insecure-context path). CSP: `connect-src 'none'` unchanged.
 
-### W3.3 — EQ kill switches · Size S · `LEGIT`
+### W3.3 — EQ kill switches · Size S · `DONE` (kill floor −26 dB, deeper than the knob floor, for a true kill)
 
 **Problem.** The bass-swap on a drop is the most common EDM mixing move;
 twisting the LOW knob to zero mid-performance is clumsy.
@@ -135,7 +135,7 @@ initially (the shortcut map is crowded); MIDI-learnable like other controls.
 returns the exact prior gain; no zipper noise; tests for the state
 separation.
 
-### W3.4 — Beat-synced loop roll · Size M · `NEEDS-SPIKE` (quantization feel)
+### W3.4 — Beat-synced loop roll · Size M · `SPIKED` (see findings below; build gated on a listening test)
 
 **Problem.** The existing looper captures 4/8/16 bars from the master — it is
 capture-oriented. EDM performance wants momentary ¼/½/1/2-beat rolls on a
@@ -155,7 +155,7 @@ press-time quantization feels good enough before building the full UI.
 release resumes the running timeline position; works in VARI and (if W3.1
 lands first) KEYLOCK.
 
-### W3.5 — Sidechain-style ducking ("PUMP") · Size M · `LEGIT` (stretch goal)
+### W3.5 — Sidechain-style ducking ("PUMP") · Size M · `DONE`
 
 **Problem.** The instantly recognizable EDM "pump" (bed ducking under the
 kick) is impossible today without manual volume riding.
@@ -171,7 +171,7 @@ indicator's behavior). Depth 0 = bypass (gain exactly 1.0).
 disabling leaves gain at exactly 1.0; no scheduling pile-up on long
 sessions (curve windows re-armed in bounded chunks).
 
-### W3.6 — Sound-bite extraction (waveform region → pad / crate / WAV) · Size M · `LEGIT`
+### W3.6 — Sound-bite extraction (waveform region → pad / crate / WAV) · Size M · `DONE` (region via IN/OUT playhead marks; drag-select deferred)
 
 **Problem.** The user wants to pull specific pieces out of a loaded track —
 a vocal phrase, a drum hit, a chord stab — and *keep* them: reusable inside
@@ -207,7 +207,7 @@ same region → WAV download → the file round-trips through the deck loader
 at identical length; IO_CONTRACT gains an output row (WAV bite) and the
 new UI affordances; `verify:all` green.
 
-### W3.7 — Component isolation mode (bass / drums / vocal / instrumental) · Size M · `LEGIT`
+### W3.7 — Component isolation mode (bass / drums / vocal / instrumental) · Size M · `DONE`
 
 **Problem.** "Filter a track down to its components" — solo just the vocal,
 just the bassline, or just the drums of a loaded track, to listen through it
@@ -309,6 +309,36 @@ per-deck headphone cueing (that's the split-cue roadmap item); a 3-way
 (regression suite green unmodified in spirit); a track on C at THRU stays
 audible across the full crossfader travel; assigning C to a side makes it
 follow that side's curve; `verify:all` green; bundle + perf budgets hold.
+
+### W3.4 spike findings (2026-08-09)
+
+The roll mechanism is **mechanically proven** by the W3.6 bite-preview
+machinery: a momentary `AudioBufferSource` with `loop=true` and
+`loopStart`/`loopEnd` set at press time engages within one buffer quantum,
+and the deck's wall-clock timekeeping keeps running underneath, so releasing
+into `seekTo(elapsed position)` restores the un-rolled timeline exactly.
+Roll lengths derive from effective BPM (¼/½/1/2 beats × 60/BPM/speed) the
+same way the PUMP period does. What the spike could NOT settle headlessly is
+the **feel** of press-time quantization (free-running phase means the roll
+loops from wherever you pressed, not from the bar grid) — that's a
+listening judgment. Recommendation: build the four momentary roll buttons on
+the bite-preview source path (S–M effort now that the machinery exists), try
+it by ear, and only then decide whether beat-phase snapping needs to be
+pulled forward from the deferred list.
+
+### W3.1 status (2026-08-09)
+
+Landed: `src/audio/timeStretch.js` (pure granular OLA core — 4096-sample
+Hann grains, 50% unity overlap, independent rate/pitchRatio via linear-
+interp grain reads; unit-tested incl. unity-OLA and length/pitch behavior)
+and `src/worklets/stretch-worklet.js` (streaming AudioWorklet mirror,
+`stretch-processor`, rate/pitchRatio AudioParams, load/play/pause/seek
+protocol, position reports — ?raw + Blob-URL ready like the looper).
+Remaining: the Deck transport swap (VARI/KEYLOCK toggle replacing the
+BufferSource path in KEYLOCK mode, NUDGE/sync/seek/cue/BPM-math audit) —
+deliberately deferred to a dedicated pass with the Audio Engine Architect
+review and real listening tests, per the CLAUDE.md danger-zone rule on the
+signal-chain head.
 
 **Batch-run order.** W3.3 → W3.2 → W3.7 → W3.6 → W3.8 → W3.1 → W3.5 → W3.4
 (small/independent first; W3.7 before W3.6 so bite extraction can render

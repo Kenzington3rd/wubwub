@@ -22,6 +22,7 @@ ever leaves your device.
 | Waveform | Live view. **Click anywhere on it to jump** to that point. Or focus it with `Tab` and seek with the keyboard (see Keyboard shortcuts). |
 | VOL / SPD / FLT | Volume, playback speed (0.5×–2.0×), low-pass filter sweep. |
 | LOW / MID / HIGH | 3-band EQ knobs — drag up/down. ±12 dB. |
+| KILL (under each EQ knob) | One-tap band kill — silences that band without moving the knob; tap again to restore the exact knob value. The bass-swap button. |
 | TAP | Tap in time with the music 4+ times to set BPM by ear. |
 | AUTO | Auto-detects BPM **and** musical key from the loaded track. |
 | ÷2 / ×2 | Halve or double the BPM — fixes half-time / double-time detection. |
@@ -37,6 +38,40 @@ ever leaves your device.
 - Click a cue chip — or press number keys `1`–`8` — to jump to it.
 - Click the **×** on a chip to delete it.
 - Cues are session-only: they reset when you load a new file or reload the page.
+
+## Isolate — filter a track down to a component
+
+The **ISOLATE** row on each deck solos one part of the loaded track:
+
+- **BASS** — just the low end (steep filter at 180 Hz).
+- **VOCAL** — the centre channel, band-passed to the vocal range. Works
+  because vocals are almost always mixed dead-centre.
+- **INSTR** — the opposite: cancels the centre channel (the classic karaoke
+  trick), leaving the instrumental sides.
+- **PERC** — best-effort percussive solo (sides plus a treble tilt).
+
+One mode at a time; tap the active one again to switch it off. **Honest
+limits:** this is EQ and phase math, not AI stem separation — some bleed is
+normal, and results depend on how the original track was mixed. It's built
+for *scraping*: isolate the part you want, listen through, and grab the
+moments worth keeping.
+
+## Bites — keep the good parts
+
+The **BITE** row under each deck's cue panel pulls a slice out of the loaded
+track:
+
+1. Play or seek to the start of the moment you want and hit **SET IN**; seek
+   to the end and hit **SET OUT**. The region lights up on the waveform.
+2. **▶ LOOP** previews the region on repeat — through the deck's EQ, effects,
+   and any active ISOLATE mode, so what you hear is what you'll get.
+3. Keep it: **→ PAD** puts it on a sample pad (pick the pad number), **→
+   CRATE** shelves it for quick-loading to a deck, **WAV** downloads it to
+   your disk as a clean 16-bit WAV file.
+
+Combine with ISOLATE for component scraping: isolate VOCAL, mark the phrase,
+and the extracted bite is the isolated vocal — not the full mix. Edges get a
+tiny fade so bites never click. The region clears when you load a new track.
 
 ## Effects rack
 
@@ -62,6 +97,15 @@ row (C wraps below at mid widths; on mobile everything stacks).
 With three decks, **SYNC** targets the *dominant playing* deck — the other
 deck that's currently audible loudest through the crossfader. If nothing else
 is playing, it falls back to any deck with a track loaded.
+
+## Pump
+
+Next to BASS DROP, the **PUMP** button ducks the deck's level on every beat —
+the classic sidechain "breathing" EDM feel — with the **DEPTH** knob setting
+how hard it ducks. The rate follows the deck's effective BPM (detected BPM ×
+speed), so it keeps time after SYNC or a speed change. The pulse is
+free-running (it doesn't lock to the track's bar grid — same as the beat
+indicator), so engage it on a downbeat for the tightest feel.
 
 ## Crossfader & assign
 
@@ -114,6 +158,27 @@ keeps playing; only the crate's copy is dropped.
 The crate is **session-only**: it lives in memory and is empty every time you
 reload. Nothing in it is ever saved to disk. (Each row has BPM and key columns;
 they fill in only if that data is already known.)
+
+## Recording your voice (VOX)
+
+The **VOX** panel records your own voice — for singing the lyrical parts of a
+remix, drops, or tags — entirely on your device.
+
+1. **ARM MIC** — your browser asks for microphone permission once.
+2. **RECORD / STOP** — capture a take. Constraints are tuned for music (no
+   echo cancellation or noise suppression chewing up your vocal).
+3. **PREVIEW** the take, then send it: **→ A / → B / → C** puts it on a deck
+   (where you can speed it up, EQ it, and mix it like any track), **→ CRATE**
+   shelves it, **→ PAD** assigns it to a sample pad for one-shot triggering.
+4. **MONITOR** (optional) lets you hear the mic through the output —
+   headphones strongly recommended; open speakers will feed back.
+
+Takes live in memory only — they are never saved or uploaded, and they vanish
+when you close the tab (send a take to a deck and record your mix if you want
+to keep the result). Mic capture needs a secure context: it works in the
+installed PWA, over https, or on localhost. The single-file build opened
+straight from disk (`file://`) can't access the microphone — the panel tells
+you so instead of failing.
 
 ## Recording your mix
 

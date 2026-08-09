@@ -14,6 +14,9 @@ import EffectCard from "./EffectCard.jsx";
 import CuePanel from "./CuePanel.jsx";
 import BassDropMenu from "./BassDropMenu.jsx";
 import { buildDeckChain, disconnectChain } from "../audio/chain.js";
+import { encodeWav, sliceBuffer } from "../audio/wavEncode.js";
+import { renderIsolated } from "../audio/isolationRender.js";
+import { downloadBlob } from "../audio/recorder.js";
 import { buildReverbIR, buildDistortionCurve, clamp, rampGain } from "../audio/effects.js";
 import { detectBpm } from "../audio/bpmDetect.js";
 import { detectKey } from "../audio/keyDetect.js";
@@ -40,6 +43,32 @@ const SR_ONLY = {
   border: 0,
 };
 
+// W3.3 — gain (dB) a killed EQ band ramps to. Deliberately below the knob's
+// −12 dB floor: a DJ "kill" silences the band, it doesn't just duck it. The
+// BiquadFilter gain param accepts values past the UI range.
+const EQ_KILL_DB = -26;
+
+// W3.6 — shared style for the bite-row buttons.
+function biteBtnStyle(active, color, enabled) {
+  return {
+    background: active ? `${color}22` : "rgba(255,255,255,0.05)",
+    border: `1px solid ${active ? color : `${color}33`}`,
+    color: !enabled ? "#8892b0" : active ? color : "#8892b0",
+    borderRadius: 6,
+    padding: "4px 10px",
+    minHeight: 38,
+    fontSize: 9,
+    fontWeight: 700,
+    letterSpacing: 1,
+    cursor: enabled ? "pointer" : "not-allowed",
+    opacity: enabled ? 1 : 0.6,
+    fontFamily: "'Exo 2', sans-serif",
+    display: "inline-flex",
+    alignItems: "center",
+    gap: 4,
+  };
+}
+
 function formatTime(s) {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
@@ -61,6 +90,10 @@ const Deck = forwardRef(function Deck(
     // rendering in isolated component tests).
     assign,
     onAssignChange,
+    // W3.6 — sound-bite routing (same adoption paths the VOX panel uses).
+    // Optional; the BITE send buttons that need them hide when absent.
+    onSendToCrate,
+    onSendToPad,
     focused,
     onFocus,
     onSync,
@@ -162,6 +195,33 @@ const Deck = forwardRef(function Deck(
   const eqLowRef = useRef(0);
   const eqMidRef = useRef(0);
   const eqHighRef = useRef(0);
+  // W3.3 — per-band EQ kill switches. Kill state is deliberately SEPARATE
+  // from the knob state: killing a band ramps the filter gain to KILL_DB
+  // without moving the knob, and un-killing restores the knob's exact prior
+  // value (which may have been turned while killed — the effective gain
+  // always re-derives from the live pair).
+  const [eqKills, setEqKills] = useState({ low: false, mid: false, high: false });
+  // W3.7 — component isolation mode. null = OFF (dry path, bit-transparent);
+  // otherwise one of "bass" | "vocal" | "instrumental" | "drums". Mutually
+  // exclusive (radio-style) — engaging one disengages the others.
+  const [isolate, setIsolate] = useState(null);
+  // W3.6 — sound-bite region (seconds). Set from the playhead via the IN /
+  // OUT buttons; drawn on the waveform via biteRegionRef; extracted as an
+  // in-memory slice (through the active isolation mode, if any).
+  const [bite, setBite] = useState({ in: null, out: null });
+  const [bitePreviewing, setBitePreviewing] = useState(false);
+  const [bitePad, setBitePad] = useState(0);
+  const biteRegionRef = useRef({ in: null, out: null });
+  const bitePreviewSourceRef = useRef(null);
+  const biteCountRef = useRef(0);
+  // W3.5 — sidechain-style PUMP: { on, depth 0..1 }. When on, the chain's
+  // pumpGain is driven by one setValueCurveAtTime window per beat (fast dip →
+  // exponential recovery), armed a few beats ahead by an interval timer and
+  // re-read from the live effective BPM so tempo/speed changes track. Phase
+  // is free-running (no beat-grid alignment), matching the beat indicator.
+  const [pump, setPump] = useState({ on: false, depth: 0.6 });
+  const pumpTimerRef = useRef(null);
+  const pumpArmedUntilRef = useRef(0);
   // R17 Q2 — mirror of `volume` for the MIDI relative-encoder getter so the
   // App can always read the *current* deck volume at CC-dispatch time without
   // depending on the imperative handle being re-created (it isn't gated on
@@ -191,11 +251,14 @@ const Deck = forwardRef(function Deck(
   // V5 (R19) — EQ ref mirrors. Kept on every tick so the bass-drop's t3
   // recovery reads the LIVE user value even when the user moved the knob
   // during the drop's automation window.
+  // W3.3 — the refs mirror the EFFECTIVE gain (kill overrides knob) so the
+  // bass-drop's t3 recovery lands on the killed value while a kill is held,
+  // not on a knob value the listener can't currently hear.
   useEffect(() => {
-    eqLowRef.current = eq.low;
-    eqMidRef.current = eq.mid;
-    eqHighRef.current = eq.high;
-  }, [eq]);
+    eqLowRef.current = eqKills.low ? EQ_KILL_DB : eq.low;
+    eqMidRef.current = eqKills.mid ? EQ_KILL_DB : eq.mid;
+    eqHighRef.current = eqKills.high ? EQ_KILL_DB : eq.high;
+  }, [eq, eqKills]);
   // X4 (R21) — reverb / distortion MIX ref mirrors. The size-debounce and
   // drive-debounce timers (200 ms) read MIX from these refs when computing
   // the ramp-back target, so a MIX slide during the debounce window lands at
@@ -267,16 +330,175 @@ const Deck = forwardRef(function Deck(
     // (a multi-leg linearRamp set). A plain setTargetAtTime here would queue
     // behind those ramps and not take effect until t3 — the user-perceived
     // "snap back". Cancel-and-hold first so the user's change applies now.
+    // W3.3 — a killed band's effective gain is EQ_KILL_DB regardless of the
+    // knob; the knob value is untouched and restores exactly on un-kill.
+    const low = eqKills.low ? EQ_KILL_DB : eq.low;
+    const mid = eqKills.mid ? EQ_KILL_DB : eq.mid;
+    const high = eqKills.high ? EQ_KILL_DB : eq.high;
     if (bassDropRunningRef.current) {
-      reapplyParamThroughAutomation(chain.eqLow.gain, eq.low, ctx, 0.02);
-      reapplyParamThroughAutomation(chain.eqMid.gain, eq.mid, ctx, 0.02);
-      reapplyParamThroughAutomation(chain.eqHigh.gain, eq.high, ctx, 0.02);
+      reapplyParamThroughAutomation(chain.eqLow.gain, low, ctx, 0.02);
+      reapplyParamThroughAutomation(chain.eqMid.gain, mid, ctx, 0.02);
+      reapplyParamThroughAutomation(chain.eqHigh.gain, high, ctx, 0.02);
     } else {
-      chain.eqLow.gain.setTargetAtTime(eq.low, ctx.currentTime, 0.02);
-      chain.eqMid.gain.setTargetAtTime(eq.mid, ctx.currentTime, 0.02);
-      chain.eqHigh.gain.setTargetAtTime(eq.high, ctx.currentTime, 0.02);
+      chain.eqLow.gain.setTargetAtTime(low, ctx.currentTime, 0.02);
+      chain.eqMid.gain.setTargetAtTime(mid, ctx.currentTime, 0.02);
+      chain.eqHigh.gain.setTargetAtTime(high, ctx.currentTime, 0.02);
     }
-  }, [eq, audioCtxRef, chainTick, reapplyParamThroughAutomation]);
+  }, [eq, eqKills, audioCtxRef, chainTick, reapplyParamThroughAutomation]);
+
+  // ─── W3.7 — component isolation gates ───
+  // One dry gain + four gated wet paths built in chain.js. Engaging a mode
+  // ramps the dry to 0 and that mode's gate to 1 (setTargetAtTime — the
+  // dry/wet bypass convention, never disconnect); OFF restores dry = 1.0
+  // exactly so the stage is bit-transparent when idle.
+  useEffect(() => {
+    const chain = chainRef.current;
+    const ctx = audioCtxRef.current;
+    if (!chain || !ctx || !chain.isoDry) return;
+    const t = ctx.currentTime;
+    const gates = {
+      bass: chain.isoBassGate,
+      vocal: chain.isoVocalGate,
+      instrumental: chain.isoInstGate,
+      drums: chain.isoDrumGate,
+    };
+    chain.isoDry.gain.setTargetAtTime(isolate ? 0 : 1, t, 0.02);
+    for (const [mode, gate] of Object.entries(gates)) {
+      gate.gain.setTargetAtTime(isolate === mode ? 1 : 0, t, 0.02);
+    }
+  }, [isolate, audioCtxRef, chainTick]);
+
+  // ─── W3.6 — sound-bite region ───
+  useEffect(() => { biteRegionRef.current = bite; }, [bite]);
+
+  const stopBitePreview = useCallback(() => {
+    const src = bitePreviewSourceRef.current;
+    if (src) {
+      try { src.stop(); } catch {}
+      try { src.disconnect(); } catch {}
+      bitePreviewSourceRef.current = null;
+    }
+    setBitePreviewing(false);
+  }, []);
+
+  // Loop-preview the region through the deck's own chain (EQ, effects and
+  // any active isolation apply — so what you hear is what extraction saves).
+  const toggleBitePreview = useCallback(() => {
+    if (bitePreviewSourceRef.current) {
+      stopBitePreview();
+      return;
+    }
+    const ctx = audioCtxRef.current;
+    const chain = chainRef.current;
+    const buf = bufferRef.current;
+    const { in: bIn, out: bOut } = biteRegionRef.current;
+    if (!ctx || !chain || !buf || bIn == null || bOut == null || bOut <= bIn) return;
+    const src = ctx.createBufferSource();
+    src.buffer = buf;
+    src.loop = true;
+    src.loopStart = bIn;
+    src.loopEnd = bOut;
+    src.connect(chain.gain);
+    bitePreviewSourceRef.current = src;
+    setBitePreviewing(true);
+    src.start(0, bIn);
+  }, [audioCtxRef, stopBitePreview]);
+
+  // Extract the region: in-memory slice with equal-power edge fades; if an
+  // isolation mode is engaged, the slice renders offline through the same
+  // isolation path so the saved bite IS the isolated component.
+  const extractBite = useCallback(async () => {
+    const ctx = audioCtxRef.current;
+    const buf = bufferRef.current;
+    const { in: bIn, out: bOut } = biteRegionRef.current;
+    if (!ctx || !buf || bIn == null || bOut == null || bOut <= bIn) return null;
+    let slice = sliceBuffer(ctx, buf, bIn, bOut);
+    if (!slice) return null;
+    if (isolate) slice = await renderIsolated(slice, isolate);
+    const n = ++biteCountRef.current;
+    const base = (fileName || "track").replace(/\.[^.]+$/, "");
+    return { buffer: slice, name: `${base} bite ${n}${isolate ? ` (${isolate})` : ""}` };
+  }, [audioCtxRef, isolate, fileName]);
+
+  const sendBite = useCallback(
+    async (where) => {
+      stopBitePreview();
+      const bitePkg = await extractBite();
+      if (!bitePkg) return;
+      if (where === "crate") onSendToCrate?.(bitePkg.buffer, bitePkg.name);
+      else if (where === "pad") onSendToPad?.(bitePad, bitePkg.buffer, bitePkg.name);
+      else if (where === "wav") {
+        downloadBlob(encodeWav(bitePkg.buffer), `${bitePkg.name.replace(/\s+/g, "-")}.wav`);
+      }
+    },
+    [extractBite, onSendToCrate, onSendToPad, bitePad, stopBitePreview]
+  );
+
+  // ─── W3.5 — PUMP scheduler ───
+  // Arms one gain-curve window per beat on chain.pumpGain, keeping ~4 beats
+  // of schedule in flight (re-armed by an interval, so long sessions never
+  // pile up an unbounded queue). The interval timer only PLANS the windows —
+  // the audio-thread automation runs them; no setTimeout ever touches audio.
+  useEffect(() => {
+    const chain = chainRef.current;
+    const ctx = audioCtxRef.current;
+    if (!chain || !ctx || !chain.pumpGain) return;
+    const param = chain.pumpGain.gain;
+
+    if (!pump.on || pump.depth <= 0) {
+      // Bypass: drop any scheduled windows and return to exactly 1.0.
+      clearInterval(pumpTimerRef.current);
+      pumpTimerRef.current = null;
+      try { param.cancelScheduledValues(ctx.currentTime); } catch {}
+      param.setTargetAtTime(1, ctx.currentTime, 0.02);
+      pumpArmedUntilRef.current = 0;
+      return;
+    }
+
+    // One beat's curve: instant dip to (1 - depth), exponential recovery
+    // to 1.0 across the beat. 64 points is plenty for a gain envelope.
+    const makeCurve = (depth) => {
+      const N = 64;
+      const curve = new Float32Array(N);
+      for (let i = 0; i < N; i++) {
+        const phase = i / (N - 1);
+        curve[i] = 1 - depth * Math.exp(-5 * phase);
+      }
+      curve[N - 1] = 1;
+      return curve;
+    };
+
+    const arm = () => {
+      const now = ctx.currentTime;
+      // Effective BPM = detected BPM × current speed; re-read every arm pass
+      // so SYNC / speed-slider changes retune the pump within a beat or two.
+      const effBpm = Math.max(40, bpmRef.current * (speedRef.current || 1));
+      const period = 60 / effBpm;
+      const curve = makeCurve(pump.depth);
+      let t = Math.max(pumpArmedUntilRef.current, now + 0.02);
+      // Keep ~4 beats armed ahead.
+      while (t < now + 4 * period) {
+        try {
+          param.setValueCurveAtTime(curve, t, period * 0.98);
+        } catch {
+          // Overlapping-window race (e.g. depth changed mid-arm) — skip this
+          // window; the next arm pass recovers.
+        }
+        t += period;
+      }
+      pumpArmedUntilRef.current = t;
+    };
+
+    // Fresh engage: clear stale schedule, start phase now.
+    try { param.cancelScheduledValues(ctx.currentTime); } catch {}
+    pumpArmedUntilRef.current = 0;
+    arm();
+    pumpTimerRef.current = setInterval(arm, 500);
+    return () => {
+      clearInterval(pumpTimerRef.current);
+      pumpTimerRef.current = null;
+    };
+  }, [pump, audioCtxRef, chainTick]);
 
   // ─── Filter sweep ───
   useEffect(() => {
@@ -544,6 +766,11 @@ const Deck = forwardRef(function Deck(
       setBpmConfidence(null);
       setDetectedKey(null);
       onKeyDetected?.(null);
+      // W3.6 — a new track invalidates any pending bite region / preview.
+      try { bitePreviewSourceRef.current?.stop(); } catch {}
+      bitePreviewSourceRef.current = null;
+      setBitePreviewing(false);
+      setBite({ in: null, out: null });
     },
     [stopAndDisconnectSource, onKeyDetected]
   );
@@ -980,6 +1207,10 @@ const Deck = forwardRef(function Deck(
   useEffect(() => {
     return () => {
       stopAndDisconnectSource();
+      // W3.6 — release any looping bite-preview source.
+      try { bitePreviewSourceRef.current?.stop(); } catch {}
+      try { bitePreviewSourceRef.current?.disconnect(); } catch {}
+      bitePreviewSourceRef.current = null;
       clearInterval(timeIntervalRef.current);
       clearTimeout(bassDropTimeoutRef.current);
       clearTimeout(reverbSizeDebounceRef.current);
@@ -1030,6 +1261,9 @@ const Deck = forwardRef(function Deck(
       getFilterFreq: () => filterFreqRef.current,
       setCue: setCueAtCurrent,
       jumpCue,
+      // W3.6 — expose the seek primitive (seconds). Used by tests and any
+      // future external control; mirrors the waveform click-to-seek contract.
+      seekTo: (sec) => seekTo(sec, { autoplay: isPlayingRef.current }),
       syncTo: (otherBpm) => {
         if (!otherBpm) return;
         setSpeedState((s) => clamp(s * (otherBpm / Math.max(40, bpmRef.current)), 0.5, 2.0));
@@ -1423,6 +1657,7 @@ const Deck = forwardRef(function Deck(
         currentTimeRef={currentTimeRef}
         durationRef={durationRef}
         cuesRef={cuesRef}
+        biteRegionRef={biteRegionRef}
         onSeek={fileName ? handleSeek : undefined}
         ariaLabel={`Seek position in deck ${id} track`}
       />
@@ -1441,6 +1676,121 @@ const Deck = forwardRef(function Deck(
         onJump={jumpCue}
         onDelete={deleteCue}
       />
+
+      {/* W3.6 — sound-bite extraction: mark IN/OUT at the playhead, preview
+          the loop, then keep the slice (pad / crate / WAV download). */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 9, color: "#8892b0", letterSpacing: 1, textTransform: "uppercase" }}>
+          Bite
+        </span>
+        <button
+          type="button"
+          disabled={!fileName}
+          onClick={() => {
+            stopBitePreview();
+            setBite((b) => {
+              const t = currentTimeRef.current;
+              // Setting IN past OUT clears OUT — regions are always forward.
+              return { in: t, out: b.out != null && b.out > t ? b.out : null };
+            });
+          }}
+          aria-label={`Set bite in point on deck ${id}`}
+          style={biteBtnStyle(bite.in != null, color, fileName)}
+        >
+          {bite.in != null ? `IN ${formatTime(bite.in)}` : "SET IN"}
+        </button>
+        <button
+          type="button"
+          disabled={!fileName || bite.in == null}
+          onClick={() => {
+            stopBitePreview();
+            setBite((b) => {
+              const t = currentTimeRef.current;
+              return t > (b.in ?? 0) ? { ...b, out: t } : b;
+            });
+          }}
+          aria-label={`Set bite out point on deck ${id}`}
+          style={biteBtnStyle(bite.out != null, color, fileName && bite.in != null)}
+        >
+          {bite.out != null ? `OUT ${formatTime(bite.out)}` : "SET OUT"}
+        </button>
+        {bite.in != null && bite.out != null && (
+          <>
+            <button
+              type="button"
+              onClick={toggleBitePreview}
+              aria-pressed={bitePreviewing}
+              aria-label={`Preview the bite on deck ${id}`}
+              style={biteBtnStyle(bitePreviewing, color, true)}
+            >
+              {bitePreviewing ? "■ STOP" : "▶ LOOP"}
+            </button>
+            {onSendToPad && (
+              <span style={{ display: "inline-flex", gap: 4, alignItems: "center" }}>
+                <button
+                  type="button"
+                  onClick={() => sendBite("pad")}
+                  aria-label={`Send the bite to sample pad ${bitePad + 1}`}
+                  style={biteBtnStyle(false, color, true)}
+                >
+                  → PAD
+                </button>
+                <select
+                  value={bitePad}
+                  onChange={(e) => setBitePad(Number(e.target.value))}
+                  aria-label={`Sample pad for deck ${id} bites`}
+                  style={{
+                    background: "rgba(15,18,35,0.6)",
+                    color: "#8892b0",
+                    border: "1px solid rgba(136,146,176,0.25)",
+                    borderRadius: 6,
+                    fontSize: 10,
+                    minHeight: 38,
+                    padding: "2px 6px",
+                    fontFamily: "'Exo 2', sans-serif",
+                    cursor: "pointer",
+                  }}
+                >
+                  {Array.from({ length: 8 }, (_, i) => (
+                    <option key={i} value={i} style={{ background: "#0d1225" }}>
+                      {i + 1}
+                    </option>
+                  ))}
+                </select>
+              </span>
+            )}
+            {onSendToCrate && (
+              <button
+                type="button"
+                onClick={() => sendBite("crate")}
+                aria-label={`Send the bite to the crate from deck ${id}`}
+                style={biteBtnStyle(false, color, true)}
+              >
+                → CRATE
+              </button>
+            )}
+            <button
+              type="button"
+              onClick={() => sendBite("wav")}
+              aria-label={`Download the bite as WAV from deck ${id}`}
+              style={biteBtnStyle(false, color, true)}
+            >
+              <Icon name="download" size={10} /> WAV
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                stopBitePreview();
+                setBite({ in: null, out: null });
+              }}
+              aria-label={`Clear the bite region on deck ${id}`}
+              style={biteBtnStyle(false, color, true)}
+            >
+              ×
+            </button>
+          </>
+        )}
+      </div>
 
       {/* Transport */}
       <div style={{ display: "flex", justifyContent: "center", gap: 6 }} role="group" aria-label={`Deck ${id} transport`}>
@@ -1602,9 +1952,103 @@ const Deck = forwardRef(function Deck(
           borderRadius: 10,
         }}
       >
-        <Knob value={eq.low} onChange={(v) => setEq((p) => ({ ...p, low: v }))} label="LOW" color={color} />
-        <Knob value={eq.mid} onChange={(v) => setEq((p) => ({ ...p, mid: v }))} label="MID" color={color} />
-        <Knob value={eq.high} onChange={(v) => setEq((p) => ({ ...p, high: v }))} label="HIGH" color={color} />
+        {[
+          { band: "low", label: "LOW", value: eq.low },
+          { band: "mid", label: "MID", value: eq.mid },
+          { band: "high", label: "HIGH", value: eq.high },
+        ].map(({ band, label, value }) => {
+          const killed = eqKills[band];
+          return (
+            <div
+              key={band}
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}
+            >
+              <Knob
+                value={value}
+                onChange={(v) => setEq((p) => ({ ...p, [band]: v }))}
+                label={label}
+                color={color}
+              />
+              {/* W3.3 — one-tap band kill. Toggling never moves the knob. */}
+              <button
+                type="button"
+                onClick={() => setEqKills((p) => ({ ...p, [band]: !p[band] }))}
+                aria-pressed={killed}
+                aria-label={`Kill ${label.toLowerCase()} EQ on deck ${id}`}
+                title={killed ? `Restore the ${label} band` : `Kill the ${label} band`}
+                style={{
+                  background: killed ? "#f8717122" : "rgba(255,255,255,0.05)",
+                  border: `1px solid ${killed ? "#f87171" : "rgba(136,146,176,0.3)"}`,
+                  color: killed ? "#f87171" : "#8892b0",
+                  borderRadius: 6,
+                  padding: "2px 10px",
+                  // Z1 — meets the DESIGN_GUIDE 38px control floor.
+                  minHeight: 38,
+                  minWidth: 44,
+                  fontSize: 8,
+                  fontWeight: 700,
+                  letterSpacing: 1,
+                  cursor: "pointer",
+                  fontFamily: "'Exo 2', sans-serif",
+                  boxShadow: killed ? "0 0 12px #f8717144" : "none",
+                }}
+              >
+                KILL
+              </button>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* W3.7 — component isolation. EQ/phase math, not stem separation —
+          bleed is normal and depends on how the track was mixed/panned. */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span
+          style={{
+            fontSize: 9,
+            color: "#8892b0",
+            letterSpacing: 1,
+            textTransform: "uppercase",
+          }}
+        >
+          Isolate
+        </span>
+        {[
+          { mode: "bass", label: "BASS", title: "Solo the low end (steep 180 Hz lowpass)" },
+          { mode: "vocal", label: "VOCAL", title: "Solo the centre channel, band-passed to the vocal range — bleed is normal" },
+          { mode: "instrumental", label: "INSTR", title: "Cancel the centre channel (karaoke trick) — keeps the sides" },
+          { mode: "drums", label: "PERC", title: "Best-effort percussive solo (sides + treble tilt) — kick may bleed" },
+        ].map(({ mode, label, title }) => {
+          const active = isolate === mode;
+          return (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setIsolate((cur) => (cur === mode ? null : mode))}
+              disabled={!fileName}
+              aria-pressed={active}
+              aria-label={`Isolate ${label.toLowerCase()} on deck ${id}`}
+              title={title}
+              style={{
+                background: active ? `${color}22` : "rgba(255,255,255,0.05)",
+                border: `1px solid ${active ? color : `${color}33`}`,
+                color: !fileName ? "#8892b0" : active ? color : "#8892b0",
+                borderRadius: 6,
+                padding: "4px 10px",
+                minHeight: 38,
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: 1,
+                cursor: fileName ? "pointer" : "not-allowed",
+                opacity: fileName ? 1 : 0.6,
+                fontFamily: "'Exo 2', sans-serif",
+                boxShadow: active ? `0 0 12px ${color}44` : "none",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
       </div>
 
       {/* Effects rack */}
@@ -1681,6 +2125,29 @@ const Deck = forwardRef(function Deck(
           {bassDropActive ? "DROPPING" : "BASS DROP"}
         </button>
         <BassDropMenu preset={bassDropPreset} onChange={setBassDropPreset} color={color} />
+        {/* W3.5 — sidechain-style PUMP: beat-rate ducking at the effective
+            BPM. Free-running phase (matches the beat indicator's behavior). */}
+        <button
+          type="button"
+          onClick={() => setPump((p) => ({ ...p, on: !p.on }))}
+          disabled={!fileName}
+          aria-pressed={pump.on}
+          aria-label={`Toggle pump ducking on deck ${id}`}
+          title="Duck this deck's level on every beat (sidechain-style pump)"
+          style={biteBtnStyle(pump.on, color, !!fileName)}
+        >
+          PUMP
+        </button>
+        <Knob
+          value={pump.depth}
+          onChange={(v) => setPump((p) => ({ ...p, depth: v }))}
+          min={0}
+          max={1}
+          step={0.01}
+          label="DEPTH"
+          color={color}
+          size={36}
+        />
       </div>
     </div>
   );
