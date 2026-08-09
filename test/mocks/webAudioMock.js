@@ -273,6 +273,15 @@ class MockAudioContextBase {
   createDynamicsCompressor() { return this._track(new MockDynamicsCompressorNode(this)); }
   createAnalyser() { return this._track(new MockAnalyserNode(this)); }
   createOscillator() { return this._track(new MockOscillatorNode(this)); }
+  // W3.2 — mic monitor path. A MediaStreamAudioSourceNode is just a
+  // connectable source in the graph; reuse the gain-node shape and remember
+  // the stream it wraps.
+  createMediaStreamSource(stream) {
+    const n = this._track(new MockGainNode(this));
+    n.nodeType = "MediaStreamAudioSourceNode";
+    n.mediaStream = stream;
+    return n;
+  }
   createMediaStreamDestination() {
     return this._track(new MockMediaStreamAudioDestinationNode(this));
   }

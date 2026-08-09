@@ -119,6 +119,7 @@ Persona: bedroom DJ who mixes local files in the browser. Sometimes streams, som
 
 | ID | Story | Coverage | Test file |
 |---|---|---|---|
+| US67 | Voice / mic recording (VOX panel) — `getUserMedia` with music-tuned constraints (no echo cancellation / noise suppression / AGC); ARM → RECORD → STOP decodes the take to an in-memory `AudioBuffer`; PREVIEW plays through the master bus; the take routes to Deck A/B/C (`loadBuffer`), the crate, or a chosen sample pad (`adoptBuffer`); optional MONITOR (mic → gain → master, off by default); permission denial and insecure contexts (file://) degrade to inline notices — never a throw; nothing persisted, nothing transmitted (W3.2) | U + C | `test/VoxRecorder.test.jsx` |
 | US66 | EQ kill switches — one-tap KILL button under each EQ knob ramps that band to the −26 dB kill floor via `setTargetAtTime` (never instant); kill state is separate from knob state (killing doesn't move the knob; un-kill restores the exact prior gain; turning a killed band's knob keeps it killed); aria-pressed reflects state (W3.3) | I | `test/Deck.test.jsx` |
 
 ## Useful utilities

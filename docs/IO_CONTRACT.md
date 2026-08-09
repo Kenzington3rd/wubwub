@@ -91,6 +91,12 @@ revokes the object URL — no network round-trip ever.
 | Crate audio file (picker) | `<input type="file" accept="audio/*" multiple>` | "Add tracks" button in Crate (`Crate.jsx`) | `ingestFiles` filters non-audio + surfaces inline `role="alert"` | `crate` state + `crateBuffersRef` map | `Crate.test.jsx > @us US63`; `App.test.jsx > @us US63` |
 | Crate audio file (drag-drop) | `drop` on crate region | The whole crate panel is a drop target | Same | Same | e2e `App.e2e.test.jsx > @us US63 + US44` |
 
+### Microphone input (W3.2)
+
+| Input | Source | UI affordance | Validation | Target state | Test |
+|---|---|---|---|---|---|
+| Voice take | `navigator.mediaDevices.getUserMedia({ audio })` — local device API, zero network; requires a secure context (PWA / https / localhost; unavailable from `file://`) | VOX panel: ARM MIC → RECORD → STOP (`src/components/VoxRecorder.jsx`) | Capability-gated (`micCapability()`); permission denial → inline `role="alert"`; decode failure → inline error; capture constraints pin `echoCancellation/noiseSuppression/autoGainControl` to `false` | In-memory `AudioBuffer` only → user-routed to Deck A/B/C (`loadBuffer`), crate entry, or sample pad (`adoptBuffer`); never persisted, never transmitted | `test/VoxRecorder.test.jsx > @us US67` |
+
 ### Settings JSON input
 
 | Input | Source | UI affordance | Validation | Target state | Test |
@@ -163,7 +169,8 @@ Verified by `Grep` over `src/`: no `window.location.search`, no `URLSearchParams
 | `localStorage` / `sessionStorage` for user audio | unused for audio | Settings JSON is user-driven download/upload only |
 | `IndexedDB` | unused | same |
 | Clipboard | not read | not needed |
-| Geolocation / Camera / Microphone / USB / Serial / HID / Bluetooth | blocked by Permissions-Policy in `index.html:32-35` | Defense-in-depth |
+| Geolocation / Camera / USB / Serial / HID / Bluetooth | blocked by Permissions-Policy in `index.html` | Defense-in-depth |
+| Microphone | **accepted since W3.2** — Permissions-Policy scoped to `self`; local capture only (see the Microphone input section above) | Voice takes; in-memory, never persisted/transmitted |
 
 ---
 

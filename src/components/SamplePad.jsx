@@ -132,6 +132,17 @@ const SamplePad = forwardRef(function SamplePad({ audioCtxRef, outputNodeRef, re
         const i = SAMPLE_PAD_KEYS.indexOf(key.toLowerCase());
         if (i >= 0) trigger(i);
       },
+      // W3.2 — adopt a pre-decoded AudioBuffer directly (voice takes from the
+      // VoxRecorder). Mirrors Deck.loadBuffer: no re-decode, replaces any
+      // buffer already on the pad.
+      adoptBuffer: (i, buffer, name) => {
+        if (i < 0 || i >= PAD_COUNT || !buffer) return;
+        bufferRefs.current[i] = buffer;
+        setLoadError(null);
+        setPads((p) =>
+          p.map((row, idx) => (idx === i ? { ...row, name: name || "voice take" } : row))
+        );
+      },
     }),
     [trigger]
   );

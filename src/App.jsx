@@ -15,6 +15,7 @@ import Looper from "./components/Looper.jsx";
 import SamplePad from "./components/SamplePad.jsx";
 import MidiPanel from "./components/MidiPanel.jsx";
 import Crate from "./components/Crate.jsx";
+import VoxRecorder from "./components/VoxRecorder.jsx";
 import { assignGain } from "./audio/crossfade.js";
 import {
   createMasterRecorder,
@@ -1026,6 +1027,24 @@ export default function App() {
     deckRef.current?.loadBuffer?.(stored.buffer, stored.name || "crate track");
   }, []);
 
+  // ── W3.2 — voice recorder take routing ──
+  // A finished take is a plain decoded AudioBuffer; it reuses the existing
+  // adoption paths (Deck.loadBuffer, crate entry, SamplePad.adoptBuffer).
+  // Never persisted anywhere — same in-memory contract as file loads.
+  const onVoxToDeck = useCallback((deckId, buffer, name) => {
+    deckRefFor(deckId)?.current?.loadBuffer?.(buffer, name);
+  }, [deckRefFor]);
+
+  const onVoxToCrate = useCallback((buffer, name) => {
+    const id = ++crateIdRef.current;
+    crateBuffersRef.current.set(id, { buffer, name });
+    setCrate((c) => [...c, { id, name, bpm: null, camelot: null }]);
+  }, []);
+
+  const onVoxToPad = useCallback((padIndex, buffer, name) => {
+    samplePadRef.current?.adoptBuffer?.(padIndex, buffer, name);
+  }, []);
+
   // ── W1.4 — settings export / import ──
   // Serialize the current config to a versioned JSON file and download it via
   // the existing downloadBlob helper. Config only — no audio.
@@ -1275,6 +1294,15 @@ export default function App() {
           outputNodeRef={masterCompressorRef}
           recordTapRef={recordTapRef}
           ensureMasterCtx={ensureMasterCtx}
+        />
+
+        <VoxRecorder
+          audioCtxRef={audioCtxRef}
+          masterCompressorRef={masterCompressorRef}
+          ensureMasterCtx={ensureMasterCtx}
+          onSendToDeck={onVoxToDeck}
+          onSendToCrate={onVoxToCrate}
+          onSendToPad={onVoxToPad}
         />
 
         <TheoryPanel

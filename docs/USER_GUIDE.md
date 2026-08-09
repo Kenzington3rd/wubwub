@@ -116,6 +116,27 @@ The crate is **session-only**: it lives in memory and is empty every time you
 reload. Nothing in it is ever saved to disk. (Each row has BPM and key columns;
 they fill in only if that data is already known.)
 
+## Recording your voice (VOX)
+
+The **VOX** panel records your own voice — for singing the lyrical parts of a
+remix, drops, or tags — entirely on your device.
+
+1. **ARM MIC** — your browser asks for microphone permission once.
+2. **RECORD / STOP** — capture a take. Constraints are tuned for music (no
+   echo cancellation or noise suppression chewing up your vocal).
+3. **PREVIEW** the take, then send it: **→ A / → B / → C** puts it on a deck
+   (where you can speed it up, EQ it, and mix it like any track), **→ CRATE**
+   shelves it, **→ PAD** assigns it to a sample pad for one-shot triggering.
+4. **MONITOR** (optional) lets you hear the mic through the output —
+   headphones strongly recommended; open speakers will feed back.
+
+Takes live in memory only — they are never saved or uploaded, and they vanish
+when you close the tab (send a take to a deck and record your mix if you want
+to keep the result). Mic capture needs a secure context: it works in the
+installed PWA, over https, or on localhost. The single-file build opened
+straight from disk (`file://`) can't access the microphone — the panel tells
+you so instead of failing.
+
 ## Recording your mix
 
 Click **RECORD** in the master bar. Mix as long as you like, then click it again —
