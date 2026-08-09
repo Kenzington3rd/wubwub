@@ -1611,3 +1611,70 @@ describe("Deck EQ kills — US66", () => {
     expect(last.target).toBe(-26);
   });
 });
+
+// ─── W3.7 — component isolation (US68) ───
+describe("Deck isolation mode — US68", () => {
+  async function loadDeck() {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+    return api;
+  }
+
+  it("@us US68: engaging VOCAL ramps dry→0 and the vocal gate→1 via setTargetAtTime", async () => {
+    const api = await loadDeck();
+    const chain = api.deckRef.current ? null : null;
+    const ctx = api.audioCtxRef.current;
+    const vocalBtn = screen.getByRole("button", { name: /Isolate vocal on deck A/i });
+    await act(async () => { fireEvent.click(vocalBtn); });
+    expect(vocalBtn.getAttribute("aria-pressed")).toBe("true");
+
+    // Find the iso gains: the vocal gate is the mono-forced gain feeding the
+    // 200 Hz highpass.
+    const hp = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "highpass" && n.frequency.value === 200
+    );
+    const vocalGate = ctx._nodes.find((n) => n.connections?.includes(hp));
+    expect(vocalGate).toBeTruthy();
+    const lastGate = vocalGate.gain.scheduledValues.at(-1);
+    expect(lastGate.type).toBe("setTarget");
+    expect(lastGate.target).toBe(1);
+  });
+
+  it("@us US68: switching modes is radio-style; OFF restores the dry path to exactly 1", async () => {
+    const api = await loadDeck();
+    const ctx = api.audioCtxRef.current;
+    const bassBtn = screen.getByRole("button", { name: /Isolate bass on deck A/i });
+    const percBtn = screen.getByRole("button", { name: /Isolate perc on deck A/i });
+
+    await act(async () => { fireEvent.click(bassBtn); });
+    await act(async () => { fireEvent.click(percBtn); });
+    expect(bassBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(percBtn.getAttribute("aria-pressed")).toBe("true");
+
+    // Toggle PERC off — every gate targets 0 and the dry path targets 1.
+    await act(async () => { fireEvent.click(percBtn); });
+    expect(percBtn.getAttribute("aria-pressed")).toBe("false");
+    const lp180s = ctx._nodes.filter(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowpass" && n.frequency.value === 180
+    );
+    expect(lp180s.length).toBe(2);
+    const bassGate = ctx._nodes.find((n) => n.connections?.includes(lp180s[0]));
+    expect(bassGate.gain.scheduledValues.at(-1).target).toBe(0);
+    // Dry gain: the gain node whose latest schedule targets 1 and which
+    // feeds a gain that feeds eqLow (lowshelf).
+    const lowshelf = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowshelf"
+    );
+    const isoOut = ctx._nodes.find((n) => n.connections?.includes(lowshelf) && n.nodeType !== "BiquadFilterNode");
+    const isoDry = ctx._nodes.find((n) => n.connections?.includes(isoOut) && n.gain?.scheduledValues?.length);
+    expect(isoDry.gain.scheduledValues.at(-1).target).toBe(1);
+  });
+
+  it("@us US68: isolation buttons are disabled until a track is loaded", () => {
+    render(<Harness />);
+    expect(screen.getByRole("button", { name: /Isolate bass on deck A/i })).toBeDisabled();
+  });
+});

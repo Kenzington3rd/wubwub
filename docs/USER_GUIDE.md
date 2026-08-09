@@ -39,6 +39,23 @@ ever leaves your device.
 - Click the **×** on a chip to delete it.
 - Cues are session-only: they reset when you load a new file or reload the page.
 
+## Isolate — filter a track down to a component
+
+The **ISOLATE** row on each deck solos one part of the loaded track:
+
+- **BASS** — just the low end (steep filter at 180 Hz).
+- **VOCAL** — the centre channel, band-passed to the vocal range. Works
+  because vocals are almost always mixed dead-centre.
+- **INSTR** — the opposite: cancels the centre channel (the classic karaoke
+  trick), leaving the instrumental sides.
+- **PERC** — best-effort percussive solo (sides plus a treble tilt).
+
+One mode at a time; tap the active one again to switch it off. **Honest
+limits:** this is EQ and phase math, not AI stem separation — some bleed is
+normal, and results depend on how the original track was mixed. It's built
+for *scraping*: isolate the part you want, listen through, and grab the
+moments worth keeping.
+
 ## Effects rack
 
 Each deck has Reverb, Delay, and Distortion. Click an effect's title to toggle it

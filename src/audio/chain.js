@@ -4,7 +4,8 @@ import { buildReverbIR, buildDistortionCurve } from "./effects.js";
  * Build the full per-deck signal chain.
  *
  * Signal flow:
- *   gain → eqLow → eqMid → eqHigh → filter
+ *   gain → [W3.7 isolation stage: dry ∥ bass/vocal/inst/drums gates] → isoOut
+ *     → eqLow → eqMid → eqHigh → filter
  *     → reverb(dry/wet, parallel) → reverbOut
  *     → delay(dry/wet, parallel; wet path has feedback loop) → delayOut
  *     → distortion(dry/wet, parallel) → distortionOut
@@ -76,12 +77,99 @@ export function buildDeckChain(ctx, outputNode, recordTap) {
   distortionWet.gain.value = 0;
   distortionOut.gain.value = 1;
 
+  // ─── W3.7 — component isolation stage (post-source, pre-EQ) ───
+  // Pure Web Audio "filter the track down to a component" — EQ/phase math,
+  // NOT ML stem separation; bleed is expected and documented. One dry path
+  // at 1.0 plus four gated wet paths, all summed into isoOut. Bypass is the
+  // dry/wet-gain convention: the Deck ramps the gates with setTargetAtTime,
+  // never disconnects. OFF state (dry 1, every gate 0) is bit-transparent.
+  const isoDry = ctx.createGain();
+  isoDry.gain.value = 1;
+  const isoOut = ctx.createGain();
+  isoOut.gain.value = 1;
+
+  // BASS — steep lowpass: two cascaded 12 dB/oct biquads ≈ 24 dB/oct @180 Hz.
+  const isoBassGate = ctx.createGain();
+  isoBassGate.gain.value = 0;
+  const isoBassF1 = ctx.createBiquadFilter();
+  isoBassF1.type = "lowpass";
+  isoBassF1.frequency.value = 180;
+  const isoBassF2 = ctx.createBiquadFilter();
+  isoBassF2.type = "lowpass";
+  isoBassF2.frequency.value = 180;
+
+  // VOCAL — centre (mid) extraction. A gain forced to one channel downmixes
+  // stereo as (L+R)/2 per spec — the mid signal — then band-passed to the
+  // vocal range (200 Hz highpass → 8 kHz lowpass). Pop vocals sit centre.
+  const isoVocalGate = ctx.createGain();
+  isoVocalGate.gain.value = 0;
+  isoVocalGate.channelCount = 1;
+  isoVocalGate.channelCountMode = "explicit";
+  const isoVocalHp = ctx.createBiquadFilter();
+  isoVocalHp.type = "highpass";
+  isoVocalHp.frequency.value = 200;
+  const isoVocalLp = ctx.createBiquadFilter();
+  isoVocalLp.type = "lowpass";
+  isoVocalLp.frequency.value = 8000;
+
+  // INSTRUMENTAL — side extraction (the karaoke trick): signal − mid.
+  // The gate feeds the sum directly AND through a mono-downmix inverted
+  // gain; the sum is therefore (L−(L+R)/2, R−(L+R)/2) — the side signal,
+  // which cancels centre-panned content (usually the vocal).
+  const isoInstGate = ctx.createGain();
+  isoInstGate.gain.value = 0;
+  const isoInstInv = ctx.createGain();
+  isoInstInv.gain.value = -1;
+  isoInstInv.channelCount = 1;
+  isoInstInv.channelCountMode = "explicit";
+  const isoInstSum = ctx.createGain();
+  isoInstSum.gain.value = 1;
+
+  // DRUMS ("percussive", best-effort) — the same side construction with a
+  // transient-favouring treble tilt. Kick often sits centre with the bass,
+  // so bleed is expected; the UI labels this honestly.
+  const isoDrumGate = ctx.createGain();
+  isoDrumGate.gain.value = 0;
+  const isoDrumInv = ctx.createGain();
+  isoDrumInv.gain.value = -1;
+  isoDrumInv.channelCount = 1;
+  isoDrumInv.channelCountMode = "explicit";
+  const isoDrumSum = ctx.createGain();
+  isoDrumSum.gain.value = 1;
+  const isoDrumTilt = ctx.createBiquadFilter();
+  isoDrumTilt.type = "highshelf";
+  isoDrumTilt.frequency.value = 3000;
+  isoDrumTilt.gain.value = 6;
+
   // ─── Analyser tap (for visualization) ───
   const analyser = ctx.createAnalyser();
   analyser.fftSize = 2048;
 
   // ─── Wire it ───
-  gain.connect(eqLow);
+  // W3.7 — isolation stage sits between the deck gain and the EQ.
+  gain.connect(isoDry);
+  isoDry.connect(isoOut);
+  gain.connect(isoBassGate);
+  isoBassGate.connect(isoBassF1);
+  isoBassF1.connect(isoBassF2);
+  isoBassF2.connect(isoOut);
+  gain.connect(isoVocalGate);
+  isoVocalGate.connect(isoVocalHp);
+  isoVocalHp.connect(isoVocalLp);
+  isoVocalLp.connect(isoOut);
+  gain.connect(isoInstGate);
+  isoInstGate.connect(isoInstSum);
+  isoInstGate.connect(isoInstInv);
+  isoInstInv.connect(isoInstSum);
+  isoInstSum.connect(isoOut);
+  gain.connect(isoDrumGate);
+  isoDrumGate.connect(isoDrumSum);
+  isoDrumGate.connect(isoDrumInv);
+  isoDrumInv.connect(isoDrumSum);
+  isoDrumSum.connect(isoDrumTilt);
+  isoDrumTilt.connect(isoOut);
+
+  isoOut.connect(eqLow);
   eqLow.connect(eqMid);
   eqMid.connect(eqHigh);
   eqHigh.connect(filter);
@@ -119,6 +207,21 @@ export function buildDeckChain(ctx, outputNode, recordTap) {
 
   return {
     gain,
+    isoDry,
+    isoOut,
+    isoBassGate,
+    isoBassF1,
+    isoBassF2,
+    isoVocalGate,
+    isoVocalHp,
+    isoVocalLp,
+    isoInstGate,
+    isoInstInv,
+    isoInstSum,
+    isoDrumGate,
+    isoDrumInv,
+    isoDrumSum,
+    isoDrumTilt,
     eqLow,
     eqMid,
     eqHigh,

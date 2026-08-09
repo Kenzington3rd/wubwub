@@ -173,6 +173,10 @@ const Deck = forwardRef(function Deck(
   // value (which may have been turned while killed — the effective gain
   // always re-derives from the live pair).
   const [eqKills, setEqKills] = useState({ low: false, mid: false, high: false });
+  // W3.7 — component isolation mode. null = OFF (dry path, bit-transparent);
+  // otherwise one of "bass" | "vocal" | "instrumental" | "drums". Mutually
+  // exclusive (radio-style) — engaging one disengages the others.
+  const [isolate, setIsolate] = useState(null);
   // R17 Q2 — mirror of `volume` for the MIDI relative-encoder getter so the
   // App can always read the *current* deck volume at CC-dispatch time without
   // depending on the imperative handle being re-created (it isn't gated on
@@ -296,6 +300,28 @@ const Deck = forwardRef(function Deck(
       chain.eqHigh.gain.setTargetAtTime(high, ctx.currentTime, 0.02);
     }
   }, [eq, eqKills, audioCtxRef, chainTick, reapplyParamThroughAutomation]);
+
+  // ─── W3.7 — component isolation gates ───
+  // One dry gain + four gated wet paths built in chain.js. Engaging a mode
+  // ramps the dry to 0 and that mode's gate to 1 (setTargetAtTime — the
+  // dry/wet bypass convention, never disconnect); OFF restores dry = 1.0
+  // exactly so the stage is bit-transparent when idle.
+  useEffect(() => {
+    const chain = chainRef.current;
+    const ctx = audioCtxRef.current;
+    if (!chain || !ctx || !chain.isoDry) return;
+    const t = ctx.currentTime;
+    const gates = {
+      bass: chain.isoBassGate,
+      vocal: chain.isoVocalGate,
+      instrumental: chain.isoInstGate,
+      drums: chain.isoDrumGate,
+    };
+    chain.isoDry.gain.setTargetAtTime(isolate ? 0 : 1, t, 0.02);
+    for (const [mode, gate] of Object.entries(gates)) {
+      gate.gain.setTargetAtTime(isolate === mode ? 1 : 0, t, 0.02);
+    }
+  }, [isolate, audioCtxRef, chainTick]);
 
   // ─── Filter sweep ───
   useEffect(() => {
@@ -1665,6 +1691,57 @@ const Deck = forwardRef(function Deck(
                 KILL
               </button>
             </div>
+          );
+        })}
+      </div>
+
+      {/* W3.7 — component isolation. EQ/phase math, not stem separation —
+          bleed is normal and depends on how the track was mixed/panned. */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span
+          style={{
+            fontSize: 9,
+            color: "#8892b0",
+            letterSpacing: 1,
+            textTransform: "uppercase",
+          }}
+        >
+          Isolate
+        </span>
+        {[
+          { mode: "bass", label: "BASS", title: "Solo the low end (steep 180 Hz lowpass)" },
+          { mode: "vocal", label: "VOCAL", title: "Solo the centre channel, band-passed to the vocal range — bleed is normal" },
+          { mode: "instrumental", label: "INSTR", title: "Cancel the centre channel (karaoke trick) — keeps the sides" },
+          { mode: "drums", label: "PERC", title: "Best-effort percussive solo (sides + treble tilt) — kick may bleed" },
+        ].map(({ mode, label, title }) => {
+          const active = isolate === mode;
+          return (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setIsolate((cur) => (cur === mode ? null : mode))}
+              disabled={!fileName}
+              aria-pressed={active}
+              aria-label={`Isolate ${label.toLowerCase()} on deck ${id}`}
+              title={title}
+              style={{
+                background: active ? `${color}22` : "rgba(255,255,255,0.05)",
+                border: `1px solid ${active ? color : `${color}33`}`,
+                color: !fileName ? "#8892b0" : active ? color : "#8892b0",
+                borderRadius: 6,
+                padding: "4px 10px",
+                minHeight: 38,
+                fontSize: 9,
+                fontWeight: 700,
+                letterSpacing: 1,
+                cursor: fileName ? "pointer" : "not-allowed",
+                opacity: fileName ? 1 : 0.6,
+                fontFamily: "'Exo 2', sans-serif",
+                boxShadow: active ? `0 0 12px ${color}44` : "none",
+              }}
+            >
+              {label}
+            </button>
           );
         })}
       </div>

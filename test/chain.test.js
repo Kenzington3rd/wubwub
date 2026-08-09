@@ -141,3 +141,76 @@ describe("disconnectChain", () => {
     }
   });
 });
+
+// ─── W3.7 — component isolation stage (US68) ───
+describe("buildDeckChain isolation stage — US68", () => {
+  const build = () => {
+    const ctx = new AudioContext();
+    return buildDeckChain(ctx, ctx.createGain());
+  };
+
+  it("@us US68: OFF state is bit-transparent — dry gain exactly 1, every gate 0", () => {
+    const chain = build();
+    expect(chain.isoDry.gain.value).toBe(1);
+    expect(chain.isoOut.gain.value).toBe(1);
+    for (const gate of [
+      chain.isoBassGate,
+      chain.isoVocalGate,
+      chain.isoInstGate,
+      chain.isoDrumGate,
+    ]) {
+      expect(gate.gain.value).toBe(0);
+    }
+  });
+
+  it("@us US68: the stage sits between the deck gain and the EQ", () => {
+    const chain = build();
+    expect(chain.gain.connections).toContain(chain.isoDry);
+    expect(chain.isoDry.connections).toContain(chain.isoOut);
+    expect(chain.isoOut.connections).toContain(chain.eqLow);
+    // The deck gain no longer feeds the EQ directly.
+    expect(chain.gain.connections).not.toContain(chain.eqLow);
+  });
+
+  it("@us US68: BASS is a 24 dB/oct cascade — two lowpass biquads at 180 Hz", () => {
+    const chain = build();
+    for (const f of [chain.isoBassF1, chain.isoBassF2]) {
+      expect(f.type).toBe("lowpass");
+      expect(f.frequency.value).toBe(180);
+    }
+    expect(chain.isoBassGate.connections).toContain(chain.isoBassF1);
+    expect(chain.isoBassF1.connections).toContain(chain.isoBassF2);
+    expect(chain.isoBassF2.connections).toContain(chain.isoOut);
+  });
+
+  it("@us US68: VOCAL downmixes to mono mid and band-passes 200 Hz – 8 kHz", () => {
+    const chain = build();
+    expect(chain.isoVocalGate.channelCount).toBe(1);
+    expect(chain.isoVocalGate.channelCountMode).toBe("explicit");
+    expect(chain.isoVocalHp.type).toBe("highpass");
+    expect(chain.isoVocalHp.frequency.value).toBe(200);
+    expect(chain.isoVocalLp.type).toBe("lowpass");
+    expect(chain.isoVocalLp.frequency.value).toBe(8000);
+    expect(chain.isoVocalLp.connections).toContain(chain.isoOut);
+  });
+
+  it("@us US68: INSTRUMENTAL sums the signal with an inverted mono mid (side extraction)", () => {
+    const chain = build();
+    expect(chain.isoInstInv.gain.value).toBe(-1);
+    expect(chain.isoInstInv.channelCount).toBe(1);
+    // gate feeds the sum directly AND via the inverted mid → sum = side.
+    expect(chain.isoInstGate.connections).toContain(chain.isoInstSum);
+    expect(chain.isoInstGate.connections).toContain(chain.isoInstInv);
+    expect(chain.isoInstInv.connections).toContain(chain.isoInstSum);
+    expect(chain.isoInstSum.connections).toContain(chain.isoOut);
+  });
+
+  it("@us US68: DRUMS is the side construction through a +6 dB treble tilt", () => {
+    const chain = build();
+    expect(chain.isoDrumTilt.type).toBe("highshelf");
+    expect(chain.isoDrumTilt.frequency.value).toBe(3000);
+    expect(chain.isoDrumTilt.gain.value).toBe(6);
+    expect(chain.isoDrumSum.connections).toContain(chain.isoDrumTilt);
+    expect(chain.isoDrumTilt.connections).toContain(chain.isoOut);
+  });
+});
