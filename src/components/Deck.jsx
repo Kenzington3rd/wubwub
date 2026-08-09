@@ -55,6 +55,12 @@ const Deck = forwardRef(function Deck(
     recordTapRef,
     ensureMasterCtx,
     crossfadeGain,
+    // W3.8 — crossfader assign for this deck ("A" | "THRU" | "B") and its
+    // change handler. Rendered as a 3-position segmented control in the
+    // header. Optional: when omitted the control is hidden (legacy two-deck
+    // rendering in isolated component tests).
+    assign,
+    onAssignChange,
     focused,
     onFocus,
     onSync,
@@ -1038,7 +1044,8 @@ const Deck = forwardRef(function Deck(
   );
 
   // ─── Render ───
-  const deckSide = id === "A" ? "left" : "right";
+  // Deck B sits on the crossfader's right; A and C read left-aligned.
+  const deckSide = id === "B" ? "right" : "left";
   const beatSeconds = bpm > 0 ? 60 / bpm : 0.5;
 
   return (
@@ -1051,7 +1058,11 @@ const Deck = forwardRef(function Deck(
       aria-label={`Deck ${id}${focused ? " (focused)" : ""}`}
       style={{
         flex: 1,
-        minWidth: 0,
+        // W3.8 — a real wrap floor (was 0). With three decks in the flex row,
+        // a deck that can't get ~320px wraps to the next line (2+1 at mid
+        // widths) instead of all three crushing into one row. `min(…, 100%)`
+        // keeps the deck from overflowing very narrow mobile viewports.
+        minWidth: "min(320px, 100%)",
         background: "rgba(15,18,35,0.7)",
         borderRadius: 16,
         padding: 16,
@@ -1090,7 +1101,7 @@ const Deck = forwardRef(function Deck(
           >
             {id}
           </div>
-          <span style={{ fontFamily: "'Audiowide', sans-serif", fontSize: 13, color: "#8892b0" }}>
+          <span style={{ fontFamily: "'Audiowide', sans-serif", fontSize: 13, color: "#8892b0", whiteSpace: "nowrap" }}>
             DECK {id}
           </span>
           <div
@@ -1106,6 +1117,56 @@ const Deck = forwardRef(function Deck(
               opacity: isPlaying ? 1 : 0.25,
             }}
           />
+          {/* W3.8 — crossfader assign: route this deck to the crossfader's A
+              side, its B side, or THRU (—) which bypasses the fader entirely.
+              Hidden when the assign props aren't threaded (isolated tests). */}
+          {assign !== undefined && onAssignChange && (
+            <div
+              role="group"
+              aria-label={`Deck ${id} crossfader assign`}
+              style={{
+                display: "flex",
+                marginLeft: 6,
+                border: "1px solid rgba(136,146,176,0.3)",
+                borderRadius: 6,
+                overflow: "hidden",
+              }}
+            >
+              {[
+                { v: "A", label: "A", title: "Follow crossfader side A" },
+                { v: "THRU", label: "—", title: "Bypass the crossfader (always audible)" },
+                { v: "B", label: "B", title: "Follow crossfader side B" },
+              ].map(({ v, label, title }) => {
+                const active = assign === v;
+                return (
+                  <button
+                    key={v}
+                    type="button"
+                    onClick={() => onAssignChange(v)}
+                    aria-pressed={active}
+                    aria-label={`Assign deck ${id} to ${v === "THRU" ? "THRU (bypass crossfader)" : `crossfader side ${v}`}`}
+                    title={title}
+                    style={{
+                      background: active ? `${color}22` : "transparent",
+                      color: active ? color : "#8892b0",
+                      border: "none",
+                      borderRight: v !== "B" ? "1px solid rgba(136,146,176,0.2)" : "none",
+                      padding: "0 8px",
+                      minHeight: 38,
+                      minWidth: 26,
+                      fontSize: 9,
+                      fontWeight: 700,
+                      letterSpacing: 1,
+                      cursor: "pointer",
+                      fontFamily: "'Exo 2', sans-serif",
+                    }}
+                  >
+                    {label}
+                  </button>
+                );
+              })}
+            </div>
+          )}
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
           <button
@@ -1133,8 +1194,8 @@ const Deck = forwardRef(function Deck(
             type="button"
             onClick={onSync}
             disabled={!fileName}
-            title="Sync speed to the other deck's BPM"
-            aria-label={`Sync deck ${id} to other deck`}
+            title="Sync speed to the dominant playing deck's BPM"
+            aria-label={`Sync deck ${id} to the dominant playing deck`}
             style={{
               background: "rgba(255,255,255,0.05)",
               border: `1px solid ${color}33`,

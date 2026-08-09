@@ -13,6 +13,9 @@ export const MIDI_TARGETS = [
   { id: "deckB.volume", label: "Deck B Volume" },
   { id: "deckB.filterFreq", label: "Deck B Filter" },
   { id: "deckB.speed", label: "Deck B Speed" },
+  { id: "deckC.volume", label: "Deck C Volume" },
+  { id: "deckC.filterFreq", label: "Deck C Filter" },
+  { id: "deckC.speed", label: "Deck C Speed" },
 ];
 
 // The three CC application modes a mapping can carry. "absolute" is the
@@ -141,8 +144,10 @@ export async function enableMidi(onMidi) {
 const TARGET_DOMAIN = {
   "deckA.filterFreq": { min: 60, max: 20000 },
   "deckB.filterFreq": { min: 60, max: 20000 },
+  "deckC.filterFreq": { min: 60, max: 20000 },
   "deckA.speed": { min: 0.5, max: 2 },
   "deckB.speed": { min: 0.5, max: 2 },
+  "deckC.speed": { min: 0.5, max: 2 },
   // crossfade, masterVol, per-deck volume all live in [0, 1].
 };
 

@@ -244,7 +244,7 @@ test fixture (constructed tones panned center/side in tests — assert via
 and is ≥ 20 dB down in VOCAL); OFF is bit-transparent (dry path gain 1.0);
 works upstream of W3.6 extraction; `verify:all` green.
 
-### W3.8 — Third deck (Deck C) with crossfader assign · Size XL · `LEGIT`
+### W3.8 — Third deck (Deck C) with crossfader assign · Size XL · `DONE` (shipped early, ahead of the batch)
 
 **Problem.** The app is hard-wired to two decks. The user wants three
 "tables" — e.g. beats rotating on A/B while an acapella or texture rides on

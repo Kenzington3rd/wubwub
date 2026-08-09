@@ -237,3 +237,51 @@ describe("settings — malformed import is handled gracefully (W1.4 / US62)", ()
     expect(parseSettings("null").ok).toBe(false);
   });
 });
+
+// ─── W3.8 — three decks: deckCColor + deckAssigns (US65) ───
+describe("settings v3 — deck C + crossfader assigns (US65)", () => {
+  it("@us US65: version is 3 and deckCColor + deckAssigns round-trip", () => {
+    const json = serializeSettings({
+      ...FULL_CONFIG,
+      deckCColor: "#f472b6",
+      deckAssigns: { A: "A", B: "THRU", C: "B" },
+    });
+    expect(SETTINGS_VERSION).toBe(3);
+    const out = parseSettings(json);
+    expect(out.ok).toBe(true);
+    expect(out.config.deckCColor).toBe("#f472b6");
+    expect(out.config.deckAssigns).toEqual({ A: "A", B: "THRU", C: "B" });
+  });
+
+  it("@us US65: invalid assign values and unknown deck ids are dropped", () => {
+    const raw = JSON.stringify({
+      app: SETTINGS_APP,
+      version: 3,
+      deckAssigns: { A: "sideways", C: "THRU", D: "A", B: 42 },
+    });
+    const out = parseSettings(raw);
+    expect(out.ok).toBe(true);
+    expect(out.config.deckAssigns).toEqual({ C: "THRU" });
+  });
+
+  it("@us US65: a v2 (two-deck era) file still imports; new fields simply absent", () => {
+    const v2 = JSON.stringify({
+      app: SETTINGS_APP,
+      version: 2,
+      deckAColor: "#f0c040",
+      crossfadeCurve: "linear",
+    });
+    const out = parseSettings(v2);
+    expect(out.ok).toBe(true);
+    expect(out.config.deckAColor).toBe("#f0c040");
+    expect(out.config.deckCColor).toBeUndefined();
+    expect(out.config.deckAssigns).toBeUndefined();
+  });
+
+  it("@us US65: a non-object deckAssigns is ignored, not fatal", () => {
+    const raw = JSON.stringify({ app: SETTINGS_APP, version: 3, deckAssigns: ["A"] });
+    const out = parseSettings(raw);
+    expect(out.ok).toBe(true);
+    expect(out.config.deckAssigns).toBeUndefined();
+  });
+});

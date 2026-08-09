@@ -9,10 +9,11 @@ import Icon from "./Icon.jsx";
 const PANEL_ACCENT = "#fb923c";
 
 export default function TheoryPanel({
-  deckKeys = { A: null, B: null },
+  deckKeys = { A: null, B: null, C: null },
   focusedDeck = null,
   deckAColor = "#00f5d4",
   deckBColor = "#a78bfa",
+  deckCColor = "#4ade80",
 }) {
   const [activeTab, setActiveTab] = useState("theory");
   const [tipIdx, setTipIdx] = useState(0);
@@ -22,9 +23,11 @@ export default function TheoryPanel({
 
   // The focused deck's auto-detected key drives a live highlight on the wheel.
   // Falls back to whichever deck has a key when none is focused.
-  const liveDeck = focusedDeck || (deckKeys.A ? "A" : deckKeys.B ? "B" : null);
+  const liveDeck =
+    focusedDeck || (deckKeys.A ? "A" : deckKeys.B ? "B" : deckKeys.C ? "C" : null);
   const liveKey = liveDeck ? deckKeys[liveDeck] : null;
-  const liveColor = liveDeck === "B" ? deckBColor : deckAColor;
+  const liveColor =
+    liveDeck === "B" ? deckBColor : liveDeck === "C" ? deckCColor : deckAColor;
   const liveKeyData = liveKey
     ? CAMELOT_WHEEL.find((w) => w.camelot === liveKey) || null
     : null;

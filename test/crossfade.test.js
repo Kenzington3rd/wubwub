@@ -53,3 +53,34 @@ describe("crossfadeGains — US7, US35", () => {
     expect(result.gainB).toBeCloseTo(ep.gainB);
   });
 });
+
+// ─── W3.8 — crossfader assign (US65) ───
+import { assignGain, CROSSFADE_ASSIGNS } from "../src/audio/crossfade.js";
+
+describe("assignGain — US65 (three-deck crossfader assign)", () => {
+  it("@us US65: THRU is exactly 1.0 at every fader position and curve", () => {
+    for (const curve of ["equal-power", "linear", "constant-power-3db"]) {
+      for (let x = 0; x <= 1; x += 0.1) {
+        expect(assignGain(x, curve, "THRU")).toBe(1);
+      }
+    }
+  });
+
+  it("@us US65: the A and B legs match crossfadeGains verbatim", () => {
+    for (const curve of ["equal-power", "linear", "constant-power-3db"]) {
+      for (let x = 0; x <= 1; x += 0.05) {
+        const { gainA, gainB } = crossfadeGains(x, curve);
+        expect(assignGain(x, curve, "A")).toBeCloseTo(gainA, 10);
+        expect(assignGain(x, curve, "B")).toBeCloseTo(gainB, 10);
+      }
+    }
+  });
+
+  it("@us US65: an unknown assign falls back to the A side (defensive)", () => {
+    expect(assignGain(0, "equal-power", "bogus")).toBeCloseTo(1, 5);
+  });
+
+  it("@us US65: CROSSFADE_ASSIGNS enumerates the three positions in UI order", () => {
+    expect(CROSSFADE_ASSIGNS).toEqual(["A", "THRU", "B"]);
+  });
+});

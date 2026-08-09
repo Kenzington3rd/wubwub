@@ -21,3 +21,19 @@ export function crossfadeGains(x, curve = "equal-power") {
       };
   }
 }
+
+// W3.8 — crossfader-assign gain for a single deck. With three decks the
+// crossfader stays a two-ended control; each deck instead carries an assign:
+//   "A"    — follow the crossfader's A-side curve (today's Deck A behavior)
+//   "B"    — follow the B-side curve (today's Deck B behavior)
+//   "THRU" — bypass the crossfader entirely: multiplier is exactly 1.0, the
+//            deck is volume-fader-only and stays audible at any fader position
+// The A/B legs reuse crossfadeGains verbatim so the audited two-deck math is
+// untouched.
+export const CROSSFADE_ASSIGNS = ["A", "THRU", "B"];
+
+export function assignGain(x, curve, assign) {
+  if (assign === "THRU") return 1;
+  const { gainA, gainB } = crossfadeGains(x, curve);
+  return assign === "B" ? gainB : gainA;
+}

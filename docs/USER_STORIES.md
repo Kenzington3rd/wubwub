@@ -109,6 +109,12 @@ Persona: bedroom DJ who mixes local files in the browser. Sometimes streams, som
 | US63 | Session crate panel — in-memory list of decoded tracks; add via drag-drop onto the panel or a file-picker (decoded once, validated, decode errors caught inline); each entry quick-loads to Deck A/B via the deck's `loadBuffer` imperative method (pre-decoded buffer, no re-decode); entries removable individually + a Clear-all; never persisted, empty on every fresh load. BPM/key columns rendered but auto-analysis deferred (W1.5) | C + I | `test/Crate.test.jsx`, `test/Deck.test.jsx`, `test/App.test.jsx` |
 | US64 | Keyboard-operable waveform seek — once a track is loaded the waveform `<canvas>` is a `role="slider"` (`tabIndex={0}`, `aria-valuemin/max/now/text`); ←/→/↑/↓ seek ±5 s, Home/End jump to track ends, calling `onSeek` with the same normalized 0–1 contract as click-to-seek. The canvas `stopPropagation()`s the keys it consumes so the global crossfader/volume arrow shortcuts don't also fire; an empty deck's canvas is not a focusable seek control (DESIGN_GUIDE §6) | C + I | `test/WaveformCanvas.test.jsx`, `test/App.test.jsx` |
 
+## W3.8 — Three decks
+
+| ID | Story | Coverage | Test file |
+|---|---|---|---|
+| US65 | Third deck (Deck C) with crossfader assign — three full-featured decks; each carries an `A / THRU / B` assign segmented control (aria-pressed). Assigned decks follow the existing crossfade curves (`assignGain` A/B legs match `crossfadeGains` verbatim); THRU is exactly 1.0 at every fader position. Defaults (A→A, B→B, C→THRU) reproduce two-deck behavior. Crate quick-loads to C; settings v3 round-trips `deckCColor` + `deckAssigns` (v1/v2 files still import; malformed assigns dropped); SYNC targets the dominant playing deck | U + C + I | `test/crossfade.test.js`, `test/settings.test.js`, `test/App.test.jsx` |
+
 ## Useful utilities
 
 | ID | Story | Coverage | Test file |

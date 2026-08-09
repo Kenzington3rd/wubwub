@@ -15,7 +15,7 @@ import Looper from "./components/Looper.jsx";
 import SamplePad from "./components/SamplePad.jsx";
 import MidiPanel from "./components/MidiPanel.jsx";
 import Crate from "./components/Crate.jsx";
-import { crossfadeGains } from "./audio/crossfade.js";
+import { assignGain } from "./audio/crossfade.js";
 import {
   createMasterRecorder,
   downloadBlob,
@@ -35,6 +35,14 @@ import { SAMPLE_PAD_KEYS } from "./data.js";
 
 const DEFAULT_DECK_A_COLOR = "#00f5d4";
 const DEFAULT_DECK_B_COLOR = "#a78bfa";
+// W3.8 — Deck C defaults to green (a registered COLOR_THEMES accent, distinct
+// from A-cyan and B-purple). User-selectable like the others.
+const DEFAULT_DECK_C_COLOR = "#4ade80";
+
+// W3.8 — default crossfader assigns. In this state the app's A/B behavior is
+// bit-for-bit identical to the two-deck era (A follows the A curve, B follows
+// the B curve) and Deck C is THRU: volume-fader-only, unaffected by the fader.
+const DEFAULT_DECK_ASSIGNS = { A: "A", B: "B", C: "THRU" };
 
 function clamp(v, lo, hi) {
   return Math.max(lo, Math.min(hi, v));
@@ -47,10 +55,14 @@ export default function App() {
   const [masterVol, setMasterVol] = useState(0.85);
   const [deckAColor, setDeckAColor] = useState(DEFAULT_DECK_A_COLOR);
   const [deckBColor, setDeckBColor] = useState(DEFAULT_DECK_B_COLOR);
+  const [deckCColor, setDeckCColor] = useState(DEFAULT_DECK_C_COLOR);
+  // W3.8 — per-deck crossfader assign ("A" | "THRU" | "B"). See
+  // DEFAULT_DECK_ASSIGNS for why the defaults reproduce two-deck behavior.
+  const [deckAssigns, setDeckAssigns] = useState(DEFAULT_DECK_ASSIGNS);
   const [focusedDeck, setFocusedDeck] = useState(null);
   // Detected Camelot key per deck — lifted from each Deck via onKeyDetected so
   // the TheoryPanel Camelot wheel can highlight the focused deck's key live.
-  const [deckKeys, setDeckKeys] = useState({ A: null, B: null });
+  const [deckKeys, setDeckKeys] = useState({ A: null, B: null, C: null });
   const [isRecording, setIsRecording] = useState(false);
   const [recordStartedAt, setRecordStartedAt] = useState(null);
   const [recordSupported, setRecordSupported] = useState(true);
@@ -112,6 +124,7 @@ export default function App() {
   const midiUnsubRef = useRef(null);
   const deckARef = useRef(null);
   const deckBRef = useRef(null);
+  const deckCRef = useRef(null);
   const samplePadRef = useRef(null);
   const focusedRef = useRef(null);
   const effectiveBpmRef = useRef(128);
@@ -161,10 +174,16 @@ export default function App() {
 
   const isMobile = useMatchMedia("(max-width: 720px)");
 
-  // ── Derived: crossfade gains ──
-  const { gainA, gainB } = useMemo(
-    () => crossfadeGains(crossfade, crossfadeCurve),
-    [crossfade, crossfadeCurve]
+  // ── Derived: per-deck crossfade gains (W3.8: via each deck's assign) ──
+  // A deck assigned "A"/"B" follows that side of the two-ended crossfader
+  // (the pre-W3.8 math, unchanged); a deck assigned "THRU" gets exactly 1.0.
+  const deckGains = useMemo(
+    () => ({
+      A: assignGain(crossfade, crossfadeCurve, deckAssigns.A),
+      B: assignGain(crossfade, crossfadeCurve, deckAssigns.B),
+      C: assignGain(crossfade, crossfadeCurve, deckAssigns.C),
+    }),
+    [crossfade, crossfadeCurve, deckAssigns]
   );
 
   // ── Master audio chain ──
@@ -333,11 +352,18 @@ export default function App() {
     const tick = () => {
       const a = deckARef.current?.getEffectiveBpm?.() ?? 128;
       const b = deckBRef.current?.getEffectiveBpm?.() ?? 128;
-      effectiveBpmRef.current = (a + b) / 2;
+      const c = deckCRef.current?.getEffectiveBpm?.() ?? 128;
+      effectiveBpmRef.current = (a + b + c) / 3;
     };
     const id = setInterval(tick, 750);
     return () => clearInterval(id);
   }, []);
+
+  // ── Deck ref lookup (W3.8 — three decks, keyed by id) ──
+  const deckRefFor = useCallback(
+    (id) => (id === "A" ? deckARef : id === "B" ? deckBRef : id === "C" ? deckCRef : null),
+    []
+  );
 
   // ── Focus ──
   const focusA = useCallback(() => {
@@ -347,6 +373,10 @@ export default function App() {
   const focusB = useCallback(() => {
     focusedRef.current = "B";
     setFocusedDeck("B");
+  }, []);
+  const focusC = useCallback(() => {
+    focusedRef.current = "C";
+    setFocusedDeck("C");
   }, []);
 
   // ── Detected key per deck ──
@@ -358,14 +388,50 @@ export default function App() {
     (camelot) => setDeckKeys((k) => (k.B === camelot ? k : { ...k, B: camelot })),
     []
   );
+  const onKeyDetectedC = useCallback(
+    (camelot) => setDeckKeys((k) => (k.C === camelot ? k : { ...k, C: camelot })),
+    []
+  );
+
+  // ── W3.8 — per-deck crossfader assign ──
+  const onAssignChange = useCallback((id, assign) => {
+    setDeckAssigns((prev) => (prev[id] === assign ? prev : { ...prev, [id]: assign }));
+  }, []);
 
   // ── Sync ──
+  // W3.8 — with three decks, "sync to the other deck" needs a target rule.
+  // The master-tempo source for deck `id` is: among the OTHER decks, prefer
+  // the ones currently playing; among those, the one that is most audible
+  // right now (its assign-side crossfade gain — THRU counts as 1.0, i.e.
+  // always dominant when playing). If nothing else is playing, fall back to
+  // any other deck with a track loaded, in A→B→C order. Gains are read via
+  // deckGainsRef (not state) so this callback stays identity-stable for the
+  // keyboard handler's empty-dep effect.
+  const deckGainsRef = useRef({ A: 1, B: 0, C: 1 });
+  useEffect(() => { deckGainsRef.current = deckGains; }, [deckGains]);
+
+  const syncSourceFor = useCallback((id) => {
+    const others = ["A", "B", "C"].filter((d) => d !== id);
+    const playing = others.filter((d) => deckRefFor(d)?.current?.isPlaying?.());
+    if (playing.length > 0) {
+      playing.sort(
+        (d1, d2) => (deckGainsRef.current[d2] ?? 0) - (deckGainsRef.current[d1] ?? 0)
+      );
+      return playing[0];
+    }
+    return others.find((d) => deckRefFor(d)?.current?.isReady?.()) ?? others[0];
+  }, [deckRefFor]);
+
   const onSyncDeck = useCallback((id) => {
-    const own = id === "A" ? deckARef : deckBRef;
-    const other = id === "A" ? deckBRef : deckARef;
-    const otherBpm = other.current?.getBpm?.();
-    own.current?.syncTo?.(otherBpm);
-  }, []);
+    const source = syncSourceFor(id);
+    const sourceBpm = deckRefFor(source)?.current?.getBpm?.();
+    deckRefFor(id)?.current?.syncTo?.(sourceBpm);
+  }, [syncSourceFor, deckRefFor]);
+
+  // Stable handle so the empty-dep keyboard effect can reach the live sync
+  // logic without re-binding its window listener.
+  const syncDeckRef = useRef(onSyncDeck);
+  useEffect(() => { syncDeckRef.current = onSyncDeck; }, [onSyncDeck]);
 
   // ── Keyboard shortcuts ──
   useEffect(() => {
@@ -399,8 +465,10 @@ export default function App() {
         return;
       }
       const focused = focusedRef.current;
-      const ownRef = focused === "B" ? deckBRef : focused === "A" ? deckARef : null;
-      const otherRef = focused === "A" ? deckBRef : focused === "B" ? deckARef : null;
+      const ownRef =
+        focused === "A" ? deckARef :
+        focused === "B" ? deckBRef :
+        focused === "C" ? deckCRef : null;
 
       // Sample pad keys (active when NO deck is focused, no focus required).
       // Skip key-repeat to avoid retriggering during key-hold.
@@ -455,9 +523,10 @@ export default function App() {
       if (lower === "s") {
         // Only reachable when a deck is focused — the sample-pad branch above
         // intercepts `S` when no deck is focused (sample pad 6).
+        // W3.8 — routes through the shared sync-target rule (dominant playing
+        // deck) instead of assuming a single "other" deck.
         e.preventDefault();
-        const otherBpm = otherRef?.current?.getBpm?.();
-        ownRef?.current?.syncTo?.(otherBpm);
+        if (focused) syncDeckRef.current(focused);
         return;
       }
       if (lower === "c") {
@@ -653,9 +722,11 @@ export default function App() {
     switch (targetId) {
       case "deckA.filterFreq":
       case "deckB.filterFreq":
+      case "deckC.filterFreq":
         return 20000; // fully open
       case "deckA.speed":
       case "deckB.speed":
+      case "deckC.speed":
         return 1; // normal speed
       default:
         return 0.5; // crossfade / volume / master volume mid-range
@@ -690,6 +761,15 @@ export default function App() {
         break;
       case "deckB.speed":
         deckBRef.current?.setSpeed?.(val);
+        break;
+      case "deckC.volume":
+        deckCRef.current?.setVolume?.(val);
+        break;
+      case "deckC.filterFreq":
+        deckCRef.current?.setFilterFreq?.(val);
+        break;
+      case "deckC.speed":
+        deckCRef.current?.setSpeed?.(val);
         break;
       default:
         break;
@@ -735,6 +815,14 @@ export default function App() {
         );
       case "deckB.speed":
         return deckBRef.current?.getSpeed?.() ?? defaultForTarget(targetId);
+      case "deckC.volume":
+        return deckCRef.current?.getVolume?.() ?? defaultForTarget(targetId);
+      case "deckC.filterFreq":
+        return (
+          deckCRef.current?.getFilterFreq?.() ?? defaultForTarget(targetId)
+        );
+      case "deckC.speed":
+        return deckCRef.current?.getSpeed?.() ?? defaultForTarget(targetId);
       default:
         return defaultForTarget(targetId);
     }
@@ -933,7 +1021,8 @@ export default function App() {
   const onCrateLoadToDeck = useCallback((deckId, entryId) => {
     const stored = crateBuffersRef.current.get(entryId);
     if (!stored) return;
-    const deckRef = deckId === "A" ? deckARef : deckBRef;
+    const deckRef =
+      deckId === "A" ? deckARef : deckId === "B" ? deckBRef : deckCRef;
     deckRef.current?.loadBuffer?.(stored.buffer, stored.name || "crate track");
   }, []);
 
@@ -944,9 +1033,11 @@ export default function App() {
     const json = serializeSettings({
       deckAColor,
       deckBColor,
+      deckCColor,
       crossfadeCurve,
       midiMappings,
       recordTapMode,
+      deckAssigns,
     });
     const ts = new Date()
       .toISOString()
@@ -957,7 +1048,7 @@ export default function App() {
       new Blob([json], { type: "application/json" }),
       `wavecraft-settings-${ts}.json`
     );
-  }, [deckAColor, deckBColor, crossfadeCurve, midiMappings, recordTapMode]);
+  }, [deckAColor, deckBColor, deckCColor, crossfadeCurve, midiMappings, recordTapMode, deckAssigns]);
 
   // Apply a validated config object (from parseSettings) to live state. Only
   // the fields present are applied — parseSettings has already dropped any
@@ -972,9 +1063,15 @@ export default function App() {
     setLearnHint("");
     if (config.deckAColor) setDeckAColor(config.deckAColor);
     if (config.deckBColor) setDeckBColor(config.deckBColor);
+    if (config.deckCColor) setDeckCColor(config.deckCColor);
     if (config.crossfadeCurve) setCrossfadeCurve(config.crossfadeCurve);
     if (config.recordTapMode) setRecordTapMode(config.recordTapMode);
     if (config.midiMappings) setMidiMappings(config.midiMappings);
+    // W3.8 — merge over defaults so a partial assigns object can't strand a
+    // deck without an assign value.
+    if (config.deckAssigns) {
+      setDeckAssigns((prev) => ({ ...prev, ...config.deckAssigns }));
+    }
   }, []);
 
   // ── Cleanup ──
@@ -1028,8 +1125,12 @@ export default function App() {
 
       <div
         style={{
+          // W3.8 — widened from 1180 to give three decks + the mixer column
+          // breathing room on large displays. At mid widths the deck row's
+          // flex-wrap drops Deck C to its own line (2+1); below 720px the
+          // mobile media query stacks everything vertically as before.
           position: "relative",
-          maxWidth: 1180,
+          maxWidth: 1560,
           margin: "0 auto",
           padding: "16px 16px 40px",
         }}
@@ -1065,8 +1166,10 @@ export default function App() {
           onMasterVolChange={setMasterVol}
           deckAColor={deckAColor}
           deckBColor={deckBColor}
+          deckCColor={deckCColor}
           onDeckAColorChange={setDeckAColor}
           onDeckBColorChange={setDeckBColor}
+          onDeckCColorChange={setDeckCColor}
           isRecording={isRecording}
           onToggleRecord={onToggleRecord}
           recordSupported={recordSupported}
@@ -1092,7 +1195,9 @@ export default function App() {
             masterCompressorRef={masterCompressorRef}
             recordTapRef={recordTapRef}
             ensureMasterCtx={ensureMasterCtx}
-            crossfadeGain={gainA}
+            crossfadeGain={deckGains.A}
+            assign={deckAssigns.A}
+            onAssignChange={(v) => onAssignChange("A", v)}
             focused={focusedDeck === "A"}
             onFocus={focusA}
             onSync={() => onSyncDeck("A")}
@@ -1117,11 +1222,30 @@ export default function App() {
             masterCompressorRef={masterCompressorRef}
             recordTapRef={recordTapRef}
             ensureMasterCtx={ensureMasterCtx}
-            crossfadeGain={gainB}
+            crossfadeGain={deckGains.B}
+            assign={deckAssigns.B}
+            onAssignChange={(v) => onAssignChange("B", v)}
             focused={focusedDeck === "B"}
             onFocus={focusB}
             onSync={() => onSyncDeck("B")}
             onKeyDetected={onKeyDetectedB}
+          />
+
+          <Deck
+            ref={deckCRef}
+            id="C"
+            color={deckCColor}
+            audioCtxRef={audioCtxRef}
+            masterCompressorRef={masterCompressorRef}
+            recordTapRef={recordTapRef}
+            ensureMasterCtx={ensureMasterCtx}
+            crossfadeGain={deckGains.C}
+            assign={deckAssigns.C}
+            onAssignChange={(v) => onAssignChange("C", v)}
+            focused={focusedDeck === "C"}
+            onFocus={focusC}
+            onSync={() => onSyncDeck("C")}
+            onKeyDetected={onKeyDetectedC}
           />
         </div>
 
@@ -1133,6 +1257,7 @@ export default function App() {
           onLoadToDeck={onCrateLoadToDeck}
           deckAColor={deckAColor}
           deckBColor={deckBColor}
+          deckCColor={deckCColor}
         />
 
         <Looper
@@ -1157,6 +1282,7 @@ export default function App() {
           focusedDeck={focusedDeck}
           deckAColor={deckAColor}
           deckBColor={deckBColor}
+          deckCColor={deckCColor}
         />
 
         <MidiPanel
