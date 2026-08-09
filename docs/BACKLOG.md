@@ -244,10 +244,77 @@ test fixture (constructed tones panned center/side in tests — assert via
 and is ≥ 20 dB down in VOCAL); OFF is bit-transparent (dry path gain 1.0);
 works upstream of W3.6 extraction; `verify:all` green.
 
-**Batch-run order.** W3.3 → W3.2 → W3.7 → W3.6 → W3.1 → W3.5 → W3.4
+### W3.8 — Third deck (Deck C) with crossfader assign · Size XL · `LEGIT`
+
+**Problem.** The app is hard-wired to two decks. The user wants three
+"tables" — e.g. beats rotating on A/B while an acapella or texture rides on
+a third deck.
+
+**Design decision — mixing model.** A crossfader is inherently two-ended, so
+the third deck does NOT extend the crossfade curve. Instead, adopt the
+pro-mixer **crossfader-assign** model: every deck carries a 3-position
+assign switch — `A / THRU / B`.
+- Assigned `A` or `B`: the deck's gain is multiplied by that side's existing
+  equal-power/linear/constant-3dB curve value — the current math, untouched.
+- Assigned `THRU`: crossfade multiplier is exactly 1.0; the deck is
+  volume-fader-only (always audible at its VOL level).
+- Defaults: Deck A→`A`, Deck B→`B`, Deck C→`THRU` — with three decks in
+  this default state, A/B behavior is **bit-for-bit identical to today**,
+  and C layers on top.
+
+**Scope.**
+- `Deck` becomes fully instance-generic (it nearly is): render three
+  `<Deck>`s (A cyan, B purple, C — new default accent green `#4ade80`,
+  user-selectable like the others). Deck C gets the identical feature set:
+  transport, EQ, effects rack, cues, bass drop, NUDGE, waveform, BPM/key
+  detection.
+- App orchestration: `deckARef/deckBRef` pair → a deck array/map keyed by
+  id. Every pairwise assumption is audited: focus model, per-deck volume,
+  crossfade application (now `crossfadeValue × assignCurve(deck.assign)`),
+  MIDI dispatch, settings serialize.
+- **SYNC with 3 decks:** "sync to the other deck" is ambiguous now. Rule:
+  SYNC targets the *master tempo source* = the other deck that is currently
+  playing; if both others play, the one whose assigned crossfade side is
+  dominant (≥ 0.5 curve value), tie-broken by most recently started. The
+  deck's SYNC button tooltip names its current target. Keyboard `S`
+  unchanged (acts on focused deck).
+- **Crossfader-assign UI:** a small 3-position segmented control (`A · — ·
+  B`) on each deck header, MIDI-learnable, persisted in settings export
+  (version bump; old settings files import cleanly with defaults).
+- **Crate:** rows gain a `→ C` button (threading `deckCColor`).
+- **Keyboard:** no new global keys needed (focus model already generalizes);
+  ThemePicker gains a C row; TheoryPanel's live key highlight tracks the
+  focused deck as today.
+- **Layout:** desktop — three deck columns with the mixer column (master +
+  crossfader + assigns) between B and C or below; needs a design pass
+  against DESIGN_GUIDE §2 (1180px shell is tight for 3 decks — likely a
+  wider `max-width` for ≥ 3-deck layouts and a 2+1 wrap at mid widths).
+  Mobile — decks stack vertically (existing pattern extends).
+- **Audio graph:** `buildDeckChain` is already per-deck and shared-master —
+  a third chain simply fans into the same master compressor and record tap.
+  No signal-chain reordering (danger zone untouched). CPU: 3 decks × full
+  effects is the perf risk; verify on the perf budget (Systems Lead gates).
+- **Tests:** every pairwise test generalized; new assign-curve unit tests
+  (THRU = exactly 1.0; A/B legs match today's two-deck output); settings
+  round-trip with deck C + assigns; crate `→ C`; 3-deck sync-target rule.
+- Docs: CLAUDE.md architecture + shortcut table, USER_GUIDE, IO_CONTRACT
+  rows, DESIGN_GUIDE layout section, E2E matrix rows.
+
+**Out of scope.** 4+ decks (the assign model generalizes later if wanted);
+per-deck headphone cueing (that's the split-cue roadmap item); a 3-way
+"crossfade curve" (deliberately rejected — assign preserves the audited
+2-way math).
+
+**Acceptance.** Default assigns reproduce today's two-deck behavior exactly
+(regression suite green unmodified in spirit); a track on C at THRU stays
+audible across the full crossfader travel; assigning C to a side makes it
+follow that side's curve; `verify:all` green; bundle + perf budgets hold.
+
+**Batch-run order.** W3.3 → W3.2 → W3.7 → W3.6 → W3.8 → W3.1 → W3.5 → W3.4
 (small/independent first; W3.7 before W3.6 so bite extraction can render
-through isolation; spike-gated last). Commit per ticket, one push, one PR
-at the end.
+through isolation; W3.8 before W3.1 so the keylock worklet lands on the
+generalized deck array once, not twice; spike-gated last). Commit per
+ticket, one push, one PR at the end.
 
 ## Spike before committing
 
