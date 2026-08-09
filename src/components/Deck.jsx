@@ -40,6 +40,11 @@ const SR_ONLY = {
   border: 0,
 };
 
+// W3.3 — gain (dB) a killed EQ band ramps to. Deliberately below the knob's
+// −12 dB floor: a DJ "kill" silences the band, it doesn't just duck it. The
+// BiquadFilter gain param accepts values past the UI range.
+const EQ_KILL_DB = -26;
+
 function formatTime(s) {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
@@ -162,6 +167,12 @@ const Deck = forwardRef(function Deck(
   const eqLowRef = useRef(0);
   const eqMidRef = useRef(0);
   const eqHighRef = useRef(0);
+  // W3.3 — per-band EQ kill switches. Kill state is deliberately SEPARATE
+  // from the knob state: killing a band ramps the filter gain to KILL_DB
+  // without moving the knob, and un-killing restores the knob's exact prior
+  // value (which may have been turned while killed — the effective gain
+  // always re-derives from the live pair).
+  const [eqKills, setEqKills] = useState({ low: false, mid: false, high: false });
   // R17 Q2 — mirror of `volume` for the MIDI relative-encoder getter so the
   // App can always read the *current* deck volume at CC-dispatch time without
   // depending on the imperative handle being re-created (it isn't gated on
@@ -191,11 +202,14 @@ const Deck = forwardRef(function Deck(
   // V5 (R19) — EQ ref mirrors. Kept on every tick so the bass-drop's t3
   // recovery reads the LIVE user value even when the user moved the knob
   // during the drop's automation window.
+  // W3.3 — the refs mirror the EFFECTIVE gain (kill overrides knob) so the
+  // bass-drop's t3 recovery lands on the killed value while a kill is held,
+  // not on a knob value the listener can't currently hear.
   useEffect(() => {
-    eqLowRef.current = eq.low;
-    eqMidRef.current = eq.mid;
-    eqHighRef.current = eq.high;
-  }, [eq]);
+    eqLowRef.current = eqKills.low ? EQ_KILL_DB : eq.low;
+    eqMidRef.current = eqKills.mid ? EQ_KILL_DB : eq.mid;
+    eqHighRef.current = eqKills.high ? EQ_KILL_DB : eq.high;
+  }, [eq, eqKills]);
   // X4 (R21) — reverb / distortion MIX ref mirrors. The size-debounce and
   // drive-debounce timers (200 ms) read MIX from these refs when computing
   // the ramp-back target, so a MIX slide during the debounce window lands at
@@ -267,16 +281,21 @@ const Deck = forwardRef(function Deck(
     // (a multi-leg linearRamp set). A plain setTargetAtTime here would queue
     // behind those ramps and not take effect until t3 — the user-perceived
     // "snap back". Cancel-and-hold first so the user's change applies now.
+    // W3.3 — a killed band's effective gain is EQ_KILL_DB regardless of the
+    // knob; the knob value is untouched and restores exactly on un-kill.
+    const low = eqKills.low ? EQ_KILL_DB : eq.low;
+    const mid = eqKills.mid ? EQ_KILL_DB : eq.mid;
+    const high = eqKills.high ? EQ_KILL_DB : eq.high;
     if (bassDropRunningRef.current) {
-      reapplyParamThroughAutomation(chain.eqLow.gain, eq.low, ctx, 0.02);
-      reapplyParamThroughAutomation(chain.eqMid.gain, eq.mid, ctx, 0.02);
-      reapplyParamThroughAutomation(chain.eqHigh.gain, eq.high, ctx, 0.02);
+      reapplyParamThroughAutomation(chain.eqLow.gain, low, ctx, 0.02);
+      reapplyParamThroughAutomation(chain.eqMid.gain, mid, ctx, 0.02);
+      reapplyParamThroughAutomation(chain.eqHigh.gain, high, ctx, 0.02);
     } else {
-      chain.eqLow.gain.setTargetAtTime(eq.low, ctx.currentTime, 0.02);
-      chain.eqMid.gain.setTargetAtTime(eq.mid, ctx.currentTime, 0.02);
-      chain.eqHigh.gain.setTargetAtTime(eq.high, ctx.currentTime, 0.02);
+      chain.eqLow.gain.setTargetAtTime(low, ctx.currentTime, 0.02);
+      chain.eqMid.gain.setTargetAtTime(mid, ctx.currentTime, 0.02);
+      chain.eqHigh.gain.setTargetAtTime(high, ctx.currentTime, 0.02);
     }
-  }, [eq, audioCtxRef, chainTick, reapplyParamThroughAutomation]);
+  }, [eq, eqKills, audioCtxRef, chainTick, reapplyParamThroughAutomation]);
 
   // ─── Filter sweep ───
   useEffect(() => {
@@ -1602,9 +1621,52 @@ const Deck = forwardRef(function Deck(
           borderRadius: 10,
         }}
       >
-        <Knob value={eq.low} onChange={(v) => setEq((p) => ({ ...p, low: v }))} label="LOW" color={color} />
-        <Knob value={eq.mid} onChange={(v) => setEq((p) => ({ ...p, mid: v }))} label="MID" color={color} />
-        <Knob value={eq.high} onChange={(v) => setEq((p) => ({ ...p, high: v }))} label="HIGH" color={color} />
+        {[
+          { band: "low", label: "LOW", value: eq.low },
+          { band: "mid", label: "MID", value: eq.mid },
+          { band: "high", label: "HIGH", value: eq.high },
+        ].map(({ band, label, value }) => {
+          const killed = eqKills[band];
+          return (
+            <div
+              key={band}
+              style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 4 }}
+            >
+              <Knob
+                value={value}
+                onChange={(v) => setEq((p) => ({ ...p, [band]: v }))}
+                label={label}
+                color={color}
+              />
+              {/* W3.3 — one-tap band kill. Toggling never moves the knob. */}
+              <button
+                type="button"
+                onClick={() => setEqKills((p) => ({ ...p, [band]: !p[band] }))}
+                aria-pressed={killed}
+                aria-label={`Kill ${label.toLowerCase()} EQ on deck ${id}`}
+                title={killed ? `Restore the ${label} band` : `Kill the ${label} band`}
+                style={{
+                  background: killed ? "#f8717122" : "rgba(255,255,255,0.05)",
+                  border: `1px solid ${killed ? "#f87171" : "rgba(136,146,176,0.3)"}`,
+                  color: killed ? "#f87171" : "#8892b0",
+                  borderRadius: 6,
+                  padding: "2px 10px",
+                  // Z1 — meets the DESIGN_GUIDE 38px control floor.
+                  minHeight: 38,
+                  minWidth: 44,
+                  fontSize: 8,
+                  fontWeight: 700,
+                  letterSpacing: 1,
+                  cursor: "pointer",
+                  fontFamily: "'Exo 2', sans-serif",
+                  boxShadow: killed ? "0 0 12px #f8717144" : "none",
+                }}
+              >
+                KILL
+              </button>
+            </div>
+          );
+        })}
       </div>
 
       {/* Effects rack */}

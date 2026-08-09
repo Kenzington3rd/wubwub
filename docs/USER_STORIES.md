@@ -115,6 +115,12 @@ Persona: bedroom DJ who mixes local files in the browser. Sometimes streams, som
 |---|---|---|---|
 | US65 | Third deck (Deck C) with crossfader assign — three full-featured decks; each carries an `A / THRU / B` assign segmented control (aria-pressed). Assigned decks follow the existing crossfade curves (`assignGain` A/B legs match `crossfadeGains` verbatim); THRU is exactly 1.0 at every fader position. Defaults (A→A, B→B, C→THRU) reproduce two-deck behavior. Crate quick-loads to C; settings v3 round-trips `deckCColor` + `deckAssigns` (v1/v2 files still import; malformed assigns dropped); SYNC targets the dominant playing deck | U + C + I | `test/crossfade.test.js`, `test/settings.test.js`, `test/App.test.jsx` |
 
+## W3 — EDM remix batch
+
+| ID | Story | Coverage | Test file |
+|---|---|---|---|
+| US66 | EQ kill switches — one-tap KILL button under each EQ knob ramps that band to the −26 dB kill floor via `setTargetAtTime` (never instant); kill state is separate from knob state (killing doesn't move the knob; un-kill restores the exact prior gain; turning a killed band's knob keeps it killed); aria-pressed reflects state (W3.3) | I | `test/Deck.test.jsx` |
+
 ## Useful utilities
 
 | ID | Story | Coverage | Test file |

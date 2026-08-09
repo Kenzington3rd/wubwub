@@ -22,6 +22,7 @@ ever leaves your device.
 | Waveform | Live view. **Click anywhere on it to jump** to that point. Or focus it with `Tab` and seek with the keyboard (see Keyboard shortcuts). |
 | VOL / SPD / FLT | Volume, playback speed (0.5×–2.0×), low-pass filter sweep. |
 | LOW / MID / HIGH | 3-band EQ knobs — drag up/down. ±12 dB. |
+| KILL (under each EQ knob) | One-tap band kill — silences that band without moving the knob; tap again to restore the exact knob value. The bass-swap button. |
 | TAP | Tap in time with the music 4+ times to set BPM by ear. |
 | AUTO | Auto-detects BPM **and** musical key from the loaded track. |
 | ÷2 / ×2 | Halve or double the BPM — fixes half-time / double-time detection. |

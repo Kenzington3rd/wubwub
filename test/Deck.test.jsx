@@ -1521,3 +1521,93 @@ describe("Deck — integration tests across many user stories", () => {
     }
   });
 });
+
+// ─── W3.3 — EQ kill switches (US66) ───
+describe("Deck EQ kills — US66", () => {
+  it("@us US66: killing a band schedules the kill floor without moving the knob", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+    const ctx = api.audioCtxRef.current;
+    const lowShelf = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "lowshelf"
+    );
+
+    // Raise the LOW knob to +3 first so we can prove the knob doesn't move.
+    const lowKnob = screen
+      .getAllByRole("slider")
+      .find((k) => k.getAttribute("aria-label") === "LOW");
+    for (let i = 0; i < 3; i++) {
+      await act(async () => fireEvent.keyDown(lowKnob, { key: "ArrowUp" }));
+    }
+    const knobBefore = lowKnob.getAttribute("aria-valuenow");
+
+    const kill = screen.getByRole("button", { name: /Kill low EQ on deck A/i });
+    expect(kill.getAttribute("aria-pressed")).toBe("false");
+    await act(async () => { fireEvent.click(kill); });
+
+    // aria-pressed flips; the scheduled value is the -26 dB kill floor via
+    // setTargetAtTime (never an instant write); the knob is untouched.
+    expect(kill.getAttribute("aria-pressed")).toBe("true");
+    const last = lowShelf.gain.scheduledValues.at(-1);
+    expect(last.type).toBe("setTarget");
+    expect(last.target).toBe(-26);
+    expect(lowKnob.getAttribute("aria-valuenow")).toBe(knobBefore);
+  });
+
+  it("@us US66: un-killing restores the knob's exact prior gain", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+    const ctx = api.audioCtxRef.current;
+    const highShelf = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "highshelf"
+    );
+    const highKnob = screen
+      .getAllByRole("slider")
+      .find((k) => k.getAttribute("aria-label") === "HIGH");
+    for (let i = 0; i < 5; i++) {
+      await act(async () => fireEvent.keyDown(highKnob, { key: "ArrowUp" }));
+    }
+    const knobValue = Number(highKnob.getAttribute("aria-valuenow"));
+
+    const kill = screen.getByRole("button", { name: /Kill high EQ on deck A/i });
+    await act(async () => { fireEvent.click(kill); });
+    await act(async () => { fireEvent.click(kill); });
+
+    expect(kill.getAttribute("aria-pressed")).toBe("false");
+    const last = highShelf.gain.scheduledValues.at(-1);
+    expect(last.type).toBe("setTarget");
+    expect(last.target).toBe(knobValue);
+  });
+
+  it("@us US66: turning a knob while its band is killed keeps the band killed", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 3, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+
+    const ctx = api.audioCtxRef.current;
+    const midPeak = ctx._nodes.find(
+      (n) => n.nodeType === "BiquadFilterNode" && n.type === "peaking"
+    );
+    const kill = screen.getByRole("button", { name: /Kill mid EQ on deck A/i });
+    await act(async () => { fireEvent.click(kill); });
+
+    const midKnob = screen
+      .getAllByRole("slider")
+      .find((k) => k.getAttribute("aria-label") === "MID");
+    await act(async () => fireEvent.keyDown(midKnob, { key: "ArrowUp" }));
+
+    // The knob moved, but the effective scheduled gain stays at the floor.
+    const last = midPeak.gain.scheduledValues.at(-1);
+    expect(last.target).toBe(-26);
+  });
+});
