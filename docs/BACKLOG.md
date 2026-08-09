@@ -34,6 +34,145 @@
 - Split-cue / pre-cue monitor bus (ROADMAP #1)
 - Practice-mode prompts (S)
 
+## Wave 3 — EDM remix batch (planned; single implementation run end of August 2026)
+
+> Origin: user goal — build an EDM bootleg remix of a ~105 BPM country vocal
+> track ("(I Never Promised You a) Rose Garden") inside WAVECRAFT. The app is
+> already qualified for the *varispeed* version of this workflow (0.5–2.0x deck
+> speed, sync, cues, looper, bass drop, sample pads, recorder). These tickets
+> close the remaining gaps. All five are scoped for one batched implementation
+> run (implementation + tests + docs + a single push/PR) to minimize CI/Git
+> activity. Ranked by value to the use case.
+
+### W3.1 — Pitch-preserving time-stretch ("KEYLOCK" mode) · Size L · `LEGIT`
+
+**Problem.** Deck tempo is varispeed-only (`AudioBufferSource.playbackRate`,
+clamped 0.5–2.0 in `Deck.jsx`). Taking a ~105 BPM vocal to 128 BPM raises the
+vocal ~3 semitones. Users who want the original vocal pitch over an EDM-tempo
+beat have no option.
+
+**Scope.**
+- New AudioWorklet time-stretcher (WSOLA/granular class, NOT a phase vocoder —
+  CPU headroom on mobile is the binding constraint). Follows the existing
+  looper-worklet pattern: source in `src/worklets/`, imported `?raw`,
+  registered via Blob URL (danger-zone rule: no static worklet paths).
+- Per-deck `VARI / KEYLOCK` toggle. In KEYLOCK, tempo changes route through
+  the stretcher at rate `speed` with pitch ratio 1; in VARI, behavior is
+  exactly today's (`playbackRate`), bit-for-bit unchanged.
+- Free byproduct: independent key-shift control (± semitones at constant
+  tempo) — stretch ratio and pitch ratio are separate knobs in the same
+  algorithm. Integrates with the Camelot panel (shift to a compatible key).
+- Signal-chain position: the stretcher replaces/wraps the buffer source at
+  the head of the per-deck chain; everything downstream (EQ → effects →
+  analyser → master) is untouched. **Requires Audio Engine Architect review**
+  per CLAUDE.md danger zones.
+- NUDGE pitch-bend, sync, seek/cue re-anchoring, and effective-BPM math must
+  all keep working in both modes (the `speed + bend` clamp logic in Deck.jsx
+  currently assumes playbackRate semantics — audit every call site).
+
+**Out of scope.** Formant preservation; stretch quality knobs; offline
+render-ahead.
+
+**Acceptance.** A 105 BPM track at 1.22x in KEYLOCK plays at ~128 BPM with
+unchanged perceived pitch; VARI mode is behaviorally identical to today;
+`verify:all` green; bundle budget respected (worklet is small, pure JS).
+
+### W3.2 — Voice / mic recording into decks, crate, and sample pads · Size M · `LEGIT`
+
+**Problem.** The user wants to record *their own voice* performing the lyrical
+parts, then speed the vocal up (varispeed today, KEYLOCK once W3.1 lands) and
+mix it over the EDM bed. There is currently no audio *input* path — every
+buffer comes from a file on disk.
+
+**Scope.**
+- Mic capture via `getUserMedia({ audio })`. This is a **local device API,
+  not a network call** — it does not violate the zero-network rule, but the
+  constraint doc rules still apply: captured audio lives only in
+  `AudioBuffer`s in memory, is never persisted and never transmitted
+  (same contract as file loads).
+- Capture constraints tuned for music, not calls:
+  `echoCancellation: false, noiseSuppression: false, autoGainControl: false`.
+- New `VoxRecorder` panel: ARM (requests permission) → optional count-in at
+  the synced BPM → RECORD → STOP → preview → **Send to** Deck A / Deck B /
+  Crate / Sample Pad N. Reuses the existing adoption paths: `Deck.loadBuffer`
+  (already built for the crate), crate add, pad assign — no new plumbing.
+- Capture implementation: `MediaStreamAudioSourceNode` → recorder tap
+  (worklet or `MediaRecorder`+decode); decoded to a plain `AudioBuffer` so
+  BPM/key detection and all deck features work on the take.
+- Monitoring OFF by default (open-speaker feedback risk); optional monitor
+  toggle routed pre-master with a warning.
+- Graceful degradation: `getUserMedia` requires a **secure context** — it
+  works in the PWA build (https / localhost) but is unavailable from
+  `file://`, i.e. the single-file build opened from disk. The panel must
+  detect this and show an inline "mic requires the PWA / a local server"
+  notice instead of throwing. Document in `docs/IO_CONTRACT.md` (this is a
+  brand-new input row) and `USER_GUIDE.md`.
+- Permissions-Policy meta tag currently in `index.html` may deny
+  `microphone` — audit and scope it to `self` for the capture to work.
+
+**Out of scope.** Multi-take comping; overdub loops; any persistence of
+recordings (explicitly forbidden); noise reduction.
+
+**Acceptance.** In a secure context: arm → record a take → send to Deck B →
+speed it to 1.2x → it plays through the full deck chain and appears in
+BPM/key detection. On `file://`: panel renders the capability notice, app
+otherwise unaffected. New IO_CONTRACT row + tests (mock `getUserMedia`,
+denial path, insecure-context path). CSP: `connect-src 'none'` unchanged.
+
+### W3.3 — EQ kill switches · Size S · `LEGIT`
+
+**Problem.** The bass-swap on a drop is the most common EDM mixing move;
+twisting the LOW knob to zero mid-performance is clumsy.
+
+**Scope.** One-tap LOW / MID / HIGH kill buttons per deck above the existing
+EQ knobs. Kill = ramp the shelf/peaking gain to its floor via
+`setTargetAtTime` (never instant, never `setTimeout`); un-kill restores the
+knob's prior value (kill state is separate from knob state). Keyboard: none
+initially (the shortcut map is crowded); MIDI-learnable like other controls.
+
+**Acceptance.** Toggling kill does not move the knob position; restore
+returns the exact prior gain; no zipper noise; tests for the state
+separation.
+
+### W3.4 — Beat-synced loop roll · Size M · `NEEDS-SPIKE` (quantization feel)
+
+**Problem.** The existing looper captures 4/8/16 bars from the master — it is
+capture-oriented. EDM performance wants momentary ¼/½/1/2-beat rolls on a
+deck that release back to the un-rolled timeline.
+
+**Scope.** Per-deck momentary roll buttons (¼, ½, 1, 2 beats), length derived
+from detected BPM × speed. While held, loop a slice ending at the press
+point; on release, playback resumes where it *would have been* (timeline
+keeps running underneath). Buffer-slice looping via the existing source
+re-anchor machinery in Deck.jsx.
+
+**Spike first.** Free-running beat phase (a known deferred limitation) means
+rolls quantize to press time, not to the bar grid. Prototype whether
+press-time quantization feels good enough before building the full UI.
+
+**Acceptance (post-spike).** Roll engages ≤ one buffer quantum after press;
+release resumes the running timeline position; works in VARI and (if W3.1
+lands first) KEYLOCK.
+
+### W3.5 — Sidechain-style ducking ("PUMP") · Size M · `LEGIT` (stretch goal)
+
+**Problem.** The instantly recognizable EDM "pump" (bed ducking under the
+kick) is impossible today without manual volume riding.
+
+**Scope.** Per-deck PUMP toggle + depth knob: an LFO at the *synced* BPM
+(period = one beat) modulating the deck's post-EQ gain with a fast-dip /
+exponential-recover shape, scheduled with `setValueCurveAtTime` windows —
+no live envelope follower, no beat-phase detection needed (consistent with
+the deferred-items list; phase is free-running, matching the beat
+indicator's behavior). Depth 0 = bypass (gain exactly 1.0).
+
+**Acceptance.** Pump rate tracks effective BPM including speed changes;
+disabling leaves gain at exactly 1.0; no scheduling pile-up on long
+sessions (curve windows re-armed in bounded chunks).
+
+**Batch-run order.** W3.3 → W3.2 → W3.1 → W3.5 → W3.4 (small/independent
+first, spike-gated last). Commit per ticket, one push, one PR at the end.
+
 ## Spike before committing
 
 - **Browser-native stem separation** (ONNX/Demucs). Bundle-size + perf risk;
