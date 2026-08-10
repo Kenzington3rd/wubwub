@@ -310,6 +310,17 @@ per-deck headphone cueing (that's the split-cue roadmap item); a 3-way
 audible across the full crossfader travel; assigning C to a side makes it
 follow that side's curve; `verify:all` green; bundle + perf budgets hold.
 
+### W3.4 build plan (post-spike)
+
+Four momentary ROLL buttons (¼ ½ 1 2 beats) in a deck row: on pointerdown,
+compute `len = beats × 60 / (bpm × speed)`, create a loop source exactly like
+the bite preview (`loop=true`, `loopStart = playhead − len` clamped ≥ 0,
+`loopEnd = playhead`), duck the main source's contribution (ramp `chain.gain`
+handles both — simplest v1: pause the main source, remember wall-clock), and
+on pointerup resume at `pressPos + heldWallTime × effRate` via `seekTo`
+(timeline "kept running underneath"). Free-running press-time quantization —
+ship it, listen, and only then consider grid snapping.
+
 ### W3.4 spike findings (2026-08-09)
 
 The roll mechanism is **mechanically proven** by the W3.6 bite-preview
@@ -325,6 +336,44 @@ listening judgment. Recommendation: build the four momentary roll buttons on
 the bite-preview source path (S–M effort now that the machinery exists), try
 it by ear, and only then decide whether beat-phase snapping needs to be
 pulled forward from the deferred list.
+
+### W3.1 integration plan (write-down for the next pass)
+
+Design agreed in-session — **KEYLOCK is opt-in**, VARI stays the default and
+bit-identical, so regression risk is contained and a listening test can
+reject KEYLOCK without touching VARI:
+
+1. Per-deck `VARI / KEYLOCK` toggle next to the SPD slider. Persist nothing
+   (session-only) until it survives a listening test.
+2. On first KEYLOCK engage: register `stretch-worklet.js` (same `?raw` +
+   Blob-URL pattern as the looper — the source file is already written and
+   test-pinned), create one `AudioWorkletNode("stretch-processor")` per
+   deck, `connect(chain.gain)`, and post `{type:"load", channels, sampleRate}`
+   with copies of the buffer's channel data (transfer 2×Float32Array copies;
+   ~40 MB for a 4-min stereo track — acceptable, release on track change).
+3. Transport mapping in KEYLOCK: play → `{type:"play", offset}`;
+   pause/stop → `{type:"pause"}`; seek/cue → `{type:"seek", offset}`;
+   rate = `clamp(speed + bend, 0.5, 2.0)` written to the `rate` AudioParam
+   via `setTargetAtTime` (NUDGE therefore modulates tempo, not pitch — the
+   correct DJ behavior); `pitchRatio` stays 1 (later: a KEY ± semitone
+   control via `semitonesToRatio`).
+4. Timekeeping: the Deck's existing wall-clock math (elapsed × effRate)
+   remains valid because track time advances at `rate` in both modes; the
+   worklet's ~10 Hz `{type:"position"}` reports are the drift correction —
+   overwrite `currentTimeRef` from them while in KEYLOCK.
+5. Loop mode: worklet has no loop support yet — either add
+   `{type:"loopRegion"}` to the worklet or (v1) disable LOOP+KEYLOCK
+   together with an inline note.
+6. Audit list (call sites that assume a BufferSource):
+   `Deck.jsx` play path (`playbackRate` writes), speed-change effect
+   (`setTargetAtTime` on live source), NUDGE apply/release, `seekTo`
+   re-anchor math, bass-drop scheduling (chain-side — unaffected), bite
+   LOOP preview (uses its own source — unaffected), `getEffectiveBpm`
+   (unchanged: bpm × speed).
+7. Structural tests can pin the message protocol + rate writes with a mock
+   AudioWorkletNode; the QUALITY gate (grain artifacts at 1.1–1.3× on a
+   vocal) is a human listening test — ship behind the toggle, listen, then
+   decide whether to promote or iterate grain size / add WSOLA correlation.
 
 ### W3.1 status (2026-08-09)
 
@@ -345,6 +394,41 @@ signal-chain head.
 through isolation; W3.8 before W3.1 so the keylock worklet lands on the
 generalized deck array once, not twice; spike-gated last). Commit per
 ticket, one push, one PR at the end.
+
+
+## Session operating notes (2026-08-09 — durable context for future sessions)
+
+How this repo is being driven; follow these unless the owner says otherwise.
+
+- **Git flow:** all work happens on branch `claude/edm-rose-garden-mix-iptowb`.
+  After a PR merges, restart the branch from `origin/main` (same name) —
+  never stack on merged history. One commit per ticket, one push + one PR
+  per batch. Every commit message is tagged `[skip ci]` — the owner is
+  conserving GitHub Actions minutes; run the verification locally instead
+  (`npx vitest run`, `npm run build`, `npm run build:single`, `npm run size`)
+  and state so in the PR. CI runs once on the merge to main.
+- **Releases:** `.github/workflows/release.yml` (workflow_dispatch with a
+  `version` input, or a `v*` tag). It runs `verify:all`, then publishes
+  `wavecraft.html` (single-file app) + `wavecraft-pwa.zip` to the Releases
+  page. Shipped so far: v1.0.0 (3 decks + assign), v1.1.0 (Wave 3 batch).
+  The owner's flow: merge the PR, then trigger the release — both on
+  request ("proceed" has covered merge + release in this session).
+- **Docs mirror:** the owner keeps human-readable copies in Google Drive
+  folder **"wubwub"** (folder id `1B3qYDRfCc_--CPeWXIAWCYGe4JTRGZZH`) —
+  each repo doc as a converted Google Doc titled "Wubwub — <NAME>", plus a
+  "Wubwub — Documentation Index" doc with search tags and a "Wubwub — User
+  Guide (Tutorial Edition)" (also delivered as a branded PDF). Refresh
+  these after significant doc changes when asked. The tutorial guide
+  content lives only in those artifacts (not in the repo) — its source of
+  truth for facts is `docs/USER_GUIDE.md`.
+- **Owner context:** the driving use case is an EDM bootleg remix of
+  "(I Never Promised You a) Rose Garden" (~105 BPM vocal → ~128 BPM), incl.
+  recording their own voice for the lyrical parts (VOX) and scraping
+  bites from the original (ISOLATE + BITE). Feature ideas get scoped as
+  tickets here first; the owner says "proceed" to build.
+- **Test-count checkpoint:** 490 passing at v1.1.0 (36+ files). New
+  user-story IDs are allocated sequentially in `docs/USER_STORIES.md`
+  (last used: US71).
 
 ## Spike before committing
 
