@@ -5,16 +5,6 @@
 
 WAVECRAFT is a dual-deck DJ mixing app that runs entirely in your browser. **Nothing leaves the device** — no analytics, no telemetry, no CDN dependencies at runtime, no subscriptions, no accounts. Drop a couple of audio files in, mix, record, download. That's it.
 
-## Try it now
-
-**[Open the live demo →](https://kenzington3rd.github.io/wubwub/)** — no install, no
-account, nothing to sign up for. Drop in an audio file and mix. Everything runs
-in your browser and nothing you load ever leaves your device.
-
-> The demo is published by `.github/workflows/pages.yml` on every push to
-> `main`. It requires Pages to be switched on once for the repo:
-> **Settings → Pages → Build and deployment → Source: "GitHub Actions"**.
-
 ## Download the app (no tools required)
 
 Grab the latest build from the [Releases page](https://github.com/Kenzington3rd/wubwub/releases):
