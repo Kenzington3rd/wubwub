@@ -1,0 +1,63 @@
+# Publishes the PWA build to GitHub Pages so there's a live, clickable demo
+# (https://kenzington3rd.github.io/wubwub/) instead of asking people to
+# download a file before they can try the app.
+#
+# The build needs no base-path flag: vite.config.js uses `base: "./"` and the
+# manifest uses `start_url: "."`, so every asset URL is relative and the same
+# artifact works at a repo subpath, at a domain root, and from file://.
+name: Deploy demo to Pages
+
+on:
+  push:
+    branches: [main]
+    # Don't rebuild the demo for doc-only changes.
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never let two deploys race; let a newer commit supersede an in-flight run.
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install
+        run: npm ci
+
+      - name: Test
+        run: npm test
+
+      - name: Build PWA bundle
+        run: npm run build
+
+      # `enablement: true` turns Pages on (source = GitHub Actions) the first
+      # time this runs, so the repo needs no manual Settings → Pages toggle.
+      - uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+      - id: deployment
+        uses: actions/deploy-pages@v4
