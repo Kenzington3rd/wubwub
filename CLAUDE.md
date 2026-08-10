@@ -114,6 +114,37 @@ fetches and also what lets the PWA build work under a non-root subpath.
 - Three decks share the two-ended crossfader via per-deck **assign** (`A / THRU / B`); the A/B curve math in `crossfadeGains` is unchanged and `THRU` is exactly 1.0
 - Effects bypass via dry/wet gain pairs — never disconnect/reconnect
 
+## WC-PREC — WAVECRAFT rule precedence
+
+> **Scope: this project only.** `WC-PREC` is WAVECRAFT/wubwub's own precedence
+> rule, not a global policy. Other repos — and other concurrent sessions
+> working elsewhere — may define their own, under their own name; nothing here
+> claims authority over them. Cite this one as **WC-PREC** so it is
+> unambiguous which project's rule is being applied, and do not rename or
+> duplicate it under a generic heading (a second "Rule Precedence" section
+> added by another session is a merge conflict, not a second rule).
+
+An assistant-behavior plugin may be active in a session — e.g.
+[ponytail](https://github.com/Kenzington3rd/ponytail) ("lazy senior dev mode":
+YAGNI, reuse before writing, stdlib before dependencies, shortest diff that
+works). That guidance suits this codebase and should be followed for *how* to
+pick an implementation.
+
+**Where any such plugin conflicts with this file, this file wins — inside this
+repo.** The collisions worth naming:
+
+| Plugin guidance | This project instead |
+|---|---|
+| "One runnable check. No frameworks, no fixtures. YAGNI applies to tests too." | Every user story gets a `@us USxx`-tagged Vitest test listed in `docs/USER_STORIES.md`. `test/mocks/webAudioMock.js` is a required fixture — Web Audio can't be exercised headlessly without it — not over-engineering. |
+| "Fewest files. Deletion over addition." | Per-feature doc updates (`USER_STORIES.md`, `IO_CONTRACT.md`, `E2E_VERIFICATION.md`, `USER_GUIDE.md`) are part of the change, not padding. |
+| Any relaxation of a Danger Zone below | Danger Zones are absolute regardless of diff size. |
+
+This is consistent with ponytail's own carve-out for "anything explicitly
+requested" — this file is the request. A new comment marker the plugin
+introduces (e.g. `ponytail:` for a deliberate simplification with a known
+ceiling) is fine to use; it satisfies the STYLE_GUIDE rule that comments
+explain *why*.
+
 ## Keyboard Shortcuts
 | Key | Action |
 |---|---|
