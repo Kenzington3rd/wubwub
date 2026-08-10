@@ -45,7 +45,7 @@
 > run (implementation + tests + docs + a single push/PR) to minimize CI/Git
 > activity. Ranked by value to the use case.
 
-### W3.1 — Pitch-preserving time-stretch ("KEYLOCK" mode) · Size L · `IN PROGRESS` (DSP core + worklet landed; transport integration pending Audio Engine Architect review)
+### W3.1 — Pitch-preserving time-stretch ("KEYLOCK" mode) · Size L · `DONE` (shipped as an experimental opt-in toggle; VARI default is bit-identical — quality promotion gated on listening)
 
 **Problem.** Deck tempo is varispeed-only (`AudioBufferSource.playbackRate`,
 clamped 0.5–2.0 in `Deck.jsx`). Taking a ~105 BPM vocal to 128 BPM raises the
