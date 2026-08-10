@@ -5,15 +5,23 @@
 # The build needs no base-path flag: vite.config.js uses `base: "./"` and the
 # manifest uses `start_url: "."`, so every asset URL is relative and the same
 # artifact works at a repo subpath, at a domain root, and from file://.
+#
+# ─── DORMANT UNTIL PAGES IS TURNED ON ───
+# This workflow is manual-dispatch only on purpose. `configure-pages` fails
+# ("Get Pages site failed: Not Found") whenever Pages is off, so an automatic
+# push trigger would paint main red on every commit until the repo setting is
+# flipped. To go live:
+#   1. Settings → Pages → Build and deployment → Source: "GitHub Actions"
+#   2. Actions tab → "Deploy demo to Pages" → Run workflow
+#   3. Once a run is green, optionally re-add the auto-deploy trigger by
+#      putting this block back above `workflow_dispatch:` —
+#        push:
+#          branches: [main]
+#          paths-ignore: ["docs/**", "**/*.md"]
+#      — and add the demo link to the README's "Try it now" section.
 name: Deploy demo to Pages
 
 on:
-  push:
-    branches: [main]
-    # Don't rebuild the demo for doc-only changes.
-    paths-ignore:
-      - "docs/**"
-      - "**/*.md"
   workflow_dispatch:
 
 permissions:
@@ -49,11 +57,12 @@ jobs:
       - name: Build PWA bundle
         run: npm run build
 
-      # `enablement: true` turns Pages on (source = GitHub Actions) the first
-      # time this runs, so the repo needs no manual Settings → Pages toggle.
+      # NOTE: Pages must already be enabled on the repo, with
+      # Settings → Pages → Build and deployment → Source = "GitHub Actions".
+      # Do NOT add `enablement: true` here — creating the Pages site needs
+      # admin credentials, and the workflow's GITHUB_TOKEN doesn't have them
+      # ("Resource not accessible by integration"), so it fails the job.
       - uses: actions/configure-pages@v5
-        with:
-          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
