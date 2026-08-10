@@ -49,7 +49,11 @@ jobs:
       - name: Build PWA bundle
         run: npm run build
 
+      # `enablement: true` turns Pages on (source = GitHub Actions) the first
+      # time this runs, so the repo needs no manual Settings → Pages toggle.
       - uses: actions/configure-pages@v5
+        with:
+          enablement: true
 
       - uses: actions/upload-pages-artifact@v3
         with:
