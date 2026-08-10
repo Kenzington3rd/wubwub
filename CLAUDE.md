@@ -114,6 +114,29 @@ fetches and also what lets the PWA build work under a non-root subpath.
 - Three decks share the two-ended crossfader via per-deck **assign** (`A / THRU / B`); the A/B curve math in `crossfadeGains` is unchanged and `THRU` is exactly 1.0
 - Effects bypass via dry/wet gain pairs — never disconnect/reconnect
 
+## Rule Precedence
+
+An assistant-behavior plugin may be active in a session — e.g.
+[ponytail](https://github.com/Kenzington3rd/ponytail) ("lazy senior dev mode":
+YAGNI, reuse before writing, stdlib before dependencies, shortest diff that
+works). That guidance suits this codebase and should be followed for *how* to
+pick an implementation.
+
+**Where any such plugin conflicts with this file, this file wins.** The
+collisions worth naming:
+
+| Plugin guidance | This project instead |
+|---|---|
+| "One runnable check. No frameworks, no fixtures. YAGNI applies to tests too." | Every user story gets a `@us USxx`-tagged Vitest test listed in `docs/USER_STORIES.md`. `test/mocks/webAudioMock.js` is a required fixture — Web Audio can't be exercised headlessly without it — not over-engineering. |
+| "Fewest files. Deletion over addition." | Per-feature doc updates (`USER_STORIES.md`, `IO_CONTRACT.md`, `E2E_VERIFICATION.md`, `USER_GUIDE.md`) are part of the change, not padding. |
+| Any relaxation of a Danger Zone below | Danger Zones are absolute regardless of diff size. |
+
+This is consistent with ponytail's own carve-out for "anything explicitly
+requested" — this file is the request. A new comment marker the plugin
+introduces (e.g. `ponytail:` for a deliberate simplification with a known
+ceiling) is fine to use; it satisfies the STYLE_GUIDE rule that comments
+explain *why*.
+
 ## Keyboard Shortcuts
 | Key | Action |
 |---|---|
