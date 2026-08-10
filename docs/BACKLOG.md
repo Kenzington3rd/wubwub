@@ -135,7 +135,7 @@ initially (the shortcut map is crowded); MIDI-learnable like other controls.
 returns the exact prior gain; no zipper noise; tests for the state
 separation.
 
-### W3.4 — Beat-synced loop roll · Size M · `SPIKED` (see findings below; build gated on a listening test)
+### W3.4 — Beat-synced loop roll · Size M · `DONE` (built per the spike plan; press-time quantization ships — grid snapping only if a listening test demands it)
 
 **Problem.** The existing looper captures 4/8/16 bars from the master — it is
 capture-oriented. EDM performance wants momentary ¼/½/1/2-beat rolls on a

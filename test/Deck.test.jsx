@@ -1789,3 +1789,70 @@ describe("Deck pump — US70", () => {
     ).toBeDisabled();
   });
 });
+
+// ─── W3.4 — momentary loop roll (US72) ───
+describe("Deck loop roll — US72", () => {
+  async function playingDeck() {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 10, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+    // Advance the playhead so a roll has material behind it.
+    await act(async () => { api.deckRef.current.seekTo(2); });
+    return api;
+  }
+
+  it("@us US72: roll buttons are disabled until the deck is playing", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 4, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "t.mp3"); });
+    expect(screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i })).toBeDisabled();
+    await act(async () => { await api.deckRef.current.play(); });
+    expect(screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i })).not.toBeDisabled();
+  });
+
+  it("@us US72: holding a roll loops the last beat at the deck's BPM; release resumes the timeline", async () => {
+    const api = await playingDeck();
+    const ctx = api.audioCtxRef.current;
+    const mainSrc = ctx._lastStartedSource;
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    const rollSrc = ctx._lastStartedSource;
+    expect(rollSrc).not.toBe(mainSrc);
+    expect(rollSrc.loop).toBe(true);
+    // Default BPM 128 → 1 beat = 60/128 s of buffer.
+    expect(rollSrc.loopEnd - rollSrc.loopStart).toBeCloseTo(60 / 128, 2);
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("true");
+    // The main source was silenced but the deck still reads as playing
+    // (the timeline keeps running underneath).
+    expect(api.deckRef.current.isPlaying()).toBe(true);
+
+    await act(async () => {
+      fireEvent.pointerUp(rollBtn);
+      // seekTo's source rebuild is async (awaits the chain) — flush it.
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const resumed = ctx._lastStartedSource;
+    expect(resumed).not.toBe(rollSrc);
+    // The resumed MAIN source has no roll window (whole-track loop toggle
+    // aside, its loopStart/loopEnd stay 0) — unlike the roll source.
+    expect(resumed.loopEnd).toBe(0);
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("@us US72: pausing mid-roll kills the roll source (nothing keeps ringing)", async () => {
+    const api = await playingDeck();
+    const ctx = api.audioCtxRef.current;
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 2 beats on deck A/i });
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    const rollSrc = ctx._lastStartedSource;
+    await act(async () => { api.deckRef.current.pause(); });
+    expect(rollSrc.stopped).toBe(true);
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
+  });
+});

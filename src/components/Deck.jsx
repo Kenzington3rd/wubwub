@@ -222,6 +222,13 @@ const Deck = forwardRef(function Deck(
   const [pump, setPump] = useState({ on: false, depth: 0.6 });
   const pumpTimerRef = useRef(null);
   const pumpArmedUntilRef = useRef(0);
+  // W3.4 — momentary loop roll. While held, the main source is silenced but
+  // the deck's wall-clock timeline keeps running; a loop source repeats the
+  // last N beats; releasing re-anchors playback at the advanced position
+  // ("the timeline kept running underneath"). Press-time quantization —
+  // free-running phase, per the spike findings.
+  const [rollActive, setRollActive] = useState(null); // beats value while held
+  const rollRef = useRef(null); // { source }
   // R17 Q2 — mirror of `volume` for the MIDI relative-encoder getter so the
   // App can always read the *current* deck volume at CC-dispatch time without
   // depending on the imperative handle being re-created (it isn't gated on
@@ -650,6 +657,15 @@ const Deck = forwardRef(function Deck(
 
   // ─── Source lifecycle ───
   const stopAndDisconnectSource = useCallback(() => {
+    // W3.4 — any transport action that silences the main source also ends a
+    // held roll (pause/stop/load must never leave a loop source ringing).
+    const roll = rollRef.current;
+    if (roll) {
+      rollRef.current = null;
+      setRollActive(null);
+      try { roll.source.stop(); } catch {}
+      try { roll.source.disconnect(); } catch {}
+    }
     const src = sourceRef.current;
     if (!src) return;
     try {
@@ -850,7 +866,11 @@ const Deck = forwardRef(function Deck(
   }, [seekTo]);
 
   const pause = useCallback(() => {
-    if (!sourceRef.current || !isPlayingRef.current) return;
+    // W3.4 — mid-roll there is no main source (it was silenced while the
+    // timeline ran underneath), but pause must still land: it ends the roll
+    // (via stopAndDisconnectSource) and freezes the advanced position.
+    if (!isPlayingRef.current) return;
+    if (!sourceRef.current && !rollRef.current) return;
     const c = audioCtxRef.current;
     if (c) {
       // A2 — while a NUDGE bend is held the live playbackRate is
@@ -896,6 +916,56 @@ const Deck = forwardRef(function Deck(
       seekTo(norm * dur, { autoplay: isPlayingRef.current });
     },
     [seekTo]
+  );
+
+  // ─── W3.4 — momentary loop roll ───
+  const endRoll = useCallback(() => {
+    const roll = rollRef.current;
+    if (!roll) return;
+    rollRef.current = null;
+    setRollActive(null);
+    try { roll.source.stop(); } catch {}
+    try { roll.source.disconnect(); } catch {}
+    // The deck's time interval kept advancing currentTimeRef while the roll
+    // played (isPlayingRef stayed true), so re-anchoring at the live playhead
+    // resumes exactly where the un-rolled timeline would be.
+    if (isPlayingRef.current) {
+      seekTo(currentTimeRef.current, { autoplay: true });
+    }
+  }, [seekTo]);
+
+  const startRoll = useCallback(
+    (beats) => {
+      const ctx = audioCtxRef.current;
+      const chain = chainRef.current;
+      const buf = bufferRef.current;
+      // Roll is a performance move on a playing deck — no-op otherwise.
+      if (!ctx || !chain || !buf || !isPlayingRef.current) return;
+      if (rollRef.current) endRoll();
+      // Loop span in BUFFER seconds uses the track's own BPM (the source
+      // plays at effRate, so the audible roll lasts beats × 60 / effectiveBPM
+      // of wall time — the beat-synced length).
+      const trackBpm = Math.max(40, bpmRef.current || 128);
+      const len = (beats * 60) / trackBpm;
+      const pos = currentTimeRef.current;
+      const loopStart = Math.max(0, pos - len);
+      const loopEnd = Math.max(loopStart + 0.01, pos);
+      const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
+      // Silence the main source WITHOUT touching play state — the wall-clock
+      // interval keeps the timeline running underneath the roll.
+      stopAndDisconnectSource();
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      src.loopStart = loopStart;
+      src.loopEnd = loopEnd;
+      src.playbackRate.value = effRate;
+      src.connect(chain.gain);
+      rollRef.current = { source: src };
+      setRollActive(beats);
+      src.start(0, loopStart);
+    },
+    [audioCtxRef, endRoll, stopAndDisconnectSource]
   );
 
   // ─── Re-anchor on speed change ───
@@ -1845,6 +1915,45 @@ const Deck = forwardRef(function Deck(
                 size={18}
                 color={btn.active ? color : "#8892b0"}
               />
+            </button>
+          );
+        })}
+      </div>
+
+      {/* W3.4 — momentary loop roll: hold to repeat the last N beats while
+          the timeline runs underneath; release resumes where the track
+          would have been. Press-time quantized (free-running phase). */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 9, color: "#8892b0", letterSpacing: 1, textTransform: "uppercase" }}>
+          Roll
+        </span>
+        {[
+          { beats: 0.25, label: "¼" },
+          { beats: 0.5, label: "½" },
+          { beats: 1, label: "1" },
+          { beats: 2, label: "2" },
+        ].map(({ beats, label }) => {
+          const active = rollActive === beats;
+          const enabled = !!fileName && isPlaying;
+          return (
+            <button
+              key={beats}
+              type="button"
+              disabled={!enabled}
+              onPointerDown={() => startRoll(beats)}
+              onPointerUp={endRoll}
+              onPointerLeave={() => rollActive === beats && endRoll()}
+              onPointerCancel={endRoll}
+              aria-pressed={active}
+              aria-label={`Hold to roll ${label} beat${beats === 1 ? "" : "s"} on deck ${id}`}
+              title={`Hold: loop the last ${label} beat${beats === 1 ? "" : "s"}; release: resume the timeline`}
+              style={{
+                ...biteBtnStyle(active, color, enabled),
+                minWidth: 40,
+                touchAction: "none",
+              }}
+            >
+              {label}
             </button>
           );
         })}
