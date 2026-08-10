@@ -98,6 +98,29 @@ With three decks, **SYNC** targets the *dominant playing* deck — the other
 deck that's currently audible loudest through the crossfader. If nothing else
 is playing, it falls back to any deck with a track loaded.
 
+## Keylock (experimental)
+
+The **MODE** row on each deck picks how the speed slider works:
+
+- **VARI** (default) — classic varispeed: pitch rises and falls with speed.
+  This is the polished, battle-tested mode.
+- **KEYLOCK** — the speed slider changes *tempo only*; the track keeps its
+  original pitch. Perfect for running a vocal at 128 BPM without the
+  chipmunk effect. It's granular time-stretching done live in your browser
+  — marked *experimental* because texture quality depends on the material:
+  trust your ears, and flip back to VARI any time (switching is seamless,
+  even mid-play). NUDGE in keylock bends tempo, not pitch — which is what
+  you want for beatmatching.
+
+## Roll
+
+The **ROLL** row (¼ ½ 1 2) is a hold-to-play stutter: while held, the last
+N beats repeat; the moment you let go, the track resumes exactly where it
+would have been if you'd never rolled — the timeline keeps running
+underneath. Classic EDM build tool: ¼-beat rolls tighten into a snare rush,
+release on the drop. Rolls need the deck to be playing, and the loop starts
+from wherever you press (it doesn't snap to the bar grid).
+
 ## Pump
 
 Next to BASS DROP, the **PUMP** button ducks the deck's level on every beat —

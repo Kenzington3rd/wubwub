@@ -220,6 +220,9 @@ class MockAudioWorklet {
 class MockAudioWorkletNode extends MockAudioNode {
   constructor(ctx, name, options = {}) {
     super(ctx, "AudioWorkletNode");
+    // Worklet nodes are constructed directly (not via a ctx factory), so
+    // self-register for graph-inspection tests.
+    if (ctx && Array.isArray(ctx._nodes)) ctx._nodes.push(this);
     this.name = name;
     this.processorOptions = options?.processorOptions;
     this.port = {
@@ -238,6 +241,15 @@ class MockAudioWorkletNode extends MockAudioNode {
         this.postedMessages.push(msg);
       },
       start() {},
+    };
+    // W3.1 — AudioParam map (rate / pitchRatio on the stretch worklet).
+    // Lazily creates a MockAudioParam per requested name.
+    const paramMap = new Map();
+    this.parameters = {
+      get(name) {
+        if (!paramMap.has(name)) paramMap.set(name, new MockAudioParam(1));
+        return paramMap.get(name);
+      },
     };
   }
 }

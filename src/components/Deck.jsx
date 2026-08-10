@@ -14,6 +14,9 @@ import EffectCard from "./EffectCard.jsx";
 import CuePanel from "./CuePanel.jsx";
 import BassDropMenu from "./BassDropMenu.jsx";
 import { buildDeckChain, disconnectChain } from "../audio/chain.js";
+// W3.1 — KEYLOCK time-stretch worklet. Same delivery contract as the looper
+// worklet: `?raw` source, Blob-URL registration, never a static path.
+import stretchWorkletSrc from "../worklets/stretch-worklet.js?raw";
 import { encodeWav, sliceBuffer } from "../audio/wavEncode.js";
 import { renderIsolated } from "../audio/isolationRender.js";
 import { downloadBlob } from "../audio/recorder.js";
@@ -47,6 +50,34 @@ const SR_ONLY = {
 // −12 dB floor: a DJ "kill" silences the band, it doesn't just duck it. The
 // BiquadFilter gain param accepts values past the UI range.
 const EQ_KILL_DB = -26;
+
+// W3.1 — one stretch-worklet module registration per AudioContext, shared by
+// all three decks. Keyed by ctx so a rebuilt context re-registers cleanly.
+const stretchModulePromises = new WeakMap();
+function ensureStretchModule(ctx) {
+  if (!ctx?.audioWorklet?.addModule) return Promise.resolve(false);
+  if (!stretchModulePromises.has(ctx)) {
+    stretchModulePromises.set(
+      ctx,
+      (async () => {
+        let url = null;
+        try {
+          url = URL.createObjectURL(
+            new Blob([stretchWorkletSrc], { type: "text/javascript" })
+          );
+          await ctx.audioWorklet.addModule(url);
+          return true;
+        } catch (err) {
+          console.warn("Stretch worklet failed to load — KEYLOCK unavailable.", err);
+          return false;
+        } finally {
+          if (url) { try { URL.revokeObjectURL(url); } catch {} }
+        }
+      })()
+    );
+  }
+  return stretchModulePromises.get(ctx);
+}
 
 // W3.6 — shared style for the bite-row buttons.
 function biteBtnStyle(active, color, enabled) {
@@ -222,6 +253,22 @@ const Deck = forwardRef(function Deck(
   const [pump, setPump] = useState({ on: false, depth: 0.6 });
   const pumpTimerRef = useRef(null);
   const pumpArmedUntilRef = useRef(0);
+  // W3.4 — momentary loop roll. While held, the main source is silenced but
+  // the deck's wall-clock timeline keeps running; a loop source repeats the
+  // last N beats; releasing re-anchors playback at the advanced position
+  // ("the timeline kept running underneath"). Press-time quantization —
+  // free-running phase, per the spike findings.
+  const [rollActive, setRollActive] = useState(null); // beats value while held
+  const rollRef = useRef(null); // { source }
+  // W3.1 — playback mode. "vari" (default) is the classic varispeed
+  // BufferSource path, bit-for-bit unchanged. "keylock" routes playback
+  // through the stretch worklet: tempo follows the speed slider while pitch
+  // stays at the track's original (experimental — opt-in, session-only).
+  const [playMode, setPlayMode] = useState("vari");
+  const playModeRef = useRef("vari");
+  const stretchNodeRef = useRef(null);
+  // Which AudioBuffer has been posted into the worklet (avoid re-transfer).
+  const stretchLoadedBufferRef = useRef(null);
   // R17 Q2 — mirror of `volume` for the MIDI relative-encoder getter so the
   // App can always read the *current* deck volume at CC-dispatch time without
   // depending on the imperative handle being re-created (it isn't gated on
@@ -248,6 +295,7 @@ const Deck = forwardRef(function Deck(
   useEffect(() => { bpmRef.current = bpm; }, [bpm]);
   useEffect(() => { filterFreqRef.current = filterFreq; }, [filterFreq]);
   useEffect(() => { volumeRef.current = volume; }, [volume]);
+  useEffect(() => { playModeRef.current = playMode; }, [playMode]);
   // V5 (R19) — EQ ref mirrors. Kept on every tick so the bass-drop's t3
   // recovery reads the LIVE user value even when the user moved the knob
   // during the drop's automation window.
@@ -650,7 +698,19 @@ const Deck = forwardRef(function Deck(
 
   // ─── Source lifecycle ───
   const stopAndDisconnectSource = useCallback(() => {
+    // W3.4 — any transport action that silences the main source also ends a
+    // held roll (pause/stop/load must never leave a loop source ringing).
+    const roll = rollRef.current;
+    if (roll) {
+      rollRef.current = null;
+      setRollActive(null);
+      try { roll.source.stop(); } catch {}
+      try { roll.source.disconnect(); } catch {}
+    }
     const src = sourceRef.current;
+    // W3.1 — silencing the deck also pauses a live KEYLOCK worklet stream
+    // (harmless no-op when the node is idle or absent).
+    try { stretchNodeRef.current?.port?.postMessage({ type: "pause" }); } catch {}
     if (!src) return;
     try {
       src.onended = null;
@@ -661,6 +721,93 @@ const Deck = forwardRef(function Deck(
     } catch {}
     sourceRef.current = null;
   }, []);
+
+  // ─── W3.1 — KEYLOCK stretch node ───
+  // Lazily create this deck's AudioWorkletNode (module registration is
+  // shared per-context) and keep the current buffer's channel data loaded
+  // into it. Returns null when worklets are unavailable — the caller falls
+  // back to VARI.
+  const ensureStretchNode = useCallback(
+    async (ctx, chain) => {
+      if (stretchNodeRef.current) return stretchNodeRef.current;
+      const ok = await ensureStretchModule(ctx);
+      if (!ok) return null;
+      let node;
+      try {
+        node = new AudioWorkletNode(ctx, "stretch-processor", {
+          numberOfInputs: 0,
+          numberOfOutputs: 1,
+          outputChannelCount: [2],
+        });
+      } catch (err) {
+        console.warn("Stretch node construction failed — KEYLOCK unavailable.", err);
+        return null;
+      }
+      node.connect(chain.gain);
+      node.port.onmessage = (e) => {
+        const m = e.data || {};
+        if (playModeRef.current !== "keylock") return;
+        if (m.type === "position" && isPlayingRef.current) {
+          // Drift correction: the worklet's own read head is the truth in
+          // KEYLOCK. Re-anchor the wall-clock so the interval agrees.
+          const c = audioCtxRef.current;
+          const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
+          currentTimeRef.current = m.seconds;
+          setCurrentTime(m.seconds);
+          if (c) startTimeRef.current = c.currentTime - m.seconds / effRate;
+        } else if (m.type === "ended") {
+          if (isLoopingRef.current) {
+            // Coarse loop support: restart from the top.
+            const c = audioCtxRef.current;
+            node.port.postMessage({ type: "play", offset: 0 });
+            currentTimeRef.current = 0;
+            if (c) {
+              const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
+              startTimeRef.current = c.currentTime - 0 / effRate;
+            }
+          } else if (isPlayingRef.current) {
+            isPlayingRef.current = false;
+            setIsPlaying(false);
+            offsetRef.current = 0;
+            currentTimeRef.current = 0;
+            setCurrentTime(0);
+            clearInterval(timeIntervalRef.current);
+          }
+        }
+      };
+      stretchNodeRef.current = node;
+      return node;
+    },
+    [audioCtxRef]
+  );
+
+  const postBufferToStretch = useCallback((node) => {
+    const buf = bufferRef.current;
+    if (!node || !buf || stretchLoadedBufferRef.current === buf) return;
+    // Copy the channel data (the deck keeps its own buffer for VARI /
+    // bites / rolls) and transfer the copies into the worklet.
+    const channels = [];
+    for (let c = 0; c < buf.numberOfChannels; c++) {
+      channels.push(buf.getChannelData(c).slice());
+    }
+    node.port.postMessage(
+      { type: "load", channels, sampleRate: buf.sampleRate },
+      channels.map((ch) => ch.buffer)
+    );
+    stretchLoadedBufferRef.current = buf;
+  }, []);
+
+  // Write the effective rate (speed + held bend) to the stretch worklet's
+  // rate param — tempo modulation with pitch untouched (that's the point).
+  const updateStretchRate = useCallback(() => {
+    const node = stretchNodeRef.current;
+    const ctx = audioCtxRef.current;
+    if (!node || !ctx) return;
+    const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
+    try {
+      node.parameters.get("rate").setTargetAtTime(effRate, ctx.currentTime, 0.015);
+    } catch {}
+  }, [audioCtxRef]);
 
   const seekTo = useCallback(
     async (targetSeconds, { autoplay = false } = {}) => {
@@ -682,6 +829,35 @@ const Deck = forwardRef(function Deck(
         setIsPlaying(false);
         clearInterval(timeIntervalRef.current);
         return;
+      }
+
+      // ── W3.1 — KEYLOCK branch: stream through the stretch worklet ──
+      if (playModeRef.current === "keylock") {
+        const node = await ensureStretchNode(ctx, chain);
+        if (node) {
+          postBufferToStretch(node);
+          updateStretchRate();
+          node.port.postMessage({ type: "play", offset: target });
+          const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
+          startTimeRef.current = ctx.currentTime - target / effRate;
+          isPlayingRef.current = true;
+          setIsPlaying(true);
+          clearInterval(timeIntervalRef.current);
+          timeIntervalRef.current = setInterval(() => {
+            const c = audioCtxRef.current;
+            if (!c || !isPlayingRef.current) return;
+            const r = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
+            const elapsed = (c.currentTime - startTimeRef.current) * r;
+            const d = durationRef.current;
+            const t = isLoopingRef.current && d > 0 ? elapsed % d : Math.min(elapsed, d || elapsed);
+            currentTimeRef.current = t;
+            setCurrentTime(t);
+          }, 100);
+          return;
+        }
+        // Worklet unavailable → fall back to VARI silently but visibly.
+        playModeRef.current = "vari";
+        setPlayMode("vari");
       }
 
       const src = ctx.createBufferSource();
@@ -738,7 +914,7 @@ const Deck = forwardRef(function Deck(
         setCurrentTime(t);
       }, 100);
     },
-    [audioCtxRef, buildChain, ensureMasterCtx, stopAndDisconnectSource]
+    [audioCtxRef, buildChain, ensureMasterCtx, stopAndDisconnectSource, ensureStretchNode, postBufferToStretch, updateStretchRate]
   );
 
   // ─── File loading ───
@@ -754,6 +930,9 @@ const Deck = forwardRef(function Deck(
       clearInterval(timeIntervalRef.current);
 
       bufferRef.current = audioBuf;
+      // W3.1 — the worklet holds the OLD track's channels; re-post on next
+      // KEYLOCK play.
+      stretchLoadedBufferRef.current = null;
       setLoadError(null);
       setFileName(name);
       setDuration(audioBuf.duration);
@@ -850,7 +1029,13 @@ const Deck = forwardRef(function Deck(
   }, [seekTo]);
 
   const pause = useCallback(() => {
-    if (!sourceRef.current || !isPlayingRef.current) return;
+    // W3.4 — mid-roll there is no main source (it was silenced while the
+    // timeline ran underneath), but pause must still land: it ends the roll
+    // (via stopAndDisconnectSource) and freezes the advanced position.
+    if (!isPlayingRef.current) return;
+    // W3.1 — in KEYLOCK there is no BufferSource; the stretch node carries
+    // playback (stopAndDisconnectSource pauses it below).
+    if (!sourceRef.current && !rollRef.current && playModeRef.current !== "keylock") return;
     const c = audioCtxRef.current;
     if (c) {
       // A2 — while a NUDGE bend is held the live playbackRate is
@@ -898,8 +1083,86 @@ const Deck = forwardRef(function Deck(
     [seekTo]
   );
 
+  // ─── W3.1 — VARI / KEYLOCK mode switch ───
+  // Write the ref synchronously so an immediate reseek branches into the
+  // right engine; a playing deck hops engines in place at the same position.
+  const onTogglePlayMode = useCallback(
+    (mode) => {
+      if (mode === playModeRef.current) return;
+      const wasPlaying = isPlayingRef.current;
+      const pos = currentTimeRef.current;
+      playModeRef.current = mode;
+      setPlayMode(mode);
+      if (wasPlaying && bufferRef.current) {
+        seekTo(pos, { autoplay: true });
+      }
+    },
+    [seekTo]
+  );
+
+  // ─── W3.4 — momentary loop roll ───
+  const endRoll = useCallback(() => {
+    const roll = rollRef.current;
+    if (!roll) return;
+    rollRef.current = null;
+    setRollActive(null);
+    try { roll.source.stop(); } catch {}
+    try { roll.source.disconnect(); } catch {}
+    // The deck's time interval kept advancing currentTimeRef while the roll
+    // played (isPlayingRef stayed true), so re-anchoring at the live playhead
+    // resumes exactly where the un-rolled timeline would be.
+    if (isPlayingRef.current) {
+      seekTo(currentTimeRef.current, { autoplay: true });
+    }
+  }, [seekTo]);
+
+  const startRoll = useCallback(
+    (beats) => {
+      const ctx = audioCtxRef.current;
+      const chain = chainRef.current;
+      const buf = bufferRef.current;
+      // Roll is a performance move on a playing deck — no-op otherwise.
+      if (!ctx || !chain || !buf || !isPlayingRef.current) return;
+      if (rollRef.current) endRoll();
+      // Loop span in BUFFER seconds uses the track's own BPM (the source
+      // plays at effRate, so the audible roll lasts beats × 60 / effectiveBPM
+      // of wall time — the beat-synced length).
+      const trackBpm = Math.max(40, bpmRef.current || 128);
+      const len = (beats * 60) / trackBpm;
+      const pos = currentTimeRef.current;
+      const loopStart = Math.max(0, pos - len);
+      const loopEnd = Math.max(loopStart + 0.01, pos);
+      const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
+      // Silence the main source WITHOUT touching play state — the wall-clock
+      // interval keeps the timeline running underneath the roll.
+      stopAndDisconnectSource();
+      const src = ctx.createBufferSource();
+      src.buffer = buf;
+      src.loop = true;
+      src.loopStart = loopStart;
+      src.loopEnd = loopEnd;
+      src.playbackRate.value = effRate;
+      src.connect(chain.gain);
+      rollRef.current = { source: src };
+      setRollActive(beats);
+      src.start(0, loopStart);
+    },
+    [audioCtxRef, endRoll, stopAndDisconnectSource]
+  );
+
   // ─── Re-anchor on speed change ───
   useEffect(() => {
+    // W3.1 — KEYLOCK: the stretch worklet's rate param carries tempo; the
+    // wall-clock anchor uses the same effective rate as the interval.
+    if (playModeRef.current === "keylock" && isPlayingRef.current) {
+      const c = audioCtxRef.current;
+      updateStretchRate();
+      if (c) {
+        const effRate = clamp(speed + bendRef.current, 0.5, 2.0);
+        startTimeRef.current = c.currentTime - currentTimeRef.current / effRate;
+      }
+      return;
+    }
     if (sourceRef.current && isPlayingRef.current) {
       // Keep any held pitch-bend layered on top of the new base speed.
       const effRate = clamp(speed + bendRef.current, 0.5, 2.0);
@@ -926,7 +1189,7 @@ const Deck = forwardRef(function Deck(
         sourceRef.current.playbackRate.value = effRate;
       }
     }
-  }, [speed, audioCtxRef]);
+  }, [speed, audioCtxRef, updateStretchRate]);
 
   // ─── Pitch-bend nudge (momentary) ───
   // Smoothly ramp the live playbackRate to base speed + bend offset, clamping
@@ -936,6 +1199,23 @@ const Deck = forwardRef(function Deck(
   const applyBend = useCallback((offset) => {
     const src = sourceRef.current;
     const ctx = audioCtxRef.current;
+    // W3.1 — KEYLOCK: the bend modulates the worklet's rate param (tempo
+    // bend at constant pitch — the DJ-correct nudge). Same re-anchor math.
+    if (playModeRef.current === "keylock" && ctx) {
+      const newEff = clamp(speedRef.current + offset, 0.5, 2.0);
+      if (isPlayingRef.current) {
+        const prevRate = clamp(speedRef.current + bendRef.current, 0.5, 2.0);
+        const pos = (ctx.currentTime - startTimeRef.current) * prevRate;
+        const d = durationRef.current;
+        const known =
+          isLoopingRef.current && d > 0 ? ((pos % d) + d) % d : Math.max(0, pos);
+        currentTimeRef.current = known;
+        startTimeRef.current = ctx.currentTime - known / newEff;
+      }
+      bendRef.current = offset;
+      updateStretchRate();
+      return;
+    }
     if (!src || !ctx) {
       bendRef.current = offset;
       return;
@@ -963,7 +1243,7 @@ const Deck = forwardRef(function Deck(
     // setTargetAtTime (not a hard .value write) avoids an audible click as the
     // pitch slides in/out.
     src.playbackRate.setTargetAtTime(target, ctx.currentTime, 0.015);
-  }, [audioCtxRef]);
+  }, [audioCtxRef, updateStretchRate]);
 
   const [bendActive, setBendActive] = useState(0); // -1 | 0 | +1, for UI state
   const startNudge = useCallback(
@@ -1207,6 +1487,11 @@ const Deck = forwardRef(function Deck(
   useEffect(() => {
     return () => {
       stopAndDisconnectSource();
+      // W3.1 — tear down the stretch node.
+      try { stretchNodeRef.current?.port?.postMessage({ type: "pause" }); } catch {}
+      try { stretchNodeRef.current?.disconnect(); } catch {}
+      stretchNodeRef.current = null;
+      stretchLoadedBufferRef.current = null;
       // W3.6 — release any looping bite-preview source.
       try { bitePreviewSourceRef.current?.stop(); } catch {}
       try { bitePreviewSourceRef.current?.disconnect(); } catch {}
@@ -1850,6 +2135,45 @@ const Deck = forwardRef(function Deck(
         })}
       </div>
 
+      {/* W3.4 — momentary loop roll: hold to repeat the last N beats while
+          the timeline runs underneath; release resumes where the track
+          would have been. Press-time quantized (free-running phase). */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 9, color: "#8892b0", letterSpacing: 1, textTransform: "uppercase" }}>
+          Roll
+        </span>
+        {[
+          { beats: 0.25, label: "¼" },
+          { beats: 0.5, label: "½" },
+          { beats: 1, label: "1" },
+          { beats: 2, label: "2" },
+        ].map(({ beats, label }) => {
+          const active = rollActive === beats;
+          const enabled = !!fileName && isPlaying;
+          return (
+            <button
+              key={beats}
+              type="button"
+              disabled={!enabled}
+              onPointerDown={() => startRoll(beats)}
+              onPointerUp={endRoll}
+              onPointerLeave={() => rollActive === beats && endRoll()}
+              onPointerCancel={endRoll}
+              aria-pressed={active}
+              aria-label={`Hold to roll ${label} beat${beats === 1 ? "" : "s"} on deck ${id}`}
+              title={`Hold: loop the last ${label} beat${beats === 1 ? "" : "s"}; release: resume the timeline`}
+              style={{
+                ...biteBtnStyle(active, color, enabled),
+                minWidth: 40,
+                touchAction: "none",
+              }}
+            >
+              {label}
+            </button>
+          );
+        })}
+      </div>
+
       {/* Pitch-bend nudge — momentary ±4% speed offset while held */}
       <div
         style={{ display: "flex", justifyContent: "center", gap: 6, alignItems: "center" }}
@@ -1914,6 +2238,39 @@ const Deck = forwardRef(function Deck(
             </button>
           );
         })}
+      </div>
+
+      {/* W3.1 — playback mode: VARI (classic varispeed — pitch follows
+          speed) vs KEYLOCK (experimental — tempo changes, pitch stays). */}
+      <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+        <span style={{ fontSize: 9, color: "#8892b0", letterSpacing: 1, textTransform: "uppercase" }}>
+          Mode
+        </span>
+        {[
+          { mode: "vari", label: "VARI", title: "Varispeed — pitch follows the speed slider (classic)" },
+          { mode: "keylock", label: "KEYLOCK", title: "Experimental — tempo follows the speed slider, pitch stays at the track's original" },
+        ].map(({ mode, label, title }) => {
+          const active = playMode === mode;
+          return (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => onTogglePlayMode(mode)}
+              disabled={!fileName}
+              aria-pressed={active}
+              aria-label={`Set deck ${id} playback mode to ${label.toLowerCase()}`}
+              title={title}
+              style={biteBtnStyle(active, color, !!fileName)}
+            >
+              {label}
+            </button>
+          );
+        })}
+        {playMode === "keylock" && (
+          <span style={{ fontSize: 8, color: "#8892b0" }}>
+            experimental — trust your ears
+          </span>
+        )}
       </div>
 
       {/* Volume / Speed / Filter */}

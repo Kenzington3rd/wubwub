@@ -1789,3 +1789,165 @@ describe("Deck pump — US70", () => {
     ).toBeDisabled();
   });
 });
+
+// ─── W3.4 — momentary loop roll (US72) ───
+describe("Deck loop roll — US72", () => {
+  async function playingDeck() {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 10, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "track.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+    // Advance the playhead so a roll has material behind it.
+    await act(async () => { api.deckRef.current.seekTo(2); });
+    return api;
+  }
+
+  it("@us US72: roll buttons are disabled until the deck is playing", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 4, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "t.mp3"); });
+    expect(screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i })).toBeDisabled();
+    await act(async () => { await api.deckRef.current.play(); });
+    expect(screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i })).not.toBeDisabled();
+  });
+
+  it("@us US72: holding a roll loops the last beat at the deck's BPM; release resumes the timeline", async () => {
+    const api = await playingDeck();
+    const ctx = api.audioCtxRef.current;
+    const mainSrc = ctx._lastStartedSource;
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    const rollSrc = ctx._lastStartedSource;
+    expect(rollSrc).not.toBe(mainSrc);
+    expect(rollSrc.loop).toBe(true);
+    // Default BPM 128 → 1 beat = 60/128 s of buffer.
+    expect(rollSrc.loopEnd - rollSrc.loopStart).toBeCloseTo(60 / 128, 2);
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("true");
+    // The main source was silenced but the deck still reads as playing
+    // (the timeline keeps running underneath).
+    expect(api.deckRef.current.isPlaying()).toBe(true);
+
+    await act(async () => {
+      fireEvent.pointerUp(rollBtn);
+      // seekTo's source rebuild is async (awaits the chain) — flush it.
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const resumed = ctx._lastStartedSource;
+    expect(resumed).not.toBe(rollSrc);
+    // The resumed MAIN source has no roll window (whole-track loop toggle
+    // aside, its loopStart/loopEnd stay 0) — unlike the roll source.
+    expect(resumed.loopEnd).toBe(0);
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("@us US72: pausing mid-roll kills the roll source (nothing keeps ringing)", async () => {
+    const api = await playingDeck();
+    const ctx = api.audioCtxRef.current;
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 2 beats on deck A/i });
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    const rollSrc = ctx._lastStartedSource;
+    await act(async () => { api.deckRef.current.pause(); });
+    expect(rollSrc.stopped).toBe(true);
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+// ─── W3.1 — KEYLOCK playback mode (US73) ───
+describe("Deck KEYLOCK mode — US73", () => {
+  async function playingDeck() {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(2, sr * 10, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+    await act(async () => { api.deckRef.current.seekTo(2); });
+    return api;
+  }
+
+  const findStretchNode = (ctx) =>
+    ctx._nodes.find((n) => n.nodeType === "AudioWorkletNode" && n.name === "stretch-processor");
+
+  it("@us US73: mode buttons are disabled until a track loads; VARI is the default", () => {
+    render(<Harness />);
+    const vari = screen.getByRole("button", { name: /Set deck A playback mode to vari/i });
+    expect(vari).toBeDisabled();
+    expect(vari.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  it("@us US73: engaging KEYLOCK mid-play loads the buffer into the worklet and plays from the same position", async () => {
+    const api = await playingDeck();
+    const ctx = api.audioCtxRef.current;
+    const keyBtn = screen.getByRole("button", { name: /Set deck A playback mode to keylock/i });
+    await act(async () => {
+      fireEvent.click(keyBtn);
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(keyBtn.getAttribute("aria-pressed")).toBe("true");
+    const node = findStretchNode(ctx);
+    expect(node).toBeTruthy();
+    const msgs = node.port.postedMessages;
+    const load = msgs.find((m) => m.type === "load");
+    expect(load.channels.length).toBe(2);
+    expect(load.sampleRate).toBe(11025);
+    const play = msgs.find((m) => m.type === "play");
+    expect(play.offset).toBeCloseTo(2, 1);
+    // Still reads as playing; no live BufferSource carries the deck.
+    expect(api.deckRef.current.isPlaying()).toBe(true);
+  });
+
+  it("@us US73: in KEYLOCK the speed slider drives the worklet rate param, pitch param untouched", async () => {
+    const api = await playingDeck();
+    const ctx = api.audioCtxRef.current;
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set deck A playback mode to keylock/i }));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const node = findStretchNode(ctx);
+    await act(async () => { api.deckRef.current.setSpeed(1.22); });
+    const rateSchedule = node.parameters.get("rate").scheduledValues.at(-1);
+    expect(rateSchedule.type).toBe("setTarget");
+    expect(rateSchedule.target).toBeCloseTo(1.22, 3);
+    expect(node.parameters.get("pitchRatio").scheduledValues.length).toBe(0);
+  });
+
+  it("@us US73: NUDGE in KEYLOCK bends the worklet rate (tempo), not a source pitch", async () => {
+    const api = await playingDeck();
+    const ctx = api.audioCtxRef.current;
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set deck A playback mode to keylock/i }));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const node = findStretchNode(ctx);
+    await act(async () => { api.deckRef.current.startNudge(1); });
+    expect(node.parameters.get("rate").scheduledValues.at(-1).target).toBeCloseTo(1.04, 3);
+    await act(async () => { api.deckRef.current.endNudge(); });
+    expect(node.parameters.get("rate").scheduledValues.at(-1).target).toBeCloseTo(1.0, 3);
+  });
+
+  it("@us US73: switching back to VARI pauses the worklet and resumes on a fresh BufferSource", async () => {
+    const api = await playingDeck();
+    const ctx = api.audioCtxRef.current;
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set deck A playback mode to keylock/i }));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    const node = findStretchNode(ctx);
+    const before = ctx._lastStartedSource;
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set deck A playback mode to vari/i }));
+      await new Promise((r) => setTimeout(r, 0));
+    });
+    expect(node.port.postedMessages.at(-1).type === "pause" ||
+      node.port.postedMessages.filter((m) => m.type === "pause").length > 0).toBe(true);
+    const resumed = ctx._lastStartedSource;
+    expect(resumed).not.toBe(before);
+    expect(resumed.started).toBe(true);
+    expect(api.deckRef.current.isPlaying()).toBe(true);
+  });
+});
