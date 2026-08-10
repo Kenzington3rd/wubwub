@@ -426,6 +426,13 @@ How this repo is being driven; follow these unless the owner says otherwise.
   recording their own voice for the lyrical parts (VOX) and scraping
   bites from the original (ISOLATE + BITE). Feature ideas get scoped as
   tickets here first; the owner says "proceed" to build.
+- **Plugin precedence:** if an assistant-behavior plugin (e.g. ponytail) is
+  active, `CLAUDE.md § WC-PREC` decides conflicts inside this repo — most
+  importantly, this project's `@us`-tagged Vitest tests and per-feature doc
+  updates stand regardless of a plugin's "no frameworks / fewest files"
+  guidance. The rule is named `WC-PREC` precisely so a parallel session in
+  another repo can hold a different policy without ambiguity; don't add a
+  second, generically-titled precedence section here.
 - **Test-count checkpoint:** 490 passing at v1.1.0 (36+ files). New
   user-story IDs are allocated sequentially in `docs/USER_STORIES.md`
   (last used: US71).
