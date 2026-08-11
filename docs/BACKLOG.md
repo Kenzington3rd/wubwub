@@ -426,6 +426,18 @@ How this repo is being driven; follow these unless the owner says otherwise.
   recording their own voice for the lyrical parts (VOX) and scraping
   bites from the original (ISOLATE + BITE). Feature ideas get scoped as
   tickets here first; the owner says "proceed" to build.
+- **CI cost (added 2026-08-10):** the account hit its 2,000 included Actions
+  minutes mid-cycle and a **$0 Actions budget is set**, so *all* workflow
+  activity — pushes, PRs, merges, releases, Pages deploys — is frozen until
+  the cycle resets on **2026-09-01** (resume 09-02). Cause worth remembering:
+  `ci.yml` listened to `push: ["**"]` *and* `pull_request`, so every PR
+  commit ran two identical jobs. Fixed in the same change that added this
+  note — `push` limited to `main`, `paths-ignore` for `docs/**` + `**/*.md`,
+  and a `concurrency` group so a newer commit cancels the in-flight run.
+  Local verification (`npx vitest run`, `npm run build`, `npm run
+  build:single`, `npm run size`) costs nothing and stays the pre-push gate;
+  `[skip ci]` on docs commits remains a sensible habit on top of the
+  paths-ignore.
 - **Plugin precedence:** if an assistant-behavior plugin (e.g. ponytail) is
   active, `CLAUDE.md § WC-PREC` decides conflicts inside this repo — most
   importantly, this project's `@us`-tagged Vitest tests and per-feature doc

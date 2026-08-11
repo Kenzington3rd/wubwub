@@ -1,12 +1,33 @@
+# Actions-minute budget matters here (see docs/BACKLOG.md § CI cost).
+# Three rules keep this workflow from billing for work it already did:
+#   1. push is limited to `main`. Every other branch is already covered by
+#      the `pull_request` event — listening to both fired TWO identical jobs
+#      per PR commit, doubling the spend for zero extra signal.
+#   2. docs-only changes skip CI entirely. `paths-ignore` skips a run only
+#      when EVERY changed file matches, so a mixed code+docs commit still
+#      runs. `[skip ci]` in a commit message remains available as a manual
+#      override on top of this.
+#   3. a newer commit on the same ref cancels the in-flight run instead of
+#      letting both finish.
 name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
   pull_request:
+    paths-ignore:
+      - "docs/**"
+      - "**/*.md"
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   test-and-build:
