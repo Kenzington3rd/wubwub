@@ -3,7 +3,7 @@
 > Free, local-only, no-subscription DJ mixing application.
 > **Make music, not payments.**
 
-WAVECRAFT is a dual-deck DJ mixing app that runs entirely in your browser. **Nothing leaves the device** — no analytics, no telemetry, no CDN dependencies at runtime, no subscriptions, no accounts. Drop a couple of audio files in, mix, record, download. That's it.
+WAVECRAFT is a three-deck DJ mixing app that runs entirely in your browser. **Nothing leaves the device** — no analytics, no telemetry, no CDN dependencies at runtime, no subscriptions, no accounts. Drop a couple of audio files in, mix, record, download. That's it.
 
 ## Download the app (no tools required)
 
@@ -24,7 +24,7 @@ trigger it manually from the Actions tab with a version tag, or push a `v*` tag.
 ```bash
 npm install
 npm run dev            # http://localhost:5173
-npm test               # vitest, 430+ tests
+npm test               # vitest, 500+ tests
 npm run build          # → dist/ (multi-file PWA, precached for offline)
 npm run build:single   # → dist-single/index.html (one self-contained file)
 npm run size           # build + bundle-size budget check (reruns the build internally)
@@ -90,7 +90,7 @@ wubwub/
 | `←/→` | Crossfade ±5% |
 | `Shift+←/→` | Snap crossfader to 0/1 |
 | `↑/↓` | Focused deck volume ±5% |
-| `S` | Sync focused deck to the other (sample pad 6 when no deck focused) |
+| `S` | Sync focused deck to the dominant playing deck (sample pad 6 when no deck focused) |
 | `C` | Set cue at current position |
 | `1`–`8` | Jump to cue N on focused deck |
 | `M` | Drop a recording cue marker |
@@ -107,6 +107,7 @@ wubwub/
 - **P2** looper (4 slots, master-tap capture), 8-pad sampler, bass drop presets, crossfade curves, deck color themes.
 - **P3** mix recording (MediaRecorder + local download), PWA + offline precache, MIDI Learn (Chrome/Edge/Opera), autocorrelation BPM, single-file build.
 - **W1** harmonic key suggestions, momentary pitch-bend NUDGE, recording cue markers + `.cue.txt`, settings export/import, session crate, recorder pre/post-limiter tap.
+- **W3** EQ kill switches (one-tap −26 dB band kill), VOX voice/mic recording panel (local `getUserMedia`, take → deck / crate / pad), ISOLATE component modes (bass / vocal / instrumental / percussion, EQ+phase math), BITE sound-bite extraction (mark IN/OUT, preview, slice → pad / crate / 16-bit WAV download), PUMP beat-rate sidechain ducking, momentary loop ROLL (¼ / ½ / 1 / 2 beats), and a VARI / KEYLOCK playback mode (experimental granular time-stretch — tempo moves, pitch stays).
 - **W3.8** third deck (Deck C) with per-deck crossfader assign (A / THRU / B) — assigned decks follow the classic two-ended crossfade curves, THRU bypasses the fader entirely. Defaults reproduce the two-deck behavior exactly.
 
 Full status, longer-form mission, danger-zones list: see [`CLAUDE.md`](CLAUDE.md).
