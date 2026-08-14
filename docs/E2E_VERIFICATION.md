@@ -352,7 +352,7 @@ that fail fast if a maintainer regresses the contract.
 
 | Command | Result (R24 final) |
 |---|---|
-| `npm test` | **40 files, 510 tests, all passing** |
+| `npm test` | **40 files, 511 tests, all passing** |
 | `npm run build` | succeeds; multi-file PWA + 13-entry precache manifest |
 | `npm run build:single` | succeeds; one-file `dist-single/index.html` |
 | `npm run verify:build` | build + Vitest on `test/build.test.js` + `test/csp.test.js` |
