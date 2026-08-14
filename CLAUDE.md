@@ -59,7 +59,10 @@ src/
 │   ├── crossfade.js          # equal-power / linear / constant-power
 │   ├── bpmDetect.js          # autocorrelation BPM detector
 │   ├── keyDetect.js          # Krumhansl-Schmuckler chroma key detector (Camelot)
-│   └── recorder.js           # MediaRecorder wrapper + downloadBlob
+│   ├── recorder.js           # MediaRecorder wrapper + downloadBlob
+│   ├── wavEncode.js          # 16-bit WAV encoder + sliceBuffer (W3.6 bite export)
+│   ├── isolationRender.js    # offline re-render of a slice through the isolation path (W3.7)
+│   └── timeStretch.js        # granular Hann-OLA time-stretch DSP core (W3.1 KEYLOCK)
 ├── midi/
 │   └── midiMap.js            # MIDI access + CC mapping
 ├── fonts/
@@ -67,7 +70,8 @@ src/
 │   ├── Audiowide-Regular.woff2
 │   └── Exo2-Variable.woff2
 ├── worklets/
-│   └── looper-worklet.js     # imported `?raw`, registered via Blob URL
+│   ├── looper-worklet.js     # imported `?raw`, registered via Blob URL
+│   └── stretch-worklet.js    # streaming granular time-stretch, same `?raw` + Blob URL contract
 └── components/
     ├── Knob.jsx
     ├── Slider.jsx
@@ -83,6 +87,7 @@ src/
     ├── SamplePad.jsx         # 8 pads, drag-drop or click-to-load, keys QWER/ASDF
     ├── MidiPanel.jsx         # learn-mode mapping UI
     ├── Crate.jsx             # session crate — in-memory decoded-track list, quick-load to a deck
+    ├── VoxRecorder.jsx       # VOX mic panel — local getUserMedia take → deck / crate / pad (W3.2)
     └── TheoryPanel.jsx       # camelot wheel + genre BPM + tips + shortcuts
 
 public/
