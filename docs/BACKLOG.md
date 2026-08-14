@@ -426,6 +426,16 @@ How this repo is being driven; follow these unless the owner says otherwise.
   recording their own voice for the lyrical parts (VOX) and scraping
   bites from the original (ISOLATE + BITE). Feature ideas get scoped as
   tickets here first; the owner says "proceed" to build.
+- **Deferred: bump the `actions/*` majors (added 2026-08-14).** The Node
+  runtime pinned by our workflows is now 22, which clears the deprecation
+  warning for OUR steps. The bundled actions themselves —
+  `actions/checkout@v4`, `actions/setup-node@v4`, `actions/configure-pages@v5`
+  — still target the Node 20 runtime, so the runner reports "forced to run on
+  Node.js 24" for them. They keep working; this is a warning, not a break.
+  Bumping action majors is a separate, riskier change (behavioral deltas
+  between majors) and wants its own PR with a live CI run to verify. Deferred
+  deliberately, not overlooked — the ticket that pinned Node 22 had this in
+  its acceptance and was narrowed on purpose.
 - **CI cost (added 2026-08-10):** the account hit its 2,000 included Actions
   minutes mid-cycle and a **$0 Actions budget is set**, so *all* workflow
   activity — pushes, PRs, merges, releases, Pages deploys — is frozen until
