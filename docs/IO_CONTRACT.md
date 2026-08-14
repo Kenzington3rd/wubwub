@@ -43,8 +43,9 @@ hash routing, no fetch, no XHR, no WebSocket, no sendBeacon.
 | Mix recording | `audio/webm` (preferred) / `audio/mp4` / `audio/ogg` per `pickMime` | `App.jsx:570-577` `downloadBlob(blob, '${base}.${ext}')` after `MediaRecorder.stop()` | RECORD button in MasterBus toggles on/off | `App.test.jsx > @us US21/US37`; e2e `App.e2e.test.jsx > @us US37 + US60 + US26` |
 | Cue sheet pairing the recording | `.cue.txt` plain text | `App.jsx:580-585` `downloadBlob(new Blob([cueText], 'text/plain'), '${base}.cue.txt')` | Triggered automatically when a recording stops AND ≥1 marker was dropped (via MARKER button OR `M` key) | `MasterBus.test.jsx > @us US60`; e2e `App.e2e.test.jsx > @us US37 + US60 + US26` |
 | Settings export | `application/json` versioned config | `App.jsx:943-960` `serializeSettings` → `downloadBlob` | EXPORT button in MasterBus | `App.test.jsx > @us US62: clicking Export downloads a settings file` |
+| Sound-bite slice (W3.6) | 16-bit PCM `audio/wav` | `Deck.jsx:479` `downloadBlob(encodeWav(bitePkg.buffer), '<name>.wav')` — `encodeWav` in `src/audio/wavEncode.js`; with an isolation mode engaged the slice is first rendered offline through `renderIsolated` | WAV button in the deck's BITE row (user-initiated; the region must be marked with SET IN / SET OUT first) | `wavEncode.test.js > @us US69`; `Deck.test.jsx > @us US69` |
 
-All three downloads share the `downloadBlob` helper in `src/audio/recorder.js:110-119`,
+All four downloads share the `downloadBlob` helper in `src/audio/recorder.js:110-119`,
 which creates an `<a>` element with `download="…"`, clicks it, removes it, and
 revokes the object URL — no network round-trip ever.
 
