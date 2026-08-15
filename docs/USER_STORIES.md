@@ -128,6 +128,12 @@ Persona: bedroom DJ who mixes local files in the browser. Sometimes streams, som
 | US68 | Component isolation mode — per-deck ISOLATE row (BASS / VOCAL / INSTR / PERC) built from pure Web Audio: dry path + four gated wet paths between the deck gain and the EQ (bass = 24 dB/oct 180 Hz lowpass cascade; vocal = mono mid downmix band-passed 200 Hz–8 kHz; instrumental = signal + inverted mid = side extraction; drums = side + 6 dB treble tilt). Radio-style buttons (aria-pressed, disabled until loaded); OFF is bit-transparent (dry gain exactly 1.0); all transitions via `setTargetAtTime` gain ramps, never disconnect. Honest-limits copy: EQ/phase math, not ML stems — bleed expected (W3.7) | U + I | `test/chain.test.js`, `test/Deck.test.jsx` |
 | US66 | EQ kill switches — one-tap KILL button under each EQ knob ramps that band to the −26 dB kill floor via `setTargetAtTime` (never instant); kill state is separate from knob state (killing doesn't move the knob; un-kill restores the exact prior gain; turning a killed band's knob keeps it killed); aria-pressed reflects state (W3.3) | I | `test/Deck.test.jsx` |
 
+## W4 — Desktop app
+
+| ID | Story | Coverage | Test file |
+|---|---|---|---|
+| US74 | Standalone desktop app — an Electron shell wrapping the same `dist-single/index.html` the web build produces (no forked UI). Serves it from a custom `wavecraft://` scheme registered `secure: true`, so the page is a **secure context** and the VOX mic panel works offline — which `file://` cannot do. Danger-zone parity with the web build: all non-app requests cancelled at the session level, no auto-updater/telemetry/crash reporting, renderer gets `nodeIntegration: false` + `contextIsolation: true` + `sandbox: true`, external links open in the real browser. Packaged per-OS (AppImage / portable .exe / .dmg) by a CI matrix, since Electron isn't cross-compilable (W4.1) | U | `test/desktop.test.js` |
+
 ## Useful utilities
 
 | ID | Story | Coverage | Test file |

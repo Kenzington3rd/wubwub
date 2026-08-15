@@ -1,9 +1,17 @@
 # Builds the downloadable app artifacts and publishes them as a GitHub
 # Release, so users can grab WAVECRAFT from the Releases page without any
 # tooling:
-#   wavecraft.html    — the single-file build. Download, double-click, mix.
-#   wavecraft-pwa.zip — the multi-file PWA build, for hosting on any static
-#                       server (then installable from the browser).
+#   wavecraft.html        — the single-file build. Download, double-click, mix.
+#   wavecraft-pwa.zip     — the multi-file PWA build, for hosting on any static
+#                           server (then installable from the browser).
+#   WAVECRAFT-*.AppImage  — Linux desktop app
+#   WAVECRAFT-*.exe       — Windows desktop app (portable, no installer)
+#   WAVECRAFT-*.dmg       — macOS desktop app
+#
+# The three desktop builds MUST be produced on their own OS — Electron
+# packaging is not meaningfully cross-compilable — hence the matrix job. Each
+# runner packages the same `dist-single/index.html` the web build produces, so
+# every artifact here is the same app.
 #
 # Runs only when explicitly asked (workflow_dispatch) or when a v* tag is
 # pushed — it never burns Actions minutes on ordinary pushes.
@@ -22,8 +30,52 @@ permissions:
   contents: write
 
 jobs:
-  release:
+  # ── 1. Verify once, and build the web artifacts ──
+  web:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        # The Electron binary (~100 MB) is only needed by the desktop matrix
+        # below; skip fetching it here so the verify job stays fast.
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - name: Verify (tests + both builds + artifact checks)
+        run: npm run verify:all
+
+      - name: Package web artifacts
+        run: |
+          cp dist-single/index.html wavecraft.html
+          (cd dist && zip -r ../wavecraft-pwa.zip .)
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: web
+          path: |
+            wavecraft.html
+            wavecraft-pwa.zip
+
+  # ── 2. Desktop apps, one per OS ──
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            pattern: "dist-desktop/*.AppImage"
+          - os: windows-latest
+            pattern: "dist-desktop/*.exe"
+          - os: macos-latest
+            pattern: "dist-desktop/*.dmg"
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
@@ -35,13 +87,34 @@ jobs:
       - name: Install
         run: npm ci
 
-      - name: Verify (tests + both builds + artifact checks)
-        run: npm run verify:all
+      - name: Build desktop app
+        # `build:desktop` runs build:single first, so the packaged bundle is
+        # always current with the source in this commit.
+        run: npm run build:desktop
 
-      - name: Package artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: desktop-${{ matrix.os }}
+          path: ${{ matrix.pattern }}
+          if-no-files-found: error
+
+  # ── 3. Publish everything to one Release ──
+  publish:
+    needs: [web, desktop]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifacts
         run: |
-          cp dist-single/index.html wavecraft.html
-          (cd dist && zip -r ../wavecraft-pwa.zip .)
+          mkdir -p release
+          find artifacts -type f \( -name '*.html' -o -name '*.zip' -o -name '*.AppImage' -o -name '*.exe' -o -name '*.dmg' \) \
+            -exec cp {} release/ \;
+          ls -la release/
 
       - name: Publish release
         env:
@@ -49,8 +122,17 @@ jobs:
           VERSION: ${{ github.event.inputs.version || github.ref_name }}
         run: |
           gh release create "$VERSION" \
-            wavecraft.html wavecraft-pwa.zip \
+            release/* \
             --title "WAVECRAFT $VERSION" \
-            --notes "**wavecraft.html** — the whole app in one file. Download it, double-click it, mix. Runs entirely in your browser, fully offline, nothing leaves your device. (Note: mic input, when it ships, needs the PWA build — file:// can't access the microphone.)
+            --notes "### Desktop app (double-click, no browser)
 
-          **wavecraft-pwa.zip** — the installable PWA build. Unzip onto any static host (GitHub Pages works), open it in Chrome/Edge, and use the address-bar install icon to get a dock/home-screen app that works offline."
+          Grab the one for your machine, put it on your desktop, run it. Fully offline, nothing leaves your device, and the VOX mic panel works — the desktop shell serves the app from a secure origin, which \`file://\` can't do.
+
+          - **Windows** — \`WAVECRAFT-*.exe\` (portable, no installer)
+          - **macOS** — \`WAVECRAFT-*.dmg\`
+          - **Linux** — \`WAVECRAFT-*.AppImage\` (\`chmod +x\` then run)
+
+          ### Browser builds
+
+          - **wavecraft.html** — the whole app in one file. Download it, double-click it, mix. (Mic input needs the desktop app or a hosted PWA — \`file://\` is not a secure origin.)
+          - **wavecraft-pwa.zip** — the installable PWA build. Unzip onto any static host, open in Chrome/Edge, install from the address bar."

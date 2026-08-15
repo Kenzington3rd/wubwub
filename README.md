@@ -9,9 +9,23 @@ WAVECRAFT is a three-deck DJ mixing app that runs entirely in your browser. **No
 
 Grab the latest build from the [Releases page](https://github.com/Kenzington3rd/wubwub/releases):
 
+**Desktop app** — a real application window, not a browser tab. Put it on your
+desktop and run it. Fully offline; nothing leaves your device.
+
+- **Windows** — `WAVECRAFT-*.exe` (portable — no installer, just run it)
+- **macOS** — `WAVECRAFT-*.dmg`
+- **Linux** — `WAVECRAFT-*.AppImage` (`chmod +x`, then run)
+
+The desktop build is the only one where the **VOX mic panel works offline**: it
+serves the app from a secure origin, which a `file://` page can't be. Same
+app, same single-file bundle inside — just wrapped in a window.
+
+**Browser builds**
+
 - **`wavecraft.html`** — the entire app in one file. Download it, double-click
   it, mix. Works fully offline, from a USB stick, from anywhere. No install,
-  no terminal, no dependencies.
+  no terminal, no dependencies. (Mic recording needs the desktop app or a
+  hosted PWA.)
 - **`wavecraft-pwa.zip`** — the installable PWA build. Unzip it onto any
   static host, open it in a Chromium browser, and use the address-bar install
   icon to get a proper dock/home-screen app that works offline.
@@ -28,6 +42,8 @@ npm test               # vitest, 500+ tests
 npm run build          # → dist/ (multi-file PWA, precached for offline)
 npm run build:single   # → dist-single/index.html (one self-contained file)
 npm run size           # build + bundle-size budget check (reruns the build internally)
+npm run desktop        # build + launch the Electron desktop app locally
+npm run build:desktop  # → dist-desktop/ installer for the current OS
 npm run preview        # serve the production build locally
 
 # Full I/O contract verification (Phase B):

@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "WAVECRAFT — Free, local-only, no-subscription DJ mixing app. Make music, not payments.",
+  "description": "WAVECRAFT \u2014 Free, local-only, no-subscription DJ mixing app. Make music, not payments.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -14,7 +14,10 @@
     "test:watch": "vitest",
     "verify:build": "vite build && vitest run test/build.test.js test/csp.test.js",
     "verify:single": "vite build --mode single --outDir dist-single && vitest run test/build-single.test.js",
-    "verify:all": "npm run verify:build && npm run verify:single && npm test"
+    "verify:all": "npm run verify:build && npm run verify:single && npm test",
+    "desktop": "npm run build:single && electron .",
+    "build:desktop": "npm run build:single && electron-builder --publish never",
+    "verify:desktop": "vitest run test/desktop.test.js"
   },
   "dependencies": {
     "react": "^18.3.1",
@@ -25,6 +28,8 @@
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
     "@vitejs/plugin-react": "^4.3.4",
+    "electron": "^43.4.0",
+    "electron-builder": "^26.15.3",
     "happy-dom": "^15.11.7",
     "sharp": "^0.34.5",
     "vite": "^5.4.10",
@@ -32,5 +37,45 @@
     "vite-plugin-singlefile": "^2.3.3",
     "vitest": "^2.1.9"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "main": "electron/main.cjs",
+  "build": {
+    "appId": "com.wavecraft.app",
+    "productName": "WAVECRAFT",
+    "copyright": "MIT \u2014 free, local-only. Nothing leaves your device.",
+    "files": [
+      "electron/**/*",
+      "dist-single/index.html",
+      "package.json",
+      "!node_modules/**"
+    ],
+    "directories": {
+      "output": "dist-desktop",
+      "buildResources": "public/icons"
+    },
+    "linux": {
+      "target": [
+        "AppImage"
+      ],
+      "category": "AudioVideo",
+      "icon": "public/icons/icon-512.png",
+      "syncDesktopName": true
+    },
+    "win": {
+      "target": [
+        "portable"
+      ],
+      "icon": "public/icons/icon-512.png"
+    },
+    "mac": {
+      "target": [
+        "dmg"
+      ],
+      "category": "public.app-category.music",
+      "icon": "public/icons/icon-512.png"
+    },
+    "publish": null
+  },
+  "author": "Kenzington3rd",
+  "desktopName": "wavecraft.desktop"
 }

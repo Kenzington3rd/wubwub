@@ -11,6 +11,8 @@
   - `npm run verify:build` → build + run build-artifact tests (manifest, sw.js, CSP)
   - `npm run verify:single` → build:single + run single-file artifact tests
   - `npm run verify:all` → verify:build + verify:single + full Vitest suite
+  - `npm run desktop` → build:single + launch the Electron shell locally
+  - `npm run build:desktop` → `dist-desktop/` app for the CURRENT OS (electron-builder). Windows/macOS/Linux artifacts are produced by the release workflow's matrix — Electron is not cross-compilable.
 - **Fonts**: self-hosted `.woff2` (Audiowide + Exo 2 variable) in `src/fonts/`, injected at boot via `src/fonts/index.js` (each woff2 is imported with Vite's `?url` so the multi-file build keeps them as hashed siblings and the single-file build inlines them as `data:` URIs)
 - **License**: MIT — free, open, no subscriptions
 
@@ -89,6 +91,9 @@ src/
     ├── Crate.jsx             # session crate — in-memory decoded-track list, quick-load to a deck
     ├── VoxRecorder.jsx       # VOX mic panel — local getUserMedia take → deck / crate / pad (W3.2)
     └── TheoryPanel.jsx       # camelot wheel + genre BPM + tips + shortcuts
+
+electron/
+└── main.cjs                  # desktop shell — secure `wavecraft://` scheme, network blocked (W4.1)
 
 public/
 └── icons/                    # PWA / apple-touch-icon (SVG + 192/512 PNG)
@@ -189,6 +194,7 @@ explain *why*.
 | User file data | Files stay in `ArrayBuffer`/`AudioBuffer` in memory. Never persisted (no localStorage for user content), never transmitted. |
 | Worklet path | Looper worklet source is `src/worklets/looper-worklet.js`, imported `?raw` and registered via a Blob URL in `src/App.jsx`. Don't re-introduce a static `/worklets/…` path — the Blob-URL registration is required for `file://` and PWA-subpath builds. |
 | Single-file build | `vite-plugin-singlefile` and `vite-plugin-pwa` are mutually exclusive in the same build. Use `--mode single` to pick singlefile. |
+| Desktop shell | `electron/main.cjs` must keep danger-zone parity with the web build: session-level cancel of every non-`wavecraft://` request, **no** auto-updater / telemetry / crash reporter (an updater is an outbound request), and `nodeIntegration:false` + `contextIsolation:true` + `sandbox:true`. It must load via the secure custom scheme, never `loadFile()`/`file://` — that's what makes the page a secure context so VOX/`getUserMedia` works. Pinned by `test/desktop.test.js`. |
 
 ## Current Status
 
