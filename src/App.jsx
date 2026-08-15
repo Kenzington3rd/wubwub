@@ -336,6 +336,24 @@ export default function App() {
     };
   }, []);
 
+  // ── Global drop guard (W4.3) ──
+  // A file dropped anywhere that ISN'T a drop zone (missed the deck card,
+  // landed on the master bus, was a type a zone rejected) falls through to the
+  // browser's default action: NAVIGATE to the file, replacing the app and
+  // losing the whole session. Cancel the default at the window level so a
+  // stray drop is simply inert. Component drop zones run first (events fire on
+  // the target before bubbling here) and keep working unchanged — this only
+  // swallows what nothing else claimed.
+  useEffect(() => {
+    const swallow = (e) => e.preventDefault();
+    window.addEventListener("dragover", swallow);
+    window.addEventListener("drop", swallow);
+    return () => {
+      window.removeEventListener("dragover", swallow);
+      window.removeEventListener("drop", swallow);
+    };
+  }, []);
+
   // ── Apply master volume ──
   useEffect(() => {
     const ctx = audioCtxRef.current;
