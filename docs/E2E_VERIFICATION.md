@@ -91,6 +91,7 @@ App-level keyboard / MIDI / crate-quick-load paths:
 | AUTO | `Deck.jsx:1158-1182` + `runAutoBpm` `:900-953` | runs `detectBpm` + `detectKey` on the buffer; honours manual BPM override; lifts key via `onKeyDetected`; live region "Detected N BPM, key …" | `Deck.test.jsx > @us US40`, `@us US58`, `@us US40 stale auto-detect bails` |
 | ÷2 | `Deck.jsx:1183-1207` | `setBpm(b/2)` clamped to 40 | covered by inventory + disabled-state test `@us US25/US45` |
 | ×2 | `Deck.jsx:1208-1230` | `setBpm(b*2)` clamped to 220 | inventory + disabled-state test |
+| ASSIGN `A` / `THRU` / `B` (W3.8) | `Deck.jsx:1639-1680` | segmented control; `onAssignChange(id, "A"\|"THRU"\|"B")` routes the deck to a crossfader end (`assignGain` A/B legs match `crossfadeGains` verbatim) or bypasses it at exactly 1.0; aria-pressed reflects the active segment | `crossfade.test.js > @us US65` (THRU is exactly 1.0 at every position; A/B legs match the two-deck curves); `App.test.jsx > @us US65`; settings round-trip `settings.test.js > @us US65` |
 | File picker (hidden + dressed-up button) | `Deck.jsx:1292-1338`, change handler `:588-592` | `accept="audio/*"`; passes the file to `loadFile`; aria-label flips between "Load audio for Deck A" and "Loaded: <name> — click to replace (Deck A)" | `Deck.test.jsx > @us US44 (X2 R21)` aria-label flip; `@us US1` via drop path; `App.test.jsx > @us US63` quick-load round-trip |
 | Drag-drop on deck region | `Deck.jsx:1044-1071`, `:594-611` | `dragover`/`drop` handlers; isDragOver glow; calls `loadFile` | `Deck.test.jsx > @us US44`; integration `App.test.jsx > @us US64`, e2e `App.e2e.test.jsx > @us US22 + US23 + US26 + US44` |
 | Inline load error (`role="alert"`) | `Deck.jsx:1340-1355` | wrong file type or decode failure surface inline; cleared on next successful load | `Deck.test.jsx > @us US33` mirror in SamplePad |
@@ -129,6 +130,64 @@ gain via `setTargetAtTime`.
 | `Deck.test.jsx > @us US6: EQ knob changes schedule via setTargetAtTime (R18 T1)` |
 | `Deck.test.jsx > @us US6: EQ change during a bass drop cancel-and-holds the schedule (V5 R19)` |
 | `Knob.test.jsx` — keyboard contract |
+
+### EQ KILL buttons (W3.3 — `Deck.jsx:2329-2358`)
+
+One KILL button under each of LOW / MID / HIGH. A kill ramps that band to the
+−26 dB `EQ_KILL_DB` floor via `setTargetAtTime` (never an instant assignment);
+the kill state lives beside the knob state (`Deck.jsx:306-308, 381-386`), so
+killing never moves the knob, un-killing restores the exact prior gain, and
+turning a killed band's knob keeps it killed.
+
+| Control | Outcome | Test |
+|---|---|---|
+| KILL (LOW / MID / HIGH) | aria-pressed flips; the band's `BiquadFilter.gain` ramps to −26 dB and back to the stored knob value | `Deck.test.jsx > @us US66` |
+
+### ISOLATE row (W3.7 — `Deck.jsx:2360-2484`)
+
+Radio-style BASS / VOCAL / INSTR / PERC buttons sitting between the deck gain
+and the EQ (dry path ∥ four gated wet paths, `src/audio/chain.js`). OFF is
+bit-transparent (dry gain exactly 1.0); all transitions are `setTargetAtTime`
+gain ramps — nothing is ever disconnected. Buttons are disabled until a track
+is loaded.
+
+| Control | Outcome | Test |
+|---|---|---|
+| BASS | 24 dB/oct 180 Hz lowpass cascade wet path opens, dry closes | `chain.test.js > @us US68` (topology + bit-transparent OFF); `Deck.test.jsx > @us US68` (aria-pressed, disabled-when-empty) |
+| VOCAL | mono mid downmix band-passed 200 Hz–8 kHz | same |
+| INSTR | signal + inverted mid (side extraction) | same |
+| PERC | side + 6 dB treble tilt | same |
+
+### BITE row (W3.6 — `Deck.jsx:1965-2137`)
+
+| Control | Outcome | Test |
+|---|---|---|
+| SET IN / SET OUT | marks the region at the playhead; overlay drawn on the waveform; region resets on track change | `Deck.test.jsx > @us US69` |
+| ▶ LOOP (preview) | previews the region through the live chain from the bite-preview source path | `Deck.test.jsx > @us US69` |
+| → PAD (+ pad `<select>`) | slices with equal-power edge fades (`sliceBuffer`) and hands the buffer to the chosen sample pad via `adoptBuffer` | `Deck.test.jsx > @us US69` |
+| → CRATE | sends the slice to the in-memory crate | `Deck.test.jsx > @us US69`; `App.test.jsx > @us US63` for the crate side |
+| WAV | `encodeWav` → `downloadBlob('<name>.wav')` — 16-bit PCM, user-initiated, nothing auto-persisted; with an isolation mode engaged the slice renders offline through `renderIsolated` so the saved bite IS the isolated component | `wavEncode.test.js > @us US69` (header/format/round-trip); `Deck.test.jsx > @us US69` |
+| ✕ (clear region) | drops IN/OUT and the overlay | `Deck.test.jsx > @us US69` |
+
+### ROLL row (W3.4 — `Deck.jsx:2138-2180`)
+
+| Control | Outcome | Test |
+|---|---|---|
+| ¼ / ½ / 1 / 2 beats (hold-to-engage) | pointerdown loops the last N beats (at the track's BPM) through the chain while the wall-clock timeline runs underneath; release re-anchors playback at the advanced position; press-time quantized; pause / stop / load mid-roll always kill the roll source; disabled unless playing | `Deck.test.jsx > @us US72` |
+
+### MODE row — VARI / KEYLOCK (W3.1 — `Deck.jsx:2243-2280`)
+
+| Control | Outcome | Test |
+|---|---|---|
+| VARI (default) | classic varispeed — `playbackRate` on the BufferSource; bit-identical to pre-W3.1 behavior | `Deck.test.jsx > @us US73` |
+| KEYLOCK (experimental) | playback streams through the granular stretch worklet: channels posted once per track, transport via port messages, tempo via the `rate` AudioParam (speed + NUDGE bend) with `pitchRatio` pinned at 1; position reports drive drift correction; worklet-unavailable falls back to VARI; mode hops mid-play resume at the same position | `Deck.test.jsx > @us US73`; DSP core `timeStretch.test.js > @us US71`; streaming worklet `stretchWorklet.test.js` |
+
+### PUMP row (W3.5 — `Deck.jsx:2485-2540`)
+
+| Control | Outcome | Test |
+|---|---|---|
+| PUMP toggle | arms one `setValueCurveAtTime` window per beat on the unity `pumpGain` (filter → pump → effects) ~4 beats ahead; rate re-reads the live effective BPM (detected × speed); free-running phase; OFF cancels the schedule and returns the gain to exactly 1.0 | `chain.test.js > @us US70` (pumpGain in the chain at unity); `Deck.test.jsx > @us US70` |
+| DEPTH knob | sets the dip target (instant dip to 1−depth, exponential recovery to 1.0) | `Deck.test.jsx > @us US70` |
 
 ### Effects rack (`Deck.jsx:1549-1582` ↔ `EffectCard.jsx`)
 
@@ -199,6 +258,24 @@ gain via `setTargetAtTime`.
 | Pad volume slider | `setVolume(i, v)` ramps the pad gain via `setTargetAtTime` | structural |
 | `triggerByKey(key)` imperative API | App keyboard shortcut path → trigger pad at index | `SamplePad.test.jsx > @us US32`; integration in `App.test.jsx > @us US32` |
 | Tap fan-out / deferred-attach | each pad's gain connects to master + record tap; A6 retry once tap exists | `SamplePad.test.jsx > @us US61` (both tap fan-out and A6 deferred-attach race) |
+
+## VoxRecorder — `src/components/VoxRecorder.jsx` (W3.2)
+
+Local `getUserMedia` only — nothing is transmitted and nothing is persisted.
+Music-tuned constraints (echo cancellation / noise suppression / AGC all off).
+Permission denial and insecure contexts (`file://`) degrade to inline notices,
+never a throw.
+
+| Control | Source | Outcome | Test |
+|---|---|---|---|
+| ARM | `VoxRecorder.jsx:308` | requests the mic; denial / insecure context renders an inline notice instead of throwing | `VoxRecorder.test.jsx > @us US67` |
+| ● RECORD / ■ STOP | `VoxRecorder.jsx:316-320` | records the armed stream, then decodes the take to an in-memory `AudioBuffer` | `VoxRecorder.test.jsx > @us US67` |
+| MONITOR | `VoxRecorder.jsx:326-330` | mic → gain → master; off by default | `VoxRecorder.test.jsx > @us US67` |
+| ▶ PREVIEW / ■ STOP | `VoxRecorder.jsx:363-364` | plays the take through the master bus; aria-pressed reflects previewing | `VoxRecorder.test.jsx > @us US67` |
+| → Deck A / B / C | `VoxRecorder.jsx:371` | routes the take via `Deck.loadBuffer` | `VoxRecorder.test.jsx > @us US67` |
+| → CRATE | `VoxRecorder.jsx:377` | adds the take to the in-memory crate | `VoxRecorder.test.jsx > @us US67` |
+| → PAD (+ pad `<select>`) | `VoxRecorder.jsx:381-387` | routes the take to the chosen sample pad via `adoptBuffer` | `VoxRecorder.test.jsx > @us US67` |
+| Release mic / Discard take | `VoxRecorder.jsx:336`, `:407` | stops the tracks / drops the buffer reference | `VoxRecorder.test.jsx > @us US67` |
 
 ## TheoryPanel — `src/components/TheoryPanel.jsx`
 
@@ -275,13 +352,13 @@ that fail fast if a maintainer regresses the contract.
 
 | Command | Result (R24 final) |
 |---|---|
-| `npm test` | **36 files, 435 tests, all passing** |
+| `npm test` | **40 files, 511 tests, all passing** |
 | `npm run build` | succeeds; multi-file PWA + 13-entry precache manifest |
 | `npm run build:single` | succeeds; one-file `dist-single/index.html` |
 | `npm run verify:build` | build + Vitest on `test/build.test.js` + `test/csp.test.js` |
 | `npm run verify:single` | build:single + Vitest on `test/build-single.test.js` |
 | `npm run verify:all` | verify:build + verify:single + full `npm test` |
-| `npm run size` | PASS — 75.5 KB / 90 KB gzip JS, 342.3 KB / 400 KB precache |
+| `npm run size` | PASS — 85.9 KB / 90 KB gzip JS, 375.4 KB / 400 KB precache |
 
 ## Deferred — theoretical traces only (R24)
 

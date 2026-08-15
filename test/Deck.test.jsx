@@ -1790,6 +1790,36 @@ describe("Deck pump — US70", () => {
   });
 });
 
+// ─── US8 — whole-track loop mode toggle ───
+describe("Deck loop mode — US8", () => {
+  it("@us US8: the Loop button toggles isLooping and the live source's loop flag", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    const buf = new MockAudioBuffer(1, sr * 4, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "loopme.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+
+    const loopBtn = screen.getByRole("button", { name: /Loop deck/i });
+    const src = api.audioCtxRef.current._lastStartedSource;
+
+    // The deck ships with loop mode engaged, and the playing source agrees.
+    expect(loopBtn).toHaveAttribute("aria-pressed", "true");
+    expect(src.loop).toBe(true);
+
+    // Toggling OFF must reach the *live* source, not just the button state —
+    // otherwise the track keeps wrapping until the next source rebuild.
+    await act(async () => { fireEvent.click(loopBtn); });
+    expect(loopBtn).toHaveAttribute("aria-pressed", "false");
+    expect(src.loop).toBe(false);
+
+    // …and back ON again on the same source.
+    await act(async () => { fireEvent.click(loopBtn); });
+    expect(loopBtn).toHaveAttribute("aria-pressed", "true");
+    expect(src.loop).toBe(true);
+  });
+});
+
 // ─── W3.4 — momentary loop roll (US72) ───
 describe("Deck loop roll — US72", () => {
   async function playingDeck() {
