@@ -69,7 +69,9 @@ async function loadAllDecks() {
     const btn = screen.getByRole("button", {
       name: new RegExp(`Load audio for Deck ${id}`, "i"),
     });
-    const input = btn.closest("div")?.querySelector('input[type="file"]');
+    let scope = btn.parentElement;
+    while (scope && !scope.querySelector('input[type="file"]')) scope = scope.parentElement;
+    const input = scope?.querySelector('input[type="file"]');
     if (!input) continue;
     await act(async () => {
       fireEvent.change(input, { target: { files: [audioFile(`${id}.mp3`)] } });
@@ -249,6 +251,7 @@ describe("interaction census — inventory — US75", () => {
       "Sample pad for deck <D> bites",
       // loading
       "Load audio for Deck <D>",
+      "Eject the track from deck <D>",
       "Add tracks to the crate",
       "Load sample pad <N>",
       "Pad <N> volume",

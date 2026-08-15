@@ -10,6 +10,8 @@ ever leaves your device.
 2. On **Deck A**, click "Drop audio here or click to load" and pick a track, or
    drag an audio file straight onto the deck. Supported: MP3, WAV, OGG, FLAC,
    M4A, AAC.
+   To switch tracks, either click the loaded filename to replace it, or press
+   **EJECT** next to it to clear the deck back to empty.
 3. Press **Play**. Do the same on **Deck B** with a second track.
 4. Drag the **crossfader** between the decks to blend them.
 

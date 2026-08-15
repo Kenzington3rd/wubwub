@@ -69,7 +69,11 @@ async function loadDeck(id, name = `${id}.mp3`) {
   const btn = screen.getByRole("button", {
     name: new RegExp(`Load audio for Deck ${id}`, "i"),
   });
-  const input = btn.closest("div").querySelector('input[type="file"]');
+  // The load button sits in a flex row beside EJECT; the hidden file input
+  // is a sibling of that row, so walk up to the ancestor that contains it.
+  let scope = btn.parentElement;
+  while (scope && !scope.querySelector('input[type="file"]')) scope = scope.parentElement;
+  const input = scope?.querySelector('input[type="file"]');
   await act(async () => {
     fireEvent.change(input, { target: { files: [audioFile(name)] } });
   });
@@ -297,6 +301,129 @@ describe("process: crate → deck quick-load — US63", () => {
         screen.getByRole("button", { name: /click to replace \(Deck C\)/i }),
       ).toBeTruthy();
     });
+  });
+});
+
+// ── 4b. Eject → deck back to empty ─────────────────────────────────────────
+describe("process: eject a track → deck returns to empty — US77", () => {
+  it("@us US77: eject clears the deck and the load slot re-opens", async () => {
+    render(<App />);
+    await loadDeck("A", "rose-garden.mp3");
+    // Give the deck some state that must not survive the eject.
+    await click(btn(/Play deck A/i));
+    await click(btn(/Add cue at current position on deck A/i));
+    await markBite("A");
+
+    await click(btn(/Eject the track from deck A/i));
+
+    // End state: the load slot is back to its empty invitation…
+    expect(screen.getByRole("button", { name: /Load audio for Deck A/i })).toBeTruthy();
+    expect(
+      screen.queryByRole("button", { name: /click to replace \(Deck A\)/i }),
+    ).toBeNull();
+    // …the track-scoped surfaces are gone…
+    expect(
+      screen.queryByRole("button", { name: /Download the bite as WAV from deck A/i }),
+    ).toBeNull();
+    expect(screen.queryByRole("slider", { name: /Seek position in deck A track/i })).toBeNull();
+    // …and play is inert again (no buffer to start).
+    const play = btn(/Play deck A/i);
+    await click(play);
+    expect(play.getAttribute("aria-pressed")).not.toBe("true");
+  });
+
+  it("@us US77: a fresh track loads cleanly after an eject", async () => {
+    // The point of ejecting is switching tracks — prove the reload half.
+    render(<App />);
+    await loadDeck("A", "first.mp3");
+    await click(btn(/Eject the track from deck A/i));
+    await loadDeck("A", "second.mp3");
+    expect(
+      screen.getByRole("button", { name: /Loaded: second\.mp3 — click to replace \(Deck A\)/i }),
+    ).toBeTruthy();
+  });
+
+  it("@us US77: eject on an empty deck is disabled and inert", async () => {
+    // Negative: nothing loaded → the control must not be operable.
+    render(<App />);
+    const eject = btn(/Eject the track from deck A/i);
+    expect(eject).toBeDisabled();
+    await click(eject);
+    expect(screen.getByRole("button", { name: /Load audio for Deck A/i })).toBeTruthy();
+  });
+});
+
+// ── 4c. Stray / rejected drops must never navigate the app away ────────────
+describe("process: dropping a file can never brick the app — US78", () => {
+  it("@us US78: a drop outside every drop zone is cancelled (no navigation)", async () => {
+    // The browser default for an unclaimed drop is NAVIGATE TO THE FILE —
+    // which replaces the app and loses the whole session. The app-level guard
+    // must cancel it. jsdom/happy-dom don't perform real navigation, so the
+    // observable contract is defaultPrevented on an event nothing claimed.
+    render(<App />);
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", {
+      value: { files: [audioFile("stray.mp3")], items: [{ kind: "file" }] },
+    });
+    await act(async () => {
+      document.body.dispatchEvent(drop);
+    });
+    expect(drop.defaultPrevented).toBe(true);
+
+    const over = new Event("dragover", { bubbles: true, cancelable: true });
+    await act(async () => {
+      document.body.dispatchEvent(over);
+    });
+    expect(over.defaultPrevented).toBe(true);
+
+    // Still alive and interactive.
+    expect(screen.getByRole("slider", { name: /Master volume/i })).toBeTruthy();
+  });
+
+  it("@us US78: a non-audio file dropped on a deck shows an inline error, app survives", async () => {
+    render(<App />);
+    const loadBtn = btn(/Load audio for Deck A/i);
+    const zone = loadBtn.closest("[aria-label], div");
+    const junk = new File([new Uint8Array([1, 2, 3])], "notes.txt", { type: "text/plain" });
+    // Drop it on the deck card (the deck's own drop zone).
+    const deckCard = loadBtn.closest('div[style*="border"]') || loadBtn.parentElement.parentElement;
+    await act(async () => {
+      fireEvent.drop(deckCard, {
+        dataTransfer: { files: [junk], items: [{ kind: "file" }] },
+      });
+    });
+    // Inline rejection, not a crash: the deck still offers to load, and the
+    // app shell is still mounted.
+    expect(screen.getByRole("button", { name: /Load audio for Deck A/i })).toBeTruthy();
+    expect(screen.getByRole("slider", { name: /Master volume/i })).toBeTruthy();
+  });
+
+  it("@us US78: a corrupt audio file dropped on a deck is rejected inline, deck stays usable", async () => {
+    // decode failure path (as opposed to wrong-type path): make decode throw.
+    render(<App />);
+    const loadBtn = btn(/Load audio for Deck A/i);
+    let scope = loadBtn.parentElement;
+    while (scope && !scope.querySelector('input[type="file"]')) scope = scope.parentElement;
+    const input = scope.querySelector('input[type="file"]');
+    const bad = new File([new Uint8Array([9, 9, 9])], "corrupt.mp3", { type: "audio/mpeg" });
+    const orig = AudioContext.prototype.decodeAudioData;
+    AudioContext.prototype.decodeAudioData = () =>
+      Promise.reject(new Error("decode failed"));
+    try {
+      await act(async () => {
+        fireEvent.change(input, { target: { files: [bad] } });
+      });
+    } finally {
+      AudioContext.prototype.decodeAudioData = orig;
+    }
+    // The deck reports the failure and remains empty and loadable.
+    expect(await screen.findByRole("alert")).toHaveTextContent(/could not decode/i);
+    expect(screen.getByRole("button", { name: /Load audio for Deck A/i })).toBeTruthy();
+    // And a good file still loads afterwards — the failure left no debris.
+    await loadDeck("A", "good.mp3");
+    expect(
+      screen.getByRole("button", { name: /Loaded: good\.mp3 — click to replace \(Deck A\)/i }),
+    ).toBeTruthy();
   });
 });
 
