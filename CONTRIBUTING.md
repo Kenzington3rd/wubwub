@@ -86,6 +86,30 @@ If the test doesn't fit any existing story, add one. The tags exist so a future
 reader can ask "what test covers user-visible behavior X?" and get an answer
 with grep.
 
+## Full interaction coverage (WC-COVER)
+
+Every control a user can operate is tested — all of them, in every state they
+render in. This is enforced by `test/interaction-census.test.jsx`, which
+enumerates the live DOM of the fully-loaded app and fails if a control is
+unnamed, shares a name with another control, goes missing from the manifest,
+or throws when driven.
+
+Practically, when you add a control:
+
+1. **Give it a scoped `aria-label`.** Three decks render a knob captioned
+   `LOW`; the accessible name must be `LOW EQ on deck A`. A bare visible label
+   fails the no-duplicate-names check — it makes the control unaddressable by
+   tests and ambiguous to screen readers.
+2. **If it renders conditionally**, extend `reachConditionalStates()` in the
+   census so the guarantee can actually see it. A control the census can't
+   reach is a control nobody is checking.
+3. **If it starts a process**, add a `test/process-e2e.test.jsx` case that
+   follows that process to its end state — the downloaded file, the loaded
+   pad, the populated crate — plus the negative case where the control should
+   be inert.
+
+See `CLAUDE.md` § WC-COVER for the full rationale.
+
 ## Bundle-size budget
 
 `npm run size` runs after every CI build. Budgets live in

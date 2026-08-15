@@ -435,3 +435,64 @@ twists a knob:
 
 - **Real audio listening tests** — `webAudioMock.js` does not execute the compressor curve; final audible verification still needs a manual pass in Chromium / Firefox / Safari.
 - The traces above stand in for what Vitest cannot run; the manual acceptance steps are the listed Falsifier rows.
+
+---
+
+## Standing interaction coverage (WC-COVER)
+
+The matrix above is a point-in-time audit. It is now backed by two test files
+that keep it true automatically, so coverage can't silently rot between passes.
+
+### `test/interaction-census.test.jsx`
+
+Renders the app in its widest state — all three decks loaded, a bite region
+marked on each, a cue set, every tab visited, VOX's secure-context gate
+satisfied — then enumerates every `button` / `input` / `select` /
+`[role="slider"]` / `[role="tab"]` in the live DOM and enforces:
+
+| Guarantee | Why it matters |
+|---|---|
+| Every control has an accessible name | An unnamed control can't be reached by a screen reader **or** by `getByRole({ name })` — it is untestable by construction. |
+| No two controls share a name | Three decks × the same knob caption meant `LOW` named three different controls. Any test querying it silently asserted against Deck A only. |
+| The inventory matches a checked-in manifest | Catches drift in both directions: a new untested control, and a whole panel that stopped rendering. |
+| Every button clicked **twice** | The second click is where one-way toggles (`start → started`) throw. |
+| Every slider driven to min / max / midpoint | Extremes are where clamping and divide-by-zero live. |
+| Every select set to every one of its own options | Options that no handler branch covers. |
+| Momentary controls pressed without release, plus orphan releases | ROLL / NUDGE stuck permanently engaged is the failure mode; the test asserts every deck's speed returns to rest. |
+| Every deck control operated on an **empty** deck | The null-buffer dereference path. |
+
+### `test/process-e2e.test.jsx`
+
+Traces each pipeline from first click to terminal artifact, intercepting the
+`<a download>` click that is the app's only egress point:
+
+| Process | End state asserted |
+|---|---|
+| load → play → record → stop | An audio Blob downloaded with a real extension |
+| record + markers → stop | A `.cue.txt` whose header, marker count and base filename all agree with the audio file |
+| marker pressed while **not** recording | No download at all (negative) |
+| bite → WAV | A downloaded file whose bytes actually begin `RIFF`…`WAVE` |
+| bite → PAD | Pad 1 stops advertising itself as an empty slot |
+| bite → CRATE | A crate row offering `Load "…" to deck A` |
+| bite → CLEAR | Send controls removed, nothing exported (negative) |
+| settings export → import | Exported JSON re-applied over changed state restores curve + deck accent |
+| malformed settings import | Rejected inline, state unchanged, app still mounted (negative) |
+| crate → deck C | Deck C's load button reports a loaded track |
+| looper capture → play | Loop 1's play control and volume slider armed |
+| full three-deck session | assign + play ×3 + EQ kill + isolate + pump + fader ride + record → file, with every applied state still set afterwards |
+
+### Findings from the pass that added these
+
+Building the census surfaced defects the per-control tests could not:
+
+1. **43 controls shared 15 accessible names** — every EQ knob (`LOW`/`MID`/
+   `HIGH`), every effect toggle (`Reverb effect off` ×3), every effect knob
+   (`MIX` ×9, `SIZE`/`TIME`/`FB`/`DRIVE` ×3), `BASS DROP`, `Bass drop preset`,
+   `DEPTH`, and `Add cue at current position`. Fixed by adding a `scope` /
+   `deckId` / `ariaLabel` prop through `Knob`, `EffectCard`, `BassDropMenu`
+   and `CuePanel`. Thirteen existing `Deck.test.jsx` assertions had been
+   resolving by first-match and were updated to address their deck explicitly.
+2. **`Send the bite to sample pad N` was unscoped** across all three decks —
+   invisible to the first census run because the BITE send row only renders
+   once a region is marked, which is why the census now drives the app into
+   its conditional states before counting.

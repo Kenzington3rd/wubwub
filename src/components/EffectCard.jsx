@@ -5,9 +5,13 @@ import Knob from "./Knob.jsx";
 // Each becomes a Knob bound to settings[key].
 //
 // `settings` shape (minimum): { on: boolean, ...paramKeys }.
-export default function EffectCard({ title, color, settings, onChange, params }) {
+// `scope` disambiguates the accessible names when the same card is rendered
+// more than once — every deck has a Reverb card with a MIX knob, so without it
+// "Reverb effect off" and "MIX" each name three different controls.
+export default function EffectCard({ title, color, settings, onChange, params, scope }) {
   const setOn = (on) => onChange({ ...settings, on });
   const setParam = (key, v) => onChange({ ...settings, [key]: v });
+  const suffix = scope ? ` on ${scope}` : "";
 
   return (
     <div
@@ -29,7 +33,7 @@ export default function EffectCard({ title, color, settings, onChange, params })
         type="button"
         onClick={() => setOn(!settings.on)}
         aria-pressed={settings.on}
-        aria-label={`${title} effect ${settings.on ? "on" : "off"}`}
+        aria-label={`${title} effect ${settings.on ? "on" : "off"}${suffix}`}
         // Standard hover step. Applied only when the effect is off — an active
         // toggle keeps its accent-tinted background, which wc-btn-hover's
         // !important rule would otherwise stomp (matches TheoryPanel's tabs).
@@ -74,6 +78,7 @@ export default function EffectCard({ title, color, settings, onChange, params })
             min={p.min}
             max={p.max}
             label={p.label}
+            ariaLabel={`${title} ${p.label}${suffix}`}
             color={color}
             size={36}
             format={p.format}

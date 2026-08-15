@@ -1955,6 +1955,7 @@ const Deck = forwardRef(function Deck(
       <CuePanel
         cues={cues}
         color={color}
+        deckId={id}
         disabled={!fileName || cues.length >= MAX_CUES}
         maxReached={cues.length >= MAX_CUES}
         onSet={setCueAtCurrent}
@@ -2015,7 +2016,7 @@ const Deck = forwardRef(function Deck(
                 <button
                   type="button"
                   onClick={() => sendBite("pad")}
-                  aria-label={`Send the bite to sample pad ${bitePad + 1}`}
+                  aria-label={`Send the bite from deck ${id} to sample pad ${bitePad + 1}`}
                   style={biteBtnStyle(false, color, true)}
                 >
                   → PAD
@@ -2324,6 +2325,7 @@ const Deck = forwardRef(function Deck(
                 value={value}
                 onChange={(v) => setEq((p) => ({ ...p, [band]: v }))}
                 label={label}
+                ariaLabel={`${label} EQ on deck ${id}`}
                 color={color}
               />
               {/* W3.3 — one-tap band kill. Toggling never moves the knob. */}
@@ -2412,6 +2414,7 @@ const Deck = forwardRef(function Deck(
       <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
         <EffectCard
           title="Reverb"
+          scope={`deck ${id}`}
           color={color}
           settings={effects.reverb}
           onChange={(s) => setEffects((p) => ({ ...p, reverb: s }))}
@@ -2422,6 +2425,7 @@ const Deck = forwardRef(function Deck(
         />
         <EffectCard
           title="Delay"
+          scope={`deck ${id}`}
           color={color}
           settings={effects.delay}
           onChange={(s) => setEffects((p) => ({ ...p, delay: s }))}
@@ -2433,6 +2437,7 @@ const Deck = forwardRef(function Deck(
         />
         <EffectCard
           title="Distortion"
+          scope={`deck ${id}`}
           color={color}
           settings={effects.distortion}
           onChange={(s) => setEffects((p) => ({ ...p, distortion: s }))}
@@ -2450,6 +2455,7 @@ const Deck = forwardRef(function Deck(
           onClick={triggerBassDrop}
           disabled={!fileName || bassDropActive}
           aria-pressed={bassDropActive}
+          aria-label={`Trigger bass drop on deck ${id}`}
           style={{
             flex: 1,
             background: bassDropActive
@@ -2481,7 +2487,7 @@ const Deck = forwardRef(function Deck(
           />
           {bassDropActive ? "DROPPING" : "BASS DROP"}
         </button>
-        <BassDropMenu preset={bassDropPreset} onChange={setBassDropPreset} color={color} />
+        <BassDropMenu preset={bassDropPreset} onChange={setBassDropPreset} color={color} deckId={id} />
         {/* W3.5 — sidechain-style PUMP: beat-rate ducking at the effective
             BPM. Free-running phase (matches the beat indicator's behavior). */}
         <button
@@ -2502,6 +2508,7 @@ const Deck = forwardRef(function Deck(
           max={1}
           step={0.01}
           label="DEPTH"
+          ariaLabel={`Pump depth on deck ${id}`}
           color={color}
           size={36}
         />

@@ -39,7 +39,11 @@ const svg = await readFile(SVG_PATH);
 for (const { size, path } of OUTPUTS) {
   const png = await sharp(svg, { density: 384 })
     .resize(size, size, { fit: "contain", background: { r: 7, g: 10, b: 20, alpha: 1 } })
-    .png({ compressionLevel: 9 })
+    // Palette-quantized: the mark is a single gradient disc over a flat
+    // background, so 128 colors is visually identical to truecolor at ~30% of
+    // the bytes. These PNGs are service-worker precached, and the precache
+    // total is budgeted (scripts/check-bundle-size.mjs).
+    .png({ compressionLevel: 9, palette: true, colors: 128 })
     .toBuffer();
   await writeFile(path, png);
   console.log(`  wrote ${path} (${size}x${size}, ${png.length} bytes)`);

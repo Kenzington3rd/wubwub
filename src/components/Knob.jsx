@@ -6,6 +6,10 @@ export default function Knob({
   min = -12,
   max = 12,
   label,
+  // Accessible name, when the visible `label` alone would be ambiguous. Three
+  // decks each render a knob captioned "LOW"; without a scoped name they are
+  // indistinguishable to a screen reader (and unaddressable by tests).
+  ariaLabel,
   color = "#00f5d4",
   size = 52,
   format,
@@ -91,7 +95,7 @@ export default function Knob({
         role="slider"
         aria-orientation="vertical"
         tabIndex={disabled ? -1 : 0}
-        aria-label={label}
+        aria-label={ariaLabel || label}
         aria-valuenow={value}
         aria-valuetext={display}
         aria-valuemin={min}
