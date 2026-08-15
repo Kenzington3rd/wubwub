@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { BASS_DROP_PRESETS } from "../data.js";
 
-export default function BassDropMenu({ preset, onChange, color }) {
+export default function BassDropMenu({ preset, onChange, color, deckId }) {
   // D6 — hover state for the native <select> (inline styles can't carry a
   // CSS :hover with a dynamic accent color).
   const [hover, setHover] = useState(false);
@@ -12,7 +12,7 @@ export default function BassDropMenu({ preset, onChange, color }) {
       onPointerEnter={() => setHover(true)}
       onPointerLeave={() => setHover(false)}
       title="Bass drop preset"
-      aria-label="Bass drop preset"
+      aria-label={deckId ? `Bass drop preset for deck ${deckId}` : "Bass drop preset"}
       style={{
         background: hover ? `${color}1a` : "rgba(15,18,35,0.6)",
         color,

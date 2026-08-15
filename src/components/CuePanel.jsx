@@ -6,7 +6,8 @@ function formatTime(s) {
   return `${m}:${sec.toString().padStart(2, "0")}`;
 }
 
-export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJump, onDelete }) {
+// `deckId` scopes the accessible names — all three decks render a cue panel.
+export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJump, onDelete, deckId }) {
   return (
     <div
       style={{
@@ -21,7 +22,7 @@ export default function CuePanel({ cues, color, disabled, maxReached, onSet, onJ
         onClick={onSet}
         disabled={disabled}
         title={maxReached ? "Max 8 cues — delete one first" : "Set cue at current position"}
-        aria-label={maxReached ? "Cue limit reached" : "Add cue at current position"}
+        aria-label={`${maxReached ? "Cue limit reached" : "Add cue at current position"}${deckId ? ` on deck ${deckId}` : ""}`}
         style={{
           background: disabled ? "rgba(255,255,255,0.04)" : `${color}22`,
           border: `1px solid ${color}55`,

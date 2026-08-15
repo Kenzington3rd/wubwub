@@ -124,6 +124,35 @@ fetches and also what lets the PWA build work under a non-root subpath.
 - Three decks share the two-ended crossfader via per-deck **assign** (`A / THRU / B`); the A/B curve math in `crossfadeGains` is unchanged and `THRU` is exactly 1.0
 - Effects bypass via dry/wet gain pairs — never disconnect/reconnect
 
+## WC-COVER — full interaction coverage is the standard
+
+**Every control a user can operate is tested, always.** Not "the important
+ones", not "the ones this ticket touched" — every button, slider, knob, select,
+tab, drop target and momentary control, in every state it can render in.
+
+This is enforced mechanically, so it cannot quietly lapse:
+
+| Guarantee | Enforced by |
+|---|---|
+| Every control has an accessible name | `test/interaction-census.test.jsx` |
+| No two controls share an accessible name | same — three decks means `LOW` must be `LOW EQ on deck A` |
+| The load-bearing control inventory is intact | same — a checked-in manifest, drift fails in both directions |
+| Every control is actually *driven*, not just present | same — clicked twice, sliders to both extremes, selects through every option, momentary controls pressed without release, on a loaded **and** an empty deck |
+| Every process reaches its end state | `test/process-e2e.test.jsx` — pipelines traced to the terminal artifact (downloaded file, loaded pad, crate entry) |
+
+Consequences for new work:
+
+- A new control needs a deck/panel-scoped `aria-label` **before** it will pass
+  the census. Reuse of a bare visible label (`MIX`, `LOW`) is a test failure,
+  not a style nit — it makes the control unaddressable by tests and by screen
+  readers alike.
+- A control that only renders in a particular state (the BITE send row, cue
+  chips) must be *reachable* by the census helpers, or it is invisible to the
+  guarantee. Extend `reachConditionalStates()` when adding one.
+- A new user-facing process needs a `process-e2e` test that follows it all the
+  way to its end state, including its negative case (the operation attempted
+  when it should be inert).
+
 ## WC-PREC — WAVECRAFT rule precedence
 
 > **Scope: this project only.** `WC-PREC` is WAVECRAFT/wubwub's own precedence

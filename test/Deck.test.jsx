@@ -720,7 +720,7 @@ describe("Deck — integration tests across many user stories", () => {
       // reverb then turned mix up" path.
       const knobs = screen.getAllByRole("slider");
       // Find the reverb MIX knob (the only knob aria-labelled MIX).
-      const mixKnob = knobs.find((k) => k.getAttribute("aria-label") === "MIX");
+      const mixKnob = knobs.find((k) => /\bMIX\b/.test(k.getAttribute("aria-label")));
       expect(mixKnob).toBeTruthy();
       // Default mix is 0.3; bump to 0.5 via repeated ArrowUp (step 0.01).
       for (let i = 0; i < 20; i++) {
@@ -741,7 +741,7 @@ describe("Deck — integration tests across many user stories", () => {
       expect(reverbWet.gain.value).toBeCloseTo(0.5, 2);
 
       // Now drive the SIZE knob — find it by its aria-label.
-      const sizeKnob = knobs.find((k) => k.getAttribute("aria-label") === "SIZE");
+      const sizeKnob = knobs.find((k) => /\bSIZE\b/.test(k.getAttribute("aria-label")));
       expect(sizeKnob).toBeTruthy();
       // One ArrowUp on SIZE (step 0.1) → triggers the 200 ms debounce.
       await act(async () => fireEvent.keyDown(sizeKnob, { key: "ArrowUp" }));
@@ -794,13 +794,13 @@ describe("Deck — integration tests across many user stories", () => {
       // distortion's MIX knob by walking up from DRIVE to the EffectCard's
       // root div. The card's first child is the toggle button; its sibling
       // is the knobs container holding MIX + DRIVE.
-      const driveKnob = knobs.find((k) => k.getAttribute("aria-label") === "DRIVE");
+      const driveKnob = knobs.find((k) => /\bDRIVE\b/.test(k.getAttribute("aria-label")));
       expect(driveKnob).toBeTruthy();
       // driveKnob → knob wrapper → knobs row → card root
       const card = driveKnob.parentElement?.parentElement?.parentElement;
       expect(card).toBeTruthy();
       const mixKnob = Array.from(card.querySelectorAll('[role="slider"]')).find(
-        (k) => k.getAttribute("aria-label") === "MIX"
+        (k) => /\bMIX\b/.test(k.getAttribute("aria-label"))
       );
       expect(mixKnob).toBeTruthy();
       // Bump distortion MIX from 0.4 to 0.6 (20 ticks at step 0.01).
@@ -892,7 +892,7 @@ describe("Deck — integration tests across many user stories", () => {
 
     // Spin the LOW knob via the keyboard slider contract (step 1 dB per arrow).
     const knobs = screen.getAllByRole("slider");
-    const lowKnob = knobs.find((k) => k.getAttribute("aria-label") === "LOW");
+    const lowKnob = knobs.find((k) => /\bLOW\b/.test(k.getAttribute("aria-label")));
     expect(lowKnob).toBeTruthy();
     await act(async () => fireEvent.keyDown(lowKnob, { key: "ArrowUp" }));
 
@@ -960,7 +960,7 @@ describe("Deck — integration tests across many user stories", () => {
 
       // Spin SIZE — fires the 200 ms debounce path.
       const knobs = screen.getAllByRole("slider");
-      const sizeKnob = knobs.find((k) => k.getAttribute("aria-label") === "SIZE");
+      const sizeKnob = knobs.find((k) => /\bSIZE\b/.test(k.getAttribute("aria-label")));
       await act(async () => fireEvent.keyDown(sizeKnob, { key: "ArrowUp" }));
       await act(async () => { vi.advanceTimersByTime(250); });
 
@@ -1017,7 +1017,7 @@ describe("Deck — integration tests across many user stories", () => {
 
     // User moves LOW while the drop is still running.
     const knobs = screen.getAllByRole("slider");
-    const lowKnob = knobs.find((k) => k.getAttribute("aria-label") === "LOW");
+    const lowKnob = knobs.find((k) => /\bLOW\b/.test(k.getAttribute("aria-label")));
     await act(async () => fireEvent.keyDown(lowKnob, { key: "ArrowUp" }));
 
     const after = lowShelf.gain.scheduledValues.slice(before);
@@ -1152,7 +1152,7 @@ describe("Deck — integration tests across many user stories", () => {
 
       // Spin DRIVE — fires the 200 ms debounce path.
       const knobs = screen.getAllByRole("slider");
-      const driveKnob = knobs.find((k) => k.getAttribute("aria-label") === "DRIVE");
+      const driveKnob = knobs.find((k) => /\bDRIVE\b/.test(k.getAttribute("aria-label")));
       await act(async () => fireEvent.keyDown(driveKnob, { key: "ArrowUp" }));
       await act(async () => { vi.advanceTimersByTime(250); });
 
@@ -1203,15 +1203,11 @@ describe("Deck — integration tests across many user stories", () => {
 
       // Move ONLY the MIX knob — must NOT trigger a size-debounce rebuild.
       const knobs = screen.getAllByRole("slider");
-      const mixKnob = knobs.find(
-        (k) =>
-          k.getAttribute("aria-label") === "MIX" &&
-          k.closest("div")?.textContent?.includes("Reverb") !== false
+      // Reverb, delay and distortion each have a MIX knob; the scoped
+      // accessible name picks out the reverb one unambiguously.
+      const reverbMixKnob = knobs.find(
+        (k) => k.getAttribute("aria-label") === "Reverb MIX on deck A",
       );
-      // There are multiple MIX knobs (reverb, delay, distortion); the first
-      // one is the reverb card's. Either way only the reverb-specific
-      // debounce is under test here.
-      const reverbMixKnob = mixKnob || knobs.find((k) => k.getAttribute("aria-label") === "MIX");
       await act(async () => fireEvent.keyDown(reverbMixKnob, { key: "ArrowUp" }));
       // Advance well past the 200 ms debounce — if MIX were still in the deps,
       // a duck-swap-restore would land in this window.
@@ -1347,13 +1343,13 @@ describe("Deck — integration tests across many user stories", () => {
 
       // Locate the reverb knobs by walking from SIZE up to its EffectCard.
       const knobs = screen.getAllByRole("slider");
-      const sizeKnob = knobs.find((k) => k.getAttribute("aria-label") === "SIZE");
+      const sizeKnob = knobs.find((k) => /\bSIZE\b/.test(k.getAttribute("aria-label")));
       expect(sizeKnob).toBeTruthy();
       // The reverb card hosts BOTH MIX and SIZE knobs; MIX in this card is
       // the one whose closest EffectCard ancestor contains the SIZE knob.
       const card = sizeKnob.parentElement?.parentElement?.parentElement;
       const reverbMixKnob = Array.from(card.querySelectorAll('[role="slider"]'))
-        .find((k) => k.getAttribute("aria-label") === "MIX");
+        .find((k) => /\bMIX\b/.test(k.getAttribute("aria-label")));
       expect(reverbMixKnob).toBeTruthy();
 
       // Step 1: nudge SIZE → schedules the 200 ms debounce that closes over
@@ -1422,10 +1418,10 @@ describe("Deck — integration tests across many user stories", () => {
 
       // Walk up from DRIVE to the distortion EffectCard, then pick its MIX.
       const knobs = screen.getAllByRole("slider");
-      const driveKnob = knobs.find((k) => k.getAttribute("aria-label") === "DRIVE");
+      const driveKnob = knobs.find((k) => /\bDRIVE\b/.test(k.getAttribute("aria-label")));
       const card = driveKnob.parentElement?.parentElement?.parentElement;
       const distortionMixKnob = Array.from(card.querySelectorAll('[role="slider"]'))
-        .find((k) => k.getAttribute("aria-label") === "MIX");
+        .find((k) => /\bMIX\b/.test(k.getAttribute("aria-label")));
       expect(distortionMixKnob).toBeTruthy();
 
       // Move ONLY the MIX knob — must NOT trigger the drive-debounce rebuild.
@@ -1480,7 +1476,7 @@ describe("Deck — integration tests across many user stories", () => {
 
       // Spin SIZE → schedules the 200 ms debounce; fire it.
       const knobs = screen.getAllByRole("slider");
-      const sizeKnob = knobs.find((k) => k.getAttribute("aria-label") === "SIZE");
+      const sizeKnob = knobs.find((k) => /\bSIZE\b/.test(k.getAttribute("aria-label")));
       await act(async () => fireEvent.keyDown(sizeKnob, { key: "ArrowUp" }));
       await act(async () => { vi.advanceTimersByTime(250); });
 
@@ -1540,7 +1536,7 @@ describe("Deck EQ kills — US66", () => {
     // Raise the LOW knob to +3 first so we can prove the knob doesn't move.
     const lowKnob = screen
       .getAllByRole("slider")
-      .find((k) => k.getAttribute("aria-label") === "LOW");
+      .find((k) => /\bLOW\b/.test(k.getAttribute("aria-label")));
     for (let i = 0; i < 3; i++) {
       await act(async () => fireEvent.keyDown(lowKnob, { key: "ArrowUp" }));
     }
@@ -1572,7 +1568,7 @@ describe("Deck EQ kills — US66", () => {
     );
     const highKnob = screen
       .getAllByRole("slider")
-      .find((k) => k.getAttribute("aria-label") === "HIGH");
+      .find((k) => /\bHIGH\b/.test(k.getAttribute("aria-label")));
     for (let i = 0; i < 5; i++) {
       await act(async () => fireEvent.keyDown(highKnob, { key: "ArrowUp" }));
     }
@@ -1604,7 +1600,7 @@ describe("Deck EQ kills — US66", () => {
 
     const midKnob = screen
       .getAllByRole("slider")
-      .find((k) => k.getAttribute("aria-label") === "MID");
+      .find((k) => /\bMID\b/.test(k.getAttribute("aria-label")));
     await act(async () => fireEvent.keyDown(midKnob, { key: "ArrowUp" }));
 
     // The knob moved, but the effective scheduled gain stays at the floor.
