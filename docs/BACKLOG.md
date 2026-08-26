@@ -396,6 +396,130 @@ generalized deck array once, not twice; spike-gated last). Commit per
 ticket, one push, one PR at the end.
 
 
+## Wave 5 — field research batch (planned 2026-08-15)
+
+> Origin: first real desktop field test (owner) + a research sweep of what DJs
+> using Mixxx / Serato / rekordbox / browser apps (Transitions DJ, YouDJ)
+> consistently expect: pre-listen cueing, bar-length loops, beat jump,
+> auto-gain, an overview waveform, key shift, and session recall. Sources:
+> Mixxx community wishlist + forums, Digital DJ Tips / Crossfader technique
+> guides (hot cues, loops), Serato preference docs (auto gain, key lock),
+> browser-app reviews (Transitions DJ, YouDJ complaint threads), MDN
+> `AudioContext.setSinkId` for output routing. Ranked by expected use.
+
+### W5.1 — Session continuity (owner-requested) · Size L · `TODO`
+Close the app, reopen it, continue where you left off — opt-in.
+**Design constraint — the privacy promise stays intact.** The Danger Zone rule
+is "user audio is never persisted"; continuity must NOT quietly become "we
+write your tracks to disk". Split the state into:
+- **Config/session state** (deck assigns, knob/EQ/effect values, crossfader +
+  curve, themes, cues, bite regions, loop states, BPM/key overrides, crate
+  *metadata*, focused deck): serialize to IndexedDB on change (debounced) via
+  a versioned schema — an extension of the settings.js format. No audio bytes.
+- **The tracks themselves**: re-acquired, not persisted. Browser build: store
+  File System Access API handles in IndexedDB; on relaunch ask permission and
+  re-read the same files (Chromium). Where handles are unavailable (single-file
+  build from file://), fall back to a "re-pick these files" restore list that
+  names what was loaded where. Desktop build: file paths via a tiny preload
+  bridge, same re-read-on-launch model.
+- Restore prompt on boot ("Resume last session? · start fresh"), never
+  automatic; "start fresh" wipes stored state. A kill switch in MasterBus
+  ("forget session on exit").
+Acceptance: reload restores deck A/B/C tracks (or their re-pick list), knob
+positions, cues, bite regions, crossfader, themes; declining leaves a clean
+boot; audio bytes never appear in IndexedDB (test asserts only metadata keys);
+settings export/import unchanged.
+
+### W5.2 — Headphone pre-listen / cue (PFL) · Size L · `TODO`
+The most-expected missing DJ feature, full stop: audition the next track in
+headphones while the room hears the master. Two modes, detected at runtime:
+- **Two-device mode** (Chromium + desktop): a second `AudioContext` bound to a
+  user-picked output via `AudioContext.setSinkId({deviceId})`; per-deck CUE
+  buttons tap the deck pre-fader into the cue context; a CUE/MASTER blend knob.
+- **Split-cue fallback** (everything else): mono-sum master → L, mono cue → R
+  on the single output, for splitter cables — same trick djay uses.
+Enumerate outputs with `mediaDevices.enumerateDevices()` (labels need the mic
+permission the VOX panel already handles). Desktop shell: `media` permission
+already granted; verify device enumeration works under Electron.
+Acceptance: CUE button per deck (census-scoped labels), device picker listing
+outputs, blend control, split-cue fallback selectable, zero cue→record bleed
+(the record tap must stay pre-cue), all state in the census manifest.
+
+### W5.3 — Bar loops (loop IN/OUT + auto 1/2/4/8-beat) · Size M · `TODO`
+Today "LOOP" loops the whole track and ROLL is momentary. DJs expect a
+*persistent* bar-length loop: an AUTO row (1/2/4/8 beats at the effective BPM,
+click to engage/disengage, arrows to halve/double) plus manual IN/OUT set from
+the playhead (reuse the BITE region UX — same two-button pattern). Engaged
+loop shows on the waveform (the BITE overlay already draws regions). Roll
+stays as-is (momentary, timeline runs underneath); this is the sustained kind.
+Acceptance: engage/disengage without clicks at boundaries (`loopStart/loopEnd`
+on the source node, not manual seeking), halve/double works while engaged,
+loop survives pause/resume, cleared on eject, census + process-e2e coverage.
+
+### W5.4 — Beat jump · Size S · `TODO`
+Jump ±4/8/16 beats (at effective BPM) with two buttons + a length select per
+deck — the "recover from a bad drop / line up a phrase" tool every modern
+player has. Pure seek math on existing `seekTo`; keeps play state.
+Acceptance: jump lands exactly N×(60/BPM)s away, clamped to track bounds,
+works during KEYLOCK and while a bar loop is engaged (jump moves the loop),
+census labels per deck.
+
+### W5.5 — Auto-gain / loudness match · Size M · `TODO`
+Serato-style: compute perceived loudness per track at decode (RMS/K-weighted
+approximation over the decoded buffer — no network, no tags needed), store a
+makeup gain toward a −14 LUFS-ish reference, apply as a dedicated gain stage
+before the deck fader with a small trim knob + "AUTO" indicator. Kills the
+"every track needs the volume ridden" complaint; makes SYNC-based blends land
+at matched level.
+Acceptance: two test buffers at different RMS come out within ~1 dB through
+the chain; trim knob overrides; disabled per deck; census coverage.
+
+### W5.6 — Overview waveform strip · Size M · `TODO`
+A whole-track minimap under the live waveform: rendered once at decode
+(min/max peaks), playhead, cue markers, bite region, loop region, click to
+seek (same seek contract as the main canvas, one `role="slider"` with a
+scoped name). This is the "where am I in the song" answer every player ships.
+Acceptance: renders within a frame budget for a 10-min track (pre-computed
+peaks, no per-frame recompute), updates markers live, keyboard seek parity,
+census + WaveformCanvas-style tests.
+
+### W5.7 — Key shift / semitone pitch · Size M · `TODO`
+The stretch worklet already has an unused `pitchRatio` param (W3.1 built it).
+Expose ±6 semitone KEY buttons per deck (KEYLOCK mode only): pitch moves,
+tempo doesn't — the harmonic-mixing counterpart to KEYLOCK, and it updates the
+Camelot suggestion (+1 semitone = +7 on the wheel? no — recompute detected key
+display with the shift applied). VARI mode: buttons disabled with a tooltip.
+Acceptance: `semitonesToRatio` drives `pitchRatio`, detected-key display and
+TheoryPanel highlight follow the shift, reset-to-0 control, census coverage.
+
+### W5.8 — Vinyl brake / spin-up · Size S · `TODO`
+A crowd-pleaser and a Mixxx-forum perennial: BRAKE ramps `playbackRate` to 0
+over ~0.3–1 s on pause/stop (scheduled ramp, never `setTimeout`), SPIN-UP does
+the reverse on play. One toggle in the transport row ("vinyl stop mode") + a
+duration knob shared per deck. KEYLOCK: brake through the worklet `rate` param.
+Acceptance: ramp is scheduled (`linearRampToValueAtTime`/`setValueCurveAtTime`),
+interruptible (play during brake spins back up from the current rate), off by
+default, census coverage.
+
+### W5.9 — Crate set-building niceties · Size S · `TODO`
+From Mixxx library complaints + Transitions DJ reviews: drag-to-reorder crate
+rows, per-row duration, a running total set time, and a text filter box.
+In-memory only (crate stays session-scoped unless W5.1 lands; then its
+*metadata* persists like everything else).
+Acceptance: reorder via drag + keyboard (census needs addressable handles),
+total updates on add/remove, filter narrows without losing entries.
+
+### W5.10 — Beatgrid + quantize (spike first) · Size XL · `SPIKE`
+The foundation the pros lean on: a per-track beat *grid* (not just a BPM
+number) so cues, loop engage, roll, and SYNC snap to the beat. The
+autocorrelation detector gives period but not phase; the spike is: estimate
+downbeat phase (onset energy alignment), store grid as (bpm, firstBeatOffset),
+draw grid ticks on the waveforms, and quantize cue-set/loop-engage to nearest
+beat behind a QUANT toggle. If phase detection proves unreliable on real
+music, ship manual grid nudge (tap the 1) instead of auto. Everything in
+W5.3/W5.4 is written to *use* the grid when present and effective-BPM math
+when not, so this can land later without rework.
+
 ## Session operating notes (2026-08-09 — durable context for future sessions)
 
 How this repo is being driven; follow these unless the owner says otherwise.

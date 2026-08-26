@@ -954,6 +954,37 @@ const Deck = forwardRef(function Deck(
     [stopAndDisconnectSource, onKeyDetected]
   );
 
+  // W4.3 — eject: return the deck to its empty state so a fresh track can be
+  // loaded (or the deck simply cleared mid-set). Same reset surface as
+  // adoptBuffer, with no new buffer behind it. Mixer state (EQ, effects,
+  // volume, assign) deliberately survives — ejecting a record doesn't reset
+  // the channel strip on a real mixer either.
+  const ejectTrack = useCallback(() => {
+    stopAndDisconnectSource();
+    isPlayingRef.current = false;
+    setIsPlaying(false);
+    clearInterval(timeIntervalRef.current);
+
+    bufferRef.current = null;
+    stretchLoadedBufferRef.current = null;
+    setLoadError(null);
+    setFileName(null);
+    setDuration(0);
+    durationRef.current = 0;
+    setCurrentTime(0);
+    currentTimeRef.current = 0;
+    offsetRef.current = 0;
+    setCues([]);
+    cuesRef.current = [];
+    setBpmConfidence(null);
+    setDetectedKey(null);
+    onKeyDetected?.(null);
+    try { bitePreviewSourceRef.current?.stop(); } catch {}
+    bitePreviewSourceRef.current = null;
+    setBitePreviewing(false);
+    setBite({ in: null, out: null });
+  }, [stopAndDisconnectSource, onKeyDetected]);
+
   // Load this deck from a pre-decoded AudioBuffer (crate quick-load, W1.5).
   // Builds the deck chain if needed, then adopts the buffer — no re-decode.
   const loadBuffer = useCallback(
@@ -1876,46 +1907,76 @@ const Deck = forwardRef(function Deck(
         onChange={handleFile}
         style={{ display: "none" }}
       />
-      <button
-        type="button"
-        onClick={() => fileInputRef.current?.click()}
-        // X2 (R21) — once a file is loaded the button's visible text becomes
-        // just the filename, leaving the accessible name without a verb.
-        // Override with an action-shaped aria-label so screen-reader users
-        // hear what the button *does* (load / replace) and which deck it's
-        // for, instead of just hearing the bare track filename.
-        aria-label={
-          fileName
-            ? `Loaded: ${fileName} — click to replace (Deck ${id})`
-            : `Load audio for Deck ${id}`
-        }
-        style={{
-          background: fileName ? `${color}11` : `${color}18`,
-          border: `1px dashed ${color}44`,
-          borderRadius: 10,
-          padding: "10px 12px",
-          minHeight: 38,
-          color: fileName ? "#ccd6f6" : "#8892b0",
-          fontSize: 12,
-          cursor: "pointer",
-          fontFamily: "'Exo 2', sans-serif",
-          display: "flex",
-          alignItems: "center",
-          justifyContent: deckSide === "left" ? "flex-start" : "flex-end",
-          gap: 8,
-        }}
-      >
-        {fileName ? (
-          <>
-            <Icon name="music" size={13} color={color} />
-            <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
-              {fileName}
-            </span>
-          </>
-        ) : (
-          `Drop audio here or click to load — Deck ${id}`
-        )}
-      </button>
+      <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
+        <button
+          type="button"
+          onClick={() => fileInputRef.current?.click()}
+          // X2 (R21) — once a file is loaded the button's visible text becomes
+          // just the filename, leaving the accessible name without a verb.
+          // Override with an action-shaped aria-label so screen-reader users
+          // hear what the button *does* (load / replace) and which deck it's
+          // for, instead of just hearing the bare track filename.
+          aria-label={
+            fileName
+              ? `Loaded: ${fileName} — click to replace (Deck ${id})`
+              : `Load audio for Deck ${id}`
+          }
+          style={{
+            flex: 1,
+            minWidth: 0,
+            background: fileName ? `${color}11` : `${color}18`,
+            border: `1px dashed ${color}44`,
+            borderRadius: 10,
+            padding: "10px 12px",
+            minHeight: 38,
+            color: fileName ? "#ccd6f6" : "#8892b0",
+            fontSize: 12,
+            cursor: "pointer",
+            fontFamily: "'Exo 2', sans-serif",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: deckSide === "left" ? "flex-start" : "flex-end",
+            gap: 8,
+          }}
+        >
+          {fileName ? (
+            <>
+              <Icon name="music" size={13} color={color} />
+              <span style={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+                {fileName}
+              </span>
+            </>
+          ) : (
+            `Drop audio here or click to load — Deck ${id}`
+          )}
+        </button>
+        {/* W4.3 — eject. Always rendered (disabled when empty) so it is
+            discoverable and the census sees it without a conditional state. */}
+        <button
+          type="button"
+          onClick={ejectTrack}
+          disabled={!fileName}
+          aria-label={`Eject the track from deck ${id}`}
+          title={fileName ? "Clear this deck" : "Nothing loaded"}
+          className="wc-btn-hover"
+          style={{
+            background: "rgba(255,255,255,0.04)",
+            border: `1px solid ${fileName ? `${color}55` : "rgba(136,146,176,0.25)"}`,
+            borderRadius: 10,
+            minHeight: 38,
+            minWidth: 44,
+            padding: "0 10px",
+            color: fileName ? color : "#4a5372",
+            fontSize: 10,
+            letterSpacing: 1,
+            cursor: fileName ? "pointer" : "default",
+            fontFamily: "'Exo 2', sans-serif",
+            textTransform: "uppercase",
+          }}
+        >
+          Eject
+        </button>
+      </div>
 
       {loadError && (
         // Keyed by error id so a repeated identical error re-announces:
