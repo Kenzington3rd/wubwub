@@ -1,0 +1,64 @@
+# Real-browser end-to-end tests.
+#
+# The Vitest suite (`npm test`) runs in happy-dom with Web Audio mocked. That is
+# the right trade for speed and for full interaction coverage, but it means an
+# entire class of defect is invisible to it: anything that only fails against a
+# real audio implementation, a real canvas, or the `file://` origin the
+# single-file build actually ships on.
+#
+# This workflow drives the REAL artifact in REAL Chromium. It runs on PRs that
+# touch the app, the browser specs, or the build — not on docs-only changes.
+name: Browser tests
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ["docs/**", "**/*.md"]
+  pull_request:
+    paths:
+      - "src/**"
+      - "test-browser/**"
+      - "index.html"
+      - "vite.config.js"
+      - "playwright.config.js"
+      - "package.json"
+      - ".github/workflows/browser.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: browser-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install
+        # Electron's ~100 MB binary is irrelevant here.
+        run: npm ci
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: 1
+
+      - name: Install Chromium for Playwright
+        run: npx playwright install --with-deps chromium
+
+      - name: Build the artifact under test
+        run: npm run build:single
+
+      - name: Run browser tests
+        run: npx playwright test
+
+      - name: Upload report on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7

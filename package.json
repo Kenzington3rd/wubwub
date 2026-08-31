@@ -12,6 +12,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:browser": "npm run build:single && playwright test",
+    "test:browser:ui": "playwright test --ui",
     "verify:build": "vite build && vitest run test/build.test.js test/csp.test.js",
     "verify:single": "vite build --mode single --outDir dist-single && vitest run test/build-single.test.js",
     "verify:all": "npm run verify:build && npm run verify:single && npm test",
@@ -24,6 +26,7 @@
     "react-dom": "^18.3.1"
   },
   "devDependencies": {
+    "@playwright/test": "^1.62.1",
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",

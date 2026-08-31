@@ -153,6 +153,52 @@ Consequences for new work:
   way to its end state, including its negative case (the operation attempted
   when it should be inert).
 
+## WC-REAL — two test layers, and what each one can prove
+
+The suite is deliberately split, because the fast layer has a blind spot that
+no amount of adding to it can close.
+
+| Layer | Command | Environment | Proves |
+|---|---|---|---|
+| Vitest | `npm test` | happy-dom, **Web Audio mocked** (`test/mocks/webAudioMock.js`) | component logic, full interaction coverage (WC-COVER), process wiring |
+| Playwright | `npm run test:browser` | **real Chromium**, real Web Audio, real canvas, `file://` | that the shipped artifact actually works |
+
+**The blind spot:** every `AudioContext`, `decodeAudioData` and filter node in
+the Vitest suite is a fake. That is the right trade — the mock is what makes
+560-odd tests run in seconds — but it means those tests cannot detect anything
+that only fails against a real audio implementation. They never once executed
+a real decode.
+
+So `test-browser/` covers exactly what the mock cannot:
+
+- the single-file build **boots from `file://` with no console errors**
+- a real `AudioContext` exposes every node type the signal chain needs
+- real `decodeAudioData` returns the **bar-exact** duration (drift here is what
+  breaks seamless looping)
+- load → play **paints the waveform**, proving signal reaches the analyser —
+  not merely that a boolean flipped
+- the BPM detector against fixtures whose tempo is **known by construction**
+- the v1.3.2 field fixes (EJECT, the stray-drop navigation guard)
+- **no network requests at all**, asserted on the running app rather than from
+  source like `test/csp.test.js`
+
+Rules for this layer:
+
+- **Fixtures are generated, never committed.** `test-browser/fixtures.mjs`
+  synthesizes WAVs in-process, so a fixture's BPM is known rather than measured
+  and no binary enters git.
+- **Scope selectors to the deck region.** Several numbers on the page look like
+  a tempo; a page-wide regex once "found" 63 BPM on a 126 BPM track — a value
+  outside the detector's own 70–180 range, so it could never have been a real
+  reading. Use `getByRole("region", { name: /^Deck A/ })`.
+- **The deck's file input is not the first one on the page** — the settings
+  importer comes earlier in DOM order. Scope to the deck or you feed audio to
+  the JSON importer.
+- **Attach console listeners before navigating** (see `test-browser/fixture.js`),
+  or boot-time errors go unseen.
+- **A new browser test must be shown to fail** when the behavior it guards is
+  broken. The drop-guard and EJECT tests were both verified this way.
+
 ## WC-PREC — WAVECRAFT rule precedence
 
 > **Scope: this project only.** `WC-PREC` is WAVECRAFT/wubwub's own precedence

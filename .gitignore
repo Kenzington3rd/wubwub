@@ -10,3 +10,14 @@ Thumbs.db
 *.log
 .env
 .env.local
+
+# Playwright output
+/test-results/
+/playwright-report/
+/blob-report/
+
+# Rendered sample packs — regenerate with tools/samplepacks/*.py, published
+# as Release assets by .github/workflows/samplepacks.yml. Never committed:
+# the generators are the source of truth and the audio is large.
+tools/samplepacks/pack/
+tools/samplepacks/vol2/
