@@ -1,0 +1,90 @@
+# Renders WAVECRAFT's royalty-free sample packs from their generator scripts
+# and publishes them as GitHub Release assets.
+#
+# The audio is large and fully reproducible, so it is NOT committed — only the
+# ~50 KB of generator source in tools/samplepacks/ lives in git. This workflow
+# is what turns that source into downloadable packs:
+#
+#   wavecraft-foundation-kit.zip  — 22 loops + one-shots, all in A minor (8A)
+#   wavecraft-club-collection.zip — 12 structured tracks across 12 Camelot keys
+#
+# Manual-only: rendering takes several minutes of CPU and the packs rarely
+# change, so this never runs on ordinary pushes.
+name: Sample packs
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish the packs under (e.g. samples-v1)"
+        required: true
+        default: samples-v1
+
+permissions:
+  contents: write
+
+jobs:
+  render:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install DSP deps
+        run: pip install --quiet numpy scipy soundfile
+
+      - name: Render both packs
+        run: |
+          python tools/samplepacks/foundation_kit.py
+          python tools/samplepacks/club_collection.py
+
+      - name: Verify the render is sane
+        # Guards against a silent generator regression shipping dead audio:
+        # every file must exist, be non-trivial, and carry real signal.
+        run: |
+          python - <<'PY'
+          import soundfile as sf, numpy as np, os, sys, glob
+          roots = ["tools/samplepacks/pack", "tools/samplepacks/vol2"]
+          files = [f for r in roots for f in glob.glob(f"{r}/*") if f.endswith((".wav", ".flac"))]
+          assert len(files) >= 30, f"expected >=30 rendered files, got {len(files)}"
+          bad = []
+          for f in files:
+              x, sr = sf.read(f)
+              rms = 20 * np.log10(np.sqrt((x ** 2).mean()) + 1e-12)
+              peak = 20 * np.log10(np.max(np.abs(x)) + 1e-12)
+              if rms < -45:  bad.append(f"{f}: near-silent ({rms:.1f} dB)")
+              if peak > -0.5: bad.append(f"{f}: clipping risk ({peak:.1f} dBFS)")
+          if bad:
+              print("\n".join(bad)); sys.exit(1)
+          print(f"OK — {len(files)} files rendered and verified")
+          PY
+
+      - name: Package
+        run: |
+          cp tools/samplepacks/README.md tools/samplepacks/pack/README.txt
+          cp tools/samplepacks/README.md tools/samplepacks/vol2/README.txt
+          (cd tools/samplepacks/pack && zip -qr ../../../wavecraft-foundation-kit.zip .)
+          (cd tools/samplepacks/vol2 && zip -qr ../../../wavecraft-club-collection.zip .)
+          ls -lh wavecraft-*.zip
+
+      - name: Publish to a Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ github.event.inputs.tag }}
+        run: |
+          # Re-runnable: update the assets on an existing tag rather than failing.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" wavecraft-*.zip --clobber
+          else
+            gh release create "$TAG" wavecraft-*.zip \
+              --title "WAVECRAFT sample packs" \
+              --notes "Royalty-free sample packs, synthesized from scratch — no recordings sampled, no licensing strings.
+
+          - **wavecraft-foundation-kit.zip** — 10 bar-exact loops (house, techno, acid, trance, DnB, dubstep, hardstyle, plus a build, a riser and a sub drone) and 12 one-shots (909 kit, 808 and hardstyle kicks, hoover stab, organ stab, FX). Everything in A minor (Camelot 8A), so it all inter-mixes.
+          - **wavecraft-club-collection.zip** — 12 structured tracks, one per genre, spread across 12 Camelot keys for harmonic-mixing practice. Every key independently verified by blind detection; every track mastered to the same loudness.
+
+          Unzip, select all, drag onto WAVECRAFT's CRATE. Regenerate them yourself any time from \`tools/samplepacks/\`."
+          fi
