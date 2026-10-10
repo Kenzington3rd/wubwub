@@ -11,7 +11,10 @@ ever leaves your device.
    drag an audio file straight onto the deck. Supported: MP3, WAV, OGG, FLAC,
    M4A, AAC.
    To switch tracks, either click the loaded filename to replace it, or press
-   **EJECT** next to it to clear the deck back to empty.
+   **EJECT** next to it to clear the deck back to empty. After EJECT, keyboard
+   focus moves to that deck's load button so you can Tab on from where you
+   were. Dropping a file anywhere other than a deck, the crate or a pad does
+   nothing (the cursor shows no-drop).
 3. Press **Play**. Do the same on **Deck B** with a second track.
 4. Drag the **crossfader** between the decks to blend them.
 
@@ -159,7 +162,9 @@ Four slots. Pick a bar count (4 / 8 / 16); **Capture** grabs a fixed-length
 window of whatever is playing on the master bus, sized from bars × BPM at the
 moment you press it. Because it's a BPM snapshot, the captured loop won't be
 exactly N bars if the tempo drifts afterward. Click **Capture**, then **Play**
-to loop it. The volume slider sets the loop's level.
+to loop it. While a capture is running that slot's button shows "…" and
+ignores further presses; the rest of the looper stays usable. The volume
+slider sets the loop's level.
 
 ## Sample pad
 

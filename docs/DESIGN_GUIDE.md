@@ -146,6 +146,12 @@ and STYLE_GUIDE.md (code).
 Every interactive control defines: **default, hover, active/engaged, disabled.**
 
 - Disabled: `opacity: 0.4–0.5`, `cursor: not-allowed`, dimmed color.
+- Busy (a control that is inert only while its own action runs, e.g. a loop
+  Capture in flight): stays **enabled** with `aria-disabled="true"`, dimmed
+  fill and border, `cursor: not-allowed`, accessible name and `title` that
+  say what is happening ("Capturing loop 1…"), **no** opacity change — opacity
+  would fade the focus ring on the control the keyboard user just pressed,
+  and `disabled` would drop focus to `<body>`.
 - Engaged (e.g. loop on, effect on, deck focused): accent background tint +
   accent border + glow.
 - Empty state: dashed accent border + a CTA ("Drop audio here or click to load").

@@ -14,6 +14,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { render, screen, fireEvent, act, waitFor } from "@testing-library/react";
 import App from "../src/App.jsx";
+import { deckFileInput } from "./helpers/deck.js";
 
 // ── Download interception ──────────────────────────────────────────────────
 // downloadBlob() creates an <a download>, clicks it, and revokes the URL.
@@ -63,16 +64,6 @@ afterEach(() => {
 // ── Helpers ────────────────────────────────────────────────────────────────
 function audioFile(name) {
   return new File([new Uint8Array([0, 1, 2, 3])], name, { type: "audio/mpeg" });
-}
-
-// The deck card is a `role="region"` landmark named "Deck <id>", so its
-// hidden file input is one query away — no DOM-walking needed, and the
-// settings importer (an earlier file input in DOM order) can't be grabbed
-// by mistake.
-export function deckFileInput(id) {
-  return screen
-    .getByRole("region", { name: new RegExp(`^Deck ${id}`) })
-    .querySelector('input[type="file"]');
 }
 
 async function loadDeck(id, name = `${id}.mp3`) {

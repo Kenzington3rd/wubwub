@@ -19,6 +19,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import { render, screen, fireEvent, act, within } from "@testing-library/react";
 import App from "../src/App.jsx";
+import { deckFileInput } from "./helpers/deck.js";
 
 // Every element a user can operate. `[tabindex]` catches the custom Knob and
 // the waveform canvas, which are divs/canvases with slider semantics.
@@ -66,10 +67,7 @@ function audioFile(name = "track.mp3") {
 
 async function loadAllDecks() {
   for (const id of ["A", "B", "C"]) {
-    // The deck card is a role="region" landmark — one query, no DOM walking.
-    const input = screen
-      .getByRole("region", { name: new RegExp(`^Deck ${id}`) })
-      .querySelector('input[type="file"]');
+    const input = deckFileInput(id);
     if (!input) continue;
     await act(async () => {
       fireEvent.change(input, { target: { files: [audioFile(`${id}.mp3`)] } });
@@ -305,6 +303,65 @@ describe("interaction census — every button survives being clicked — US75", 
     expect(failures).toEqual([]);
     // The app is still mounted and still interactive after ~400 clicks.
     expect(screen.getByRole("slider", { name: /Crossfade A to B/i })).toBeTruthy();
+  });
+});
+
+// ── Focus management ───────────────────────────────────────────────────────
+//
+// The v1.3.2 EJECT button disabled itself on click and let keyboard focus fall
+// to <body>, so a keyboard user's next Tab restarted from the top of the page.
+// That was pinned for EJECT alone in Playwright; this makes it a CLASS rule:
+// after ANY button is activated from the keyboard, focus must still rest on a
+// connected, enabled control inside the app. happy-dom does not move focus to
+// <body> the way a browser does when the focused element disables itself, so
+// the check is phrased as "where focus sits must be usable" — a disabled or
+// detached activeElement fails here just as <body> would in Chromium.
+//
+// Buttons that legitimately open a native dialog (file pickers) are included:
+// the picker is modal and returns focus to the opener, so the opener must
+// still be a valid resting place.
+function focusIsUsable() {
+  const el = document.activeElement;
+  if (!el || el === document.body || el === document.documentElement) return "focus fell to <body>";
+  if (!el.isConnected) return "focus rests on a detached element";
+  if (el.matches?.(":disabled") || el.disabled) return `focus rests on a disabled control (${label(el)})`;
+  if (!el.matches?.(INTERACTIVE)) return `focus rests on a non-interactive element <${el.tagName.toLowerCase()}>`;
+  return null;
+}
+
+describe("interaction census — keyboard focus never strands — US75", () => {
+  it("@us US75: activating any button from the keyboard leaves focus on a usable control", async () => {
+    await renderFullApp();
+    const buttons = screen.queryAllByRole("button").filter((b) => !b.disabled);
+    expect(buttons.length).toBeGreaterThan(150);
+
+    const failures = [];
+    for (const btn of buttons) {
+      if (!btn.isConnected || btn.disabled) continue;
+      const name = label(btn);
+      await act(async () => {
+        btn.focus();
+        // Keyboard activation = Enter/Space → click on a <button>.
+        fireEvent.keyDown(btn, { key: "Enter" });
+        fireEvent.click(btn);
+        fireEvent.keyUp(btn, { key: "Enter" });
+      });
+      const problem = focusIsUsable();
+      if (problem) failures.push(`${name}: ${problem}`);
+    }
+    expect(failures).toEqual([]);
+  });
+
+  it("@us US75: EJECT on every deck hands focus to that deck's load button", async () => {
+    // The concrete instance the class rule grew out of, kept explicit so a
+    // regression names the deck rather than a 400-item diff.
+    await renderFullApp();
+    for (const d of ["A", "B", "C"]) {
+      const eject = screen.getByRole("button", { name: new RegExp(`^Eject the track from deck ${d}$`, "i") });
+      await act(async () => { eject.focus(); fireEvent.click(eject); });
+      expect(eject).toBeDisabled();
+      expect(label(document.activeElement)).toMatch(new RegExp(`^Load audio for Deck ${d}$`, "i"));
+    }
   });
 });
 

@@ -734,6 +734,10 @@ const Deck = forwardRef(function Deck(
       if (stretchNodeRef.current) return stretchNodeRef.current;
       const ok = await ensureStretchModule(ctx);
       if (!ok) return null;
+      // Two seeks can overlap the first (slow) module registration. Whoever
+      // resolves second must reuse the node the first one built — a second
+      // node would stay connected to the chain and play the track twice.
+      if (stretchNodeRef.current) return stretchNodeRef.current;
       let node;
       try {
         node = new AudioWorkletNode(ctx, "stretch-processor", {
@@ -820,6 +824,11 @@ const Deck = forwardRef(function Deck(
 
       const ctx = await ensureMasterCtx();
       const chain = await buildChain();
+      // The track may have been ejected or replaced while we awaited. Acting
+      // on the stale `buffer` would start a source for audio the deck no
+      // longer holds (or post `play` to a worklet that was just emptied) and
+      // leave an empty deck reading as "playing".
+      if (bufferRef.current !== buffer) return;
 
       stopAndDisconnectSource();
       offsetRef.current = target;
@@ -836,6 +845,9 @@ const Deck = forwardRef(function Deck(
       // ── W3.1 — KEYLOCK branch: stream through the stretch worklet ──
       if (playModeRef.current === "keylock") {
         const node = await ensureStretchNode(ctx, chain);
+        // First KEYLOCK engagement registers the worklet module — a real
+        // await of tens to hundreds of ms. Same eject/replace race as above.
+        if (bufferRef.current !== buffer) return;
         if (node) {
           postBufferToStretch(node);
           updateStretchRate();
@@ -920,12 +932,10 @@ const Deck = forwardRef(function Deck(
   );
 
   // ─── File loading ───
-  // Adopt an already-decoded AudioBuffer as this deck's track. Shared by the
-  // File-decode path (loadFile) and the crate quick-load path (loadBuffer):
-  // it resets transport, cues and detected metadata for the new track. It
-  // does NOT decode and never touches the network.
-  // One reset surface for "the track behind this deck changed". Both loading
-  // a new track and ejecting the current one must clear exactly the same
+  // One reset surface for "the track behind this deck changed". Loading a
+  // new track (file decode via loadFile, crate quick-load via loadBuffer —
+  // both already-decoded AudioBuffers; nothing here decodes or touches the
+  // network) and ejecting the current one must clear exactly the same
   // per-track state; keeping them as one function means a field added here
   // can never be reset on load but forgotten on eject (or vice versa).
   // Mixer state (EQ, effects, volume, assign) deliberately survives — a real
@@ -963,10 +973,7 @@ const Deck = forwardRef(function Deck(
     [stopAndDisconnectSource, onKeyDetected, stopBitePreview]
   );
 
-  const adoptBuffer = useCallback(
-    (audioBuf, name) => resetTrack(audioBuf, name),
-    [resetTrack]
-  );
+  const adoptBuffer = resetTrack;
 
   // W4.3 — eject: return the deck to its empty state so a fresh track can be
   // loaded (or the deck simply cleared mid-set).
@@ -1967,10 +1974,14 @@ const Deck = forwardRef(function Deck(
             minHeight: 38,
             minWidth: 44,
             padding: "0 10px",
-            color: fileName ? color : "#4a5372",
+            // Disabled idiom shared with the transport row: text-muted at
+            // 0.6 opacity (keeps #8892b0 above 3:1), never an off-palette hue
+            // (BRANDING_GUIDE §3).
+            color: fileName ? color : "#8892b0",
+            opacity: fileName ? 1 : 0.6,
             fontSize: 10,
             letterSpacing: 1,
-            cursor: fileName ? "pointer" : "default",
+            cursor: fileName ? "pointer" : "not-allowed",
             fontFamily: "'Exo 2', sans-serif",
             textTransform: "uppercase",
           }}

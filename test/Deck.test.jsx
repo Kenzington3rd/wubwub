@@ -1977,3 +1977,277 @@ describe("Deck KEYLOCK mode — US73", () => {
     expect(api.deckRef.current.isPlaying()).toBe(true);
   });
 });
+
+// ─── W3.1 — KEYLOCK worklet lifecycle across every transport path (US73) ───
+//
+// The mock worklet node now mirrors the processor's own transport state
+// machine (see MockAudioWorkletNode.state), so these tests assert what the
+// worklet would actually be HOLDING and DOING after each transport action —
+// the eject leak in v1.3.2 was invisible to tests that only checked "a
+// message was sent".
+describe("Deck KEYLOCK — worklet state follows every transport path — US73", () => {
+  const sr = 11025;
+  const findStretchNode = (ctx) =>
+    ctx._nodes.find((n) => n.nodeType === "AudioWorkletNode" && n.name === "stretch-processor");
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  async function keylockDeck({ loop = false } = {}) {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const buf = new MockAudioBuffer(2, sr * 10, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+    if (!loop) {
+      // Loop defaults on; turn it off for the end-of-track cases.
+      await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Loop deck A$/i })); });
+    }
+    await act(async () => { await api.deckRef.current.play(); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set deck A playback mode to keylock/i }));
+      await tick();
+    });
+    const node = findStretchNode(api.audioCtxRef.current);
+    expect(node).toBeTruthy();
+    expect(node.state.channels?.length).toBe(2);
+    expect(node.state.playing).toBe(true);
+    return { api, node, buf };
+  }
+
+  // Invariant shared by every case below: the worklet is never told to play
+  // while it holds no audio. (A "play" after a null "load" would read silence
+  // from a dead buffer in the real processor.)
+  function assertNeverPlaysEmpty(node) {
+    let channels = null;
+    for (const m of node.port.postedMessages) {
+      if (m.type === "load") channels = m.channels || null;
+      if (m.type === "play") expect(channels, "play posted while worklet holds no channels").not.toBeNull();
+    }
+  }
+
+  it("@us US73: pause stops the worklet stream and starts no BufferSource", async () => {
+    const { api, node } = await keylockDeck();
+    const startedBefore = api.audioCtxRef.current._nodes.filter((n) => n.nodeType === "AudioBufferSourceNode" && n.started).length;
+    await act(async () => { api.deckRef.current.pause(); });
+    expect(node.state.playing).toBe(false);
+    expect(api.deckRef.current.isPlaying()).toBe(false);
+    const startedAfter = api.audioCtxRef.current._nodes.filter((n) => n.nodeType === "AudioBufferSourceNode" && n.started).length;
+    expect(startedAfter).toBe(startedBefore);
+    assertNeverPlaysEmpty(node);
+  });
+
+  it("@us US73: stop rewinds — the next play re-enters the worklet from 0", async () => {
+    const { api, node } = await keylockDeck();
+    await act(async () => { api.deckRef.current.seekTo(4); });
+    expect(node.state.offset).toBeCloseTo(4, 1);
+    await act(async () => { api.deckRef.current.stop(); });
+    expect(node.state.playing).toBe(false);
+    await act(async () => { await api.deckRef.current.play(); await tick(); });
+    expect(node.state.playing).toBe(true);
+    expect(node.state.offset).toBeCloseTo(0, 2);
+    assertNeverPlaysEmpty(node);
+  });
+
+  it("@us US73: seek while playing re-targets the worklet in place, no BufferSource", async () => {
+    const { api, node } = await keylockDeck();
+    const before = api.audioCtxRef.current._lastStartedSource;
+    await act(async () => { api.deckRef.current.seekTo(6.5); await tick(); });
+    expect(node.state.playing).toBe(true);
+    expect(node.state.offset).toBeCloseTo(6.5, 1);
+    expect(api.audioCtxRef.current._lastStartedSource).toBe(before);
+    // Channels were NOT re-posted for a seek on the same track.
+    expect(node.port.postedMessages.filter((m) => m.type === "load").length).toBe(1);
+    assertNeverPlaysEmpty(node);
+  });
+
+  it("@us US73: EJECT in KEYLOCK empties the worklet — no resident channels, not playing", async () => {
+    const { node } = await keylockDeck();
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Eject the track from deck A/i })); });
+    expect(node.state.channels).toBeNull();
+    expect(node.state.playing).toBe(false);
+    assertNeverPlaysEmpty(node);
+  });
+
+  it("@us US73: loading a new track in KEYLOCK replaces the worklet's channels and plays the NEW audio from 0", async () => {
+    const { api, node } = await keylockDeck();
+    const next = new MockAudioBuffer(1, 22050 * 3, 22050);
+    await act(async () => { await api.deckRef.current.loadBuffer(next, "next.wav"); });
+    // Load is a transport stop: the deck comes up paused on the new track.
+    expect(node.state.playing).toBe(false);
+    await act(async () => { await api.deckRef.current.play(); await tick(); });
+    expect(node.state.channels?.length).toBe(1);
+    expect(node.state.sampleRate).toBe(22050);
+    expect(node.state.playing).toBe(true);
+    expect(node.state.offset).toBeCloseTo(0, 2);
+    assertNeverPlaysEmpty(node);
+  });
+
+  it("@us US73: a worklet 'ended' report with loop OFF stops the deck", async () => {
+    const { api, node } = await keylockDeck({ loop: false });
+    await act(async () => { node.emit({ type: "ended" }); });
+    expect(api.deckRef.current.isPlaying()).toBe(false);
+    // The deck must NOT re-arm the worklet when loop is off.
+    expect(node.state.playing).toBe(false);
+    expect(screen.getByRole("button", { name: /^Play deck A$/i }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("@us US73: EJECT while a seek is still awaiting the audio graph does not resurrect the ejected track", async () => {
+    const { api, node } = await keylockDeck();
+    const ctx = api.audioCtxRef.current;
+    // Fire the seek but do NOT await it: it is parked on ensureMasterCtx /
+    // buildChain. Eject lands in that gap.
+    let pending;
+    await act(async () => {
+      pending = api.deckRef.current.seekTo(5);
+      fireEvent.click(screen.getByRole("button", { name: /Eject the track from deck A/i }));
+    });
+    await act(async () => { await pending; await tick(); });
+    expect(api.deckRef.current.isReady()).toBe(false);
+    expect(api.deckRef.current.isPlaying()).toBe(false);
+    expect(node.state.channels).toBeNull();
+    expect(node.state.playing).toBe(false);
+    // No BufferSource was started for the dead buffer either.
+    const startedAfterEject = ctx._nodes.filter((n) => n.nodeType === "AudioBufferSourceNode" && n.started && n.buffer === null);
+    expect(startedAfterEject.length).toBe(0);
+    assertNeverPlaysEmpty(node);
+  });
+
+  it("@us US73: a worklet 'ended' report with loop ON restarts the worklet from 0", async () => {
+    const { api, node } = await keylockDeck({ loop: true });
+    await act(async () => { api.deckRef.current.seekTo(8); await tick(); });
+    await act(async () => { node.emit({ type: "ended" }); });
+    expect(api.deckRef.current.isPlaying()).toBe(true);
+    expect(node.state.playing).toBe(true);
+    expect(node.state.offset).toBe(0);
+  });
+
+  it("@us US73: a worklet 'position' report is the playhead truth in KEYLOCK", async () => {
+    const { node } = await keylockDeck();
+    await act(async () => { node.emit({ type: "position", seconds: 3 }); });
+    const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+    expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3);
+  });
+
+  it("@us US73: a 'position' report is ignored once the deck is back in VARI", async () => {
+    const { api, node } = await keylockDeck();
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set deck A playback mode to vari/i }));
+      await tick();
+    });
+    const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+    const before = Number(wave.getAttribute("aria-valuenow"));
+    await act(async () => { node.emit({ type: "position", seconds: 9 }); });
+    expect(Number(wave.getAttribute("aria-valuenow"))).toBeCloseTo(before, 1);
+    expect(api.deckRef.current.isPlaying()).toBe(true);
+  });
+
+  it("@us US73: EJECT while the FIRST KEYLOCK engagement is still registering the worklet module is dropped, not resurrected", async () => {
+    // The module registration (audioWorklet.addModule) is the one genuinely
+    // slow await on the KEYLOCK path. Hold it open, eject in the gap, then
+    // release it: the deck must stay empty and silent.
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const buf = new MockAudioBuffer(2, sr * 10, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+    const ctx = api.audioCtxRef.current;
+    let release;
+    ctx.audioWorklet.addModule = () => new Promise((r) => { release = r; });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set deck A playback mode to keylock/i }));
+      await tick();
+    });
+    expect(typeof release).toBe("function"); // parked on addModule
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Eject the track from deck A/i })); });
+    await act(async () => { release(); await tick(); await tick(); });
+    expect(api.deckRef.current.isReady()).toBe(false);
+    expect(api.deckRef.current.isPlaying()).toBe(false);
+    expect(screen.getByRole("button", { name: /^Play deck A$/i }).getAttribute("aria-pressed")).toBe("false");
+    // The node IS built (the module resolved) — it must just be empty & idle.
+    const node = findStretchNode(ctx);
+    expect(node).toBeTruthy();
+    expect(node.state.channels).toBeNull();
+    expect(node.state.playing).toBe(false);
+    assertNeverPlaysEmpty(node);
+  });
+
+  it("@us US73: two seeks overlapping the first KEYLOCK module registration build exactly ONE worklet node", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const buf = new MockAudioBuffer(2, sr * 10, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+    const ctx = api.audioCtxRef.current;
+    let release;
+    ctx.audioWorklet.addModule = () => new Promise((r) => { release = r; });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set deck A playback mode to keylock/i }));
+      await tick();
+    });
+    expect(typeof release).toBe("function");
+    // Second seek lands while the module is still registering.
+    await act(async () => { api.deckRef.current.seekTo(3); await tick(); });
+    await act(async () => { release(); await tick(); await tick(); });
+    const nodes = ctx._nodes.filter((n) => n.nodeType === "AudioWorkletNode" && n.name === "stretch-processor");
+    expect(nodes.length).toBe(1);
+    expect(nodes[0].state.playing).toBe(true);
+    expect(nodes[0].connections.length).toBeGreaterThan(0);
+  });
+
+  it("@us US73 (VARI twin): EJECT while a VARI seek is still awaiting the audio graph does not resurrect the ejected track", async () => {
+    // The KEYLOCK variant above is rescued by the second guard too; this is
+    // the only case where the FIRST guard in seekTo is load-bearing.
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const buf = new MockAudioBuffer(2, sr * 10, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+    const ctx = api.audioCtxRef.current;
+    const started = () => ctx._nodes.filter((n) => n.nodeType === "AudioBufferSourceNode" && n.started).length;
+    const before = started();
+    let pending;
+    await act(async () => {
+      pending = api.deckRef.current.seekTo(5);
+      fireEvent.click(screen.getByRole("button", { name: /Eject the track from deck A/i }));
+    });
+    await act(async () => { await pending; await tick(); });
+    expect(api.deckRef.current.isReady()).toBe(false);
+    expect(api.deckRef.current.isPlaying()).toBe(false);
+    expect(started()).toBe(before);
+    expect(screen.getByRole("button", { name: /^Play deck A$/i }).getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("@us US73: unmount pauses and disconnects the worklet node", async () => {
+    let api;
+    const { unmount } = render(<Harness onMount={(a) => { api = a; }} />);
+    const buf = new MockAudioBuffer(2, sr * 2, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set deck A playback mode to keylock/i }));
+      await tick();
+    });
+    const node = findStretchNode(api.audioCtxRef.current);
+    expect(node.connections.length).toBeGreaterThan(0);
+    unmount();
+    expect(node.state.playing).toBe(false);
+    expect(node.connections.length).toBe(0);
+  });
+
+  it("@us US73: when the worklet module fails to register, KEYLOCK falls back to VARI and keeps playing", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const buf = new MockAudioBuffer(2, sr * 2, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "song.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+    const ctx = api.audioCtxRef.current;
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    ctx.audioWorklet.addModule = async () => { throw new Error("no worklets here"); };
+    const keyBtn = screen.getByRole("button", { name: /Set deck A playback mode to keylock/i });
+    await act(async () => { fireEvent.click(keyBtn); await tick(); await tick(); });
+    warn.mockRestore();
+    expect(findStretchNode(ctx)).toBeUndefined();
+    expect(keyBtn.getAttribute("aria-pressed")).toBe("false");
+    expect(screen.getByRole("button", { name: /Set deck A playback mode to vari/i }).getAttribute("aria-pressed")).toBe("true");
+    expect(api.deckRef.current.isPlaying()).toBe(true);
+    expect(ctx._lastStartedSource?.started).toBe(true);
+  });
+});
