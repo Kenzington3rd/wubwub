@@ -95,6 +95,7 @@ App-level keyboard / MIDI / crate-quick-load paths:
 | File picker (hidden + dressed-up button) | `Deck.jsx:1292-1338`, change handler `:588-592` | `accept="audio/*"`; passes the file to `loadFile`; aria-label flips between "Load audio for Deck A" and "Loaded: <name> — click to replace (Deck A)" | `Deck.test.jsx > @us US44 (X2 R21)` aria-label flip; `@us US1` via drop path; `App.test.jsx > @us US63` quick-load round-trip |
 | Drag-drop on deck region | `Deck.jsx:1044-1071`, `:594-611` | `dragover`/`drop` handlers; isDragOver glow; calls `loadFile` | `Deck.test.jsx > @us US44`; integration `App.test.jsx > @us US64`, e2e `App.e2e.test.jsx > @us US22 + US23 + US26 + US44` |
 | Inline load error (`role="alert"`) | `Deck.jsx:1340-1355` | wrong file type or decode failure surface inline; cleared on next successful load | `Deck.test.jsx > @us US33` mirror in SamplePad |
+| EJECT (W4.3) | `Deck.jsx` load row, `ejectTrack` | returns the deck to empty via the shared `resetTrack(null, null)`: stops the source, clears buffer / cues / bite / detected BPM+key, tells the KEYLOCK stretch worklet to drop its channel copy, and moves focus to the load button so keyboard users aren't dumped at `<body>` when the control disables itself. Mixer state (EQ, effects, volume, assign) deliberately survives. Disabled while empty | `process-e2e.test.jsx > @us US77` (eject → empty → reload, disabled-when-empty); real browser `test-browser/app.spec.js > EJECT returns a loaded deck to empty` |
 
 ### Transport row
 

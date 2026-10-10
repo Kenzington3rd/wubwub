@@ -192,6 +192,8 @@ const Deck = forwardRef(function Deck(
   const bpmRef = useRef(bpm);
   const timeIntervalRef = useRef(null);
   const fileInputRef = useRef(null);
+  // W4.3 — focus target after EJECT (see ejectTrack).
+  const loadBtnRef = useRef(null);
   const bassDropTimeoutRef = useRef(null);
   const wobbleNodesRef = useRef(null);
   const reverbSizeDebounceRef = useRef(null);
@@ -922,7 +924,13 @@ const Deck = forwardRef(function Deck(
   // File-decode path (loadFile) and the crate quick-load path (loadBuffer):
   // it resets transport, cues and detected metadata for the new track. It
   // does NOT decode and never touches the network.
-  const adoptBuffer = useCallback(
+  // One reset surface for "the track behind this deck changed". Both loading
+  // a new track and ejecting the current one must clear exactly the same
+  // per-track state; keeping them as one function means a field added here
+  // can never be reset on load but forgotten on eject (or vice versa).
+  // Mixer state (EQ, effects, volume, assign) deliberately survives — a real
+  // mixer's channel strip doesn't reset when you pull the record.
+  const resetTrack = useCallback(
     (audioBuf, name) => {
       stopAndDisconnectSource();
       isPlayingRef.current = false;
@@ -931,12 +939,13 @@ const Deck = forwardRef(function Deck(
 
       bufferRef.current = audioBuf;
       // W3.1 — the worklet holds the OLD track's channels; re-post on next
-      // KEYLOCK play.
+      // KEYLOCK play (or drop them outright on eject, below).
       stretchLoadedBufferRef.current = null;
       setLoadError(null);
       setFileName(name);
-      setDuration(audioBuf.duration);
-      durationRef.current = audioBuf.duration;
+      const dur = audioBuf?.duration ?? 0;
+      setDuration(dur);
+      durationRef.current = dur;
       setCurrentTime(0);
       currentTimeRef.current = 0;
       offsetRef.current = 0;
@@ -945,45 +954,36 @@ const Deck = forwardRef(function Deck(
       setBpmConfidence(null);
       setDetectedKey(null);
       onKeyDetected?.(null);
-      // W3.6 — a new track invalidates any pending bite region / preview.
-      try { bitePreviewSourceRef.current?.stop(); } catch {}
-      bitePreviewSourceRef.current = null;
-      setBitePreviewing(false);
+      // W3.6 — a track change invalidates any pending bite region / preview.
+      // stopBitePreview also disconnects the source; the inlined copy this
+      // replaced only stopped it, leaving it attached to the chain until GC.
+      stopBitePreview();
       setBite({ in: null, out: null });
     },
-    [stopAndDisconnectSource, onKeyDetected]
+    [stopAndDisconnectSource, onKeyDetected, stopBitePreview]
+  );
+
+  const adoptBuffer = useCallback(
+    (audioBuf, name) => resetTrack(audioBuf, name),
+    [resetTrack]
   );
 
   // W4.3 — eject: return the deck to its empty state so a fresh track can be
-  // loaded (or the deck simply cleared mid-set). Same reset surface as
-  // adoptBuffer, with no new buffer behind it. Mixer state (EQ, effects,
-  // volume, assign) deliberately survives — ejecting a record doesn't reset
-  // the channel strip on a real mixer either.
+  // loaded (or the deck simply cleared mid-set).
   const ejectTrack = useCallback(() => {
-    stopAndDisconnectSource();
-    isPlayingRef.current = false;
-    setIsPlaying(false);
-    clearInterval(timeIntervalRef.current);
-
-    bufferRef.current = null;
-    stretchLoadedBufferRef.current = null;
-    setLoadError(null);
-    setFileName(null);
-    setDuration(0);
-    durationRef.current = 0;
-    setCurrentTime(0);
-    currentTimeRef.current = 0;
-    offsetRef.current = 0;
-    setCues([]);
-    cuesRef.current = [];
-    setBpmConfidence(null);
-    setDetectedKey(null);
-    onKeyDetected?.(null);
-    try { bitePreviewSourceRef.current?.stop(); } catch {}
-    bitePreviewSourceRef.current = null;
-    setBitePreviewing(false);
-    setBite({ in: null, out: null });
-  }, [stopAndDisconnectSource, onKeyDetected]);
+    resetTrack(null, null);
+    // In KEYLOCK the stretch worklet holds a transferred COPY of the track's
+    // channel data (tens of MB for a long stereo file). Nulling our own refs
+    // doesn't touch it; tell the worklet to drop it too, or it stays resident
+    // until the next track is posted.
+    try {
+      stretchNodeRef.current?.port?.postMessage({ type: "load", channels: null });
+    } catch {}
+    // This button disables itself as a result of its own click. Hand focus to
+    // the load button first, or the browser drops it to <body> and a keyboard
+    // user's next Tab restarts from the top of the page.
+    loadBtnRef.current?.focus();
+  }, [resetTrack]);
 
   // Load this deck from a pre-decoded AudioBuffer (crate quick-load, W1.5).
   // Builds the deck chain if needed, then adopts the buffer — no re-decode.
@@ -1909,6 +1909,7 @@ const Deck = forwardRef(function Deck(
       />
       <div style={{ display: "flex", gap: 6, alignItems: "stretch" }}>
         <button
+          ref={loadBtnRef}
           type="button"
           onClick={() => fileInputRef.current?.click()}
           // X2 (R21) — once a file is loaded the button's visible text becomes

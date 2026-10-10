@@ -65,15 +65,18 @@ function audioFile(name) {
   return new File([new Uint8Array([0, 1, 2, 3])], name, { type: "audio/mpeg" });
 }
 
+// The deck card is a `role="region"` landmark named "Deck <id>", so its
+// hidden file input is one query away — no DOM-walking needed, and the
+// settings importer (an earlier file input in DOM order) can't be grabbed
+// by mistake.
+export function deckFileInput(id) {
+  return screen
+    .getByRole("region", { name: new RegExp(`^Deck ${id}`) })
+    .querySelector('input[type="file"]');
+}
+
 async function loadDeck(id, name = `${id}.mp3`) {
-  const btn = screen.getByRole("button", {
-    name: new RegExp(`Load audio for Deck ${id}`, "i"),
-  });
-  // The load button sits in a flex row beside EJECT; the hidden file input
-  // is a sibling of that row, so walk up to the ancestor that contains it.
-  let scope = btn.parentElement;
-  while (scope && !scope.querySelector('input[type="file"]')) scope = scope.parentElement;
-  const input = scope?.querySelector('input[type="file"]');
+  const input = deckFileInput(id);
   await act(async () => {
     fireEvent.change(input, { target: { files: [audioFile(name)] } });
   });
@@ -382,18 +385,19 @@ describe("process: dropping a file can never brick the app — US78", () => {
 
   it("@us US78: a non-audio file dropped on a deck shows an inline error, app survives", async () => {
     render(<App />);
-    const loadBtn = btn(/Load audio for Deck A/i);
-    const zone = loadBtn.closest("[aria-label], div");
     const junk = new File([new Uint8Array([1, 2, 3])], "notes.txt", { type: "text/plain" });
-    // Drop it on the deck card (the deck's own drop zone).
-    const deckCard = loadBtn.closest('div[style*="border"]') || loadBtn.parentElement.parentElement;
+    // Drop it on the deck card — the region landmark IS the drop zone.
+    const deckCard = screen.getByRole("region", { name: /^Deck A/ });
     await act(async () => {
       fireEvent.drop(deckCard, {
         dataTransfer: { files: [junk], items: [{ kind: "file" }] },
       });
     });
-    // Inline rejection, not a crash: the deck still offers to load, and the
-    // app shell is still mounted.
+    // The rejection must be VISIBLE. Without this assertion a regression to
+    // a silent no-op (or a throw swallowed by the async handler) still passes.
+    expect(await screen.findByRole("alert")).toHaveTextContent(/audio file/i);
+    // …and it's a rejection, not a crash: the deck still offers to load and
+    // the app shell is still mounted.
     expect(screen.getByRole("button", { name: /Load audio for Deck A/i })).toBeTruthy();
     expect(screen.getByRole("slider", { name: /Master volume/i })).toBeTruthy();
   });
@@ -401,10 +405,7 @@ describe("process: dropping a file can never brick the app — US78", () => {
   it("@us US78: a corrupt audio file dropped on a deck is rejected inline, deck stays usable", async () => {
     // decode failure path (as opposed to wrong-type path): make decode throw.
     render(<App />);
-    const loadBtn = btn(/Load audio for Deck A/i);
-    let scope = loadBtn.parentElement;
-    while (scope && !scope.querySelector('input[type="file"]')) scope = scope.parentElement;
-    const input = scope.querySelector('input[type="file"]');
+    const input = deckFileInput("A");
     const bad = new File([new Uint8Array([9, 9, 9])], "corrupt.mp3", { type: "audio/mpeg" });
     const orig = AudioContext.prototype.decodeAudioData;
     AudioContext.prototype.decodeAudioData = () =>

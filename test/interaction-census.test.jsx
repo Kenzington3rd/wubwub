@@ -66,12 +66,10 @@ function audioFile(name = "track.mp3") {
 
 async function loadAllDecks() {
   for (const id of ["A", "B", "C"]) {
-    const btn = screen.getByRole("button", {
-      name: new RegExp(`Load audio for Deck ${id}`, "i"),
-    });
-    let scope = btn.parentElement;
-    while (scope && !scope.querySelector('input[type="file"]')) scope = scope.parentElement;
-    const input = scope?.querySelector('input[type="file"]');
+    // The deck card is a role="region" landmark — one query, no DOM walking.
+    const input = screen
+      .getByRole("region", { name: new RegExp(`^Deck ${id}`) })
+      .querySelector('input[type="file"]');
     if (!input) continue;
     await act(async () => {
       fireEvent.change(input, { target: { files: [audioFile(`${id}.mp3`)] } });
