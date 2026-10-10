@@ -180,6 +180,44 @@ test.describe("real browser — v1.3.2 field fixes", () => {
     await expect(page.getByRole("button", { name: /Loaded: second\.wav/i })).toBeVisible({ timeout: 15000 });
   });
 
+  test("EJECT keeps keyboard focus in the deck instead of dropping it to <body>", async ({ page }) => {
+    // The button disables itself as a result of its own click. Without an
+    // explicit focus hand-off the browser drops focus to document.body and
+    // the next Tab restarts from the top of the page.
+    await loadFixture(page, "A", { ...kickLoop({ bpm: 128 }), name: "focus.wav" });
+    await expect(page.getByRole("button", { name: /click to replace \(Deck A\)/i })).toBeVisible({ timeout: 15000 });
+
+    const eject = page.getByRole("button", { name: "Eject the track from deck A" });
+    await eject.focus();
+    await page.keyboard.press("Enter");
+
+    const focused = await page.evaluate(() => document.activeElement?.getAttribute("aria-label") || document.activeElement?.tagName);
+    expect(focused, "focus fell off the deck after EJECT").toMatch(/Load audio for Deck A/i);
+  });
+
+  test("dragging over a non-zone shows the no-drop cursor, a real zone still accepts", async ({ page }) => {
+    // Cancelling dragover alone makes the whole page a 'valid target' and
+    // the OS shows a copy cursor over the master bus — inviting a drop that
+    // is then silently swallowed. The guard must set dropEffect=none there,
+    // while a real deck zone (which claims the event first) keeps its effect.
+    const effects = await page.evaluate(() => {
+      const fire = (target) => {
+        const dt = { dropEffect: "copy", effectAllowed: "all", files: [], items: [{ kind: "file" }], types: ["Files"] };
+        const ev = new Event("dragover", { bubbles: true, cancelable: true });
+        Object.defineProperty(ev, "dataTransfer", { value: dt });
+        target.dispatchEvent(ev);
+        return { prevented: ev.defaultPrevented, effect: dt.dropEffect };
+      };
+      const nonZone = document.querySelector('input[aria-label="Master volume"]');
+      const zone = document.querySelector('[role="region"][aria-label^="Deck A"]');
+      return { nonZone: fire(nonZone), zone: fire(zone) };
+    });
+    expect(effects.nonZone.prevented, "non-zone dragover must still be cancelled (navigation guard)").toBe(true);
+    expect(effects.nonZone.effect, "non-zone must show the no-drop cursor").toBe("none");
+    expect(effects.zone.prevented).toBe(true);
+    expect(effects.zone.effect, "the guard must not veto a real drop zone").not.toBe("none");
+  });
+
   test("a stray drop cannot navigate the app away", async ({ page }) => {
     // The bug this guards: an unclaimed drop fell through to the browser
     // default, which is NAVIGATE TO THE FILE — replacing the app and destroying

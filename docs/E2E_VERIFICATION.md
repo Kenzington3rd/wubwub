@@ -95,6 +95,7 @@ App-level keyboard / MIDI / crate-quick-load paths:
 | File picker (hidden + dressed-up button) | `Deck.jsx:1292-1338`, change handler `:588-592` | `accept="audio/*"`; passes the file to `loadFile`; aria-label flips between "Load audio for Deck A" and "Loaded: <name> — click to replace (Deck A)" | `Deck.test.jsx > @us US44 (X2 R21)` aria-label flip; `@us US1` via drop path; `App.test.jsx > @us US63` quick-load round-trip |
 | Drag-drop on deck region | `Deck.jsx:1044-1071`, `:594-611` | `dragover`/`drop` handlers; isDragOver glow; calls `loadFile` | `Deck.test.jsx > @us US44`; integration `App.test.jsx > @us US64`, e2e `App.e2e.test.jsx > @us US22 + US23 + US26 + US44` |
 | Inline load error (`role="alert"`) | `Deck.jsx:1340-1355` | wrong file type or decode failure surface inline; cleared on next successful load | `Deck.test.jsx > @us US33` mirror in SamplePad |
+| EJECT (W4.3) | `Deck.jsx` load row, `ejectTrack` | returns the deck to empty via the shared `resetTrack(null, null)`: stops the source, clears buffer / cues / bite / detected BPM+key, tells the KEYLOCK stretch worklet to drop its channel copy, and moves focus to the load button so keyboard users aren't dumped at `<body>` when the control disables itself. Mixer state (EQ, effects, volume, assign) deliberately survives. Disabled while empty | `process-e2e.test.jsx > @us US77` (eject → empty → reload, disabled-when-empty); focus hand-off: `interaction-census.test.jsx > keyboard focus never strands` (US75); real browser `test-browser/app.spec.js > EJECT returns a loaded deck to empty` and `> EJECT keeps keyboard focus`. Eject landing mid-`seekTo` (during the audio-graph or worklet-module await) is dropped rather than resurrecting the track: `Deck.test.jsx > @us US73` (VARI graph-await, KEYLOCK graph-await, KEYLOCK module-await race cases; overlapping seeks during module registration build exactly one worklet node) |
 
 ### Transport row
 
@@ -180,7 +181,7 @@ is loaded.
 | Control | Outcome | Test |
 |---|---|---|
 | VARI (default) | classic varispeed — `playbackRate` on the BufferSource; bit-identical to pre-W3.1 behavior | `Deck.test.jsx > @us US73` |
-| KEYLOCK (experimental) | playback streams through the granular stretch worklet: channels posted once per track, transport via port messages, tempo via the `rate` AudioParam (speed + NUDGE bend) with `pitchRatio` pinned at 1; position reports drive drift correction; worklet-unavailable falls back to VARI; mode hops mid-play resume at the same position | `Deck.test.jsx > @us US73`; DSP core `timeStretch.test.js > @us US71`; streaming worklet `stretchWorklet.test.js` |
+| KEYLOCK (experimental) | playback streams through the granular stretch worklet: channels posted once per track, transport via port messages, tempo via the `rate` AudioParam (speed + NUDGE bend) with `pitchRatio` pinned at 1; position reports drive drift correction; worklet-unavailable falls back to VARI; mode hops mid-play resume at the same position. Worklet **state** (not just posted messages) is checked after pause / stop / seek / EJECT / track replace / `ended` (loop on and off) / `position` (KEYLOCK vs VARI) / unmount / module-load failure, with the invariant that `play` is never posted while the worklet holds no channels | `Deck.test.jsx > @us US73` (incl. `worklet state follows every transport path`); DSP core `timeStretch.test.js > @us US71`; streaming worklet `stretchWorklet.test.js` |
 
 ### PUMP row (W3.5 — `Deck.jsx:2485-2540`)
 
@@ -243,7 +244,7 @@ is loaded.
 | Control | Outcome | Test |
 |---|---|---|
 | Slot bars `<select>` (4 / 8 / 16) | `setSlot({bars})` | `Looper.test.jsx > @us US28: each slot's bar selector offers 4 / 8 / 16 bars` |
-| Capture button | posts `{type:"capture", slot, seconds}` to worklet; pendingSlot state disables retrigger; seconds clamped to ≤ 60 | `Looper.test.jsx > @us US28` (4 tests: disabled-until-ready, enabled, clamp ≤ 60, exactly-60 hard-clamp) |
+| Capture button | posts `{type:"capture", slot, seconds}` to worklet; seconds clamped to ≤ 60. While the capture is in flight the button stays **enabled** and reports `aria-disabled` (a repeat press is ignored by `capture()`), so keyboard focus is not dropped to `<body>` for the capture window | `Looper.test.jsx > @us US28` (capture-button cases: disabled-until-ready, enabled, clamp ≤ 60, exactly-60 hard-clamp, busy-keeps-focus + repeat-press inert); `interaction-census.test.jsx > keyboard focus never strands` |
 | Play/Stop button | toggles a buffer source per slot; ensures gain wired to master + record tap | `Looper.test.jsx > @us US61` (tap fan-out + A6 deferred-attach race) |
 | Clear button (conditional) | drops the captured buffer + tears down the source | structural — covered by the play-then-stop ensure-no-throw path |
 | Slot volume slider | `setVolume(slot, v)` ramps the slot gain via `setTargetAtTime` | structural (component test would just re-prove `Slider` behavior already covered by `Slider.test.jsx`) |

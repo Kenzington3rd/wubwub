@@ -18,10 +18,10 @@
 // interp resampler at pitchRatio. Position reports are posted every ~100 ms
 // as { type: "position", seconds } so a host can drive its playhead.
 //
-// NOTE (W3.1 status): this worklet is registered and unit-covered but not
-// yet wired into the Deck transport — that integration replaces the deck's
-// AudioBufferSource in KEYLOCK mode and is gated on the Audio Engine
-// Architect review + real listening tests (see BACKLOG W3.1).
+// W3.1 status: wired into the Deck transport as the opt-in KEYLOCK mode
+// (replaces the deck's AudioBufferSource while engaged; VARI stays the
+// bit-identical default). Still flagged experimental in the UI pending real
+// listening tests.
 
 const GRAIN = 4096;
 const HOP = GRAIN / 2;

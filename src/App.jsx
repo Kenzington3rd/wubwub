@@ -345,7 +345,18 @@ export default function App() {
   // the target before bubbling here) and keep working unchanged — this only
   // swallows what nothing else claimed.
   useEffect(() => {
-    const swallow = (e) => e.preventDefault();
+    const swallow = (e) => {
+      // A component drop zone that already claimed this event has called
+      // preventDefault itself (which is what makes it a valid target). Leave
+      // it alone — forcing dropEffect="none" here would veto the real drop.
+      if (e.defaultPrevented) return;
+      e.preventDefault();
+      // Cancelling dragover alone tells the browser "this is a valid drop
+      // target" and shows the OS copy cursor over the master bus, theory
+      // panel, etc. — inviting a drop we are about to swallow. Setting the
+      // effect to none keeps the navigation guard AND the no-drop cursor.
+      if (e.dataTransfer) e.dataTransfer.dropEffect = "none";
+    };
     window.addEventListener("dragover", swallow);
     window.addEventListener("drop", swallow);
     return () => {

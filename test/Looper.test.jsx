@@ -72,6 +72,24 @@ describe("Looper — US28", () => {
     for (const btn of captures) expect(btn).not.toBeDisabled();
   });
 
+  it("@us US28: a capture in flight keeps keyboard focus on its button and ignores a repeat press", async () => {
+    let node;
+    render(<Harness onWorklet={(n) => { node = n; }} />);
+    const btn = screen.getByRole("button", { name: /Capture 4 bars into loop 1/i });
+    btn.focus();
+    await act(async () => { fireEvent.click(btn); });
+    // Busy, not disabled: a disabled focused element drops focus to <body>.
+    expect(btn).not.toBeDisabled();
+    expect(btn).toHaveAttribute("aria-disabled", "true");
+    expect(btn).toHaveAttribute("title", expect.stringMatching(/Capturing loop 1/));
+    // Dimmed via fill/border, never opacity — opacity would fade the focus ring.
+    expect(btn.style.opacity).toBe("1");
+    expect(btn).toHaveAccessibleName(/Capturing loop 1/i);
+    expect(document.activeElement).toBe(btn);
+    await act(async () => { fireEvent.click(btn); });
+    expect(node.port.postedMessages.filter((m) => m.type === "capture").length).toBe(1);
+  });
+
   it("@us US28: capture seconds is clamped to <= 60 even at the BPM floor", () => {
     // At 40 BPM, 16 bars = 16*4*60/40 = 96 s — must be clamped to 60.
     let workletNode;

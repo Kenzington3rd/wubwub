@@ -43,8 +43,8 @@ export default function Looper({
   // attachment as pending — on every subsequent ensureGain call, if the tap is
   // now available we connect it then.
   const tapAttachedRefs = useRef(Array(SLOT_COUNT).fill(false));
-  // State (not a ref) so the Capture button's disabled state re-renders while
-  // a capture is in flight.
+  // State (not a ref) so the Capture button's busy state re-renders while a
+  // capture is in flight.
   const [pendingSlot, setPendingSlot] = useState(null);
   // D6 — which slot's bars <select> is currently hovered (-1 = none). Native
   // selects can't carry a CSS :hover from inline styles.
@@ -308,11 +308,19 @@ export default function Looper({
                 <button
                   type="button"
                   onClick={() => capture(i)}
-                  disabled={!workletReady || pendingSlot === i}
+                  // While a capture is in flight the button stays ENABLED and
+                  // reports busy instead: `disabled` on the focused element
+                  // drops keyboard focus to <body> for the whole capture
+                  // window. capture() already ignores a repeat press on the
+                  // pending slot, so this is inert, not re-entrant.
+                  disabled={!workletReady}
+                  aria-disabled={pendingSlot === i || undefined}
                   title={
-                    workletReady
-                      ? `Capture ${slot.bars} bars into loop ${i + 1}`
-                      : "Audio worklet still initializing"
+                    !workletReady
+                      ? "Audio worklet still initializing"
+                      : pendingSlot === i
+                        ? `Capturing loop ${i + 1}…`
+                        : `Capture ${slot.bars} bars into loop ${i + 1}`
                   }
                   aria-label={
                     pendingSlot === i
@@ -321,8 +329,11 @@ export default function Looper({
                   }
                   style={{
                     flex: 1,
-                    background: `${color}22`,
-                    border: `1px solid ${color}55`,
+                    // Busy dims the fill and border only — never `opacity`,
+                    // which would fade the focus ring on the very button the
+                    // keyboard user just pressed.
+                    background: pendingSlot === i ? `${color}11` : `${color}22`,
+                    border: `1px solid ${pendingSlot === i ? `${color}33` : `${color}55`}`,
                     color,
                     borderRadius: 6,
                     fontSize: 10,
@@ -333,7 +344,7 @@ export default function Looper({
                     fontWeight: 600,
                     textTransform: "uppercase",
                     letterSpacing: 1,
-                    opacity: workletReady && pendingSlot !== i ? 1 : 0.4,
+                    opacity: workletReady ? 1 : 0.4,
                   }}
                 >
                   {pendingSlot === i ? "…" : "Capture"}

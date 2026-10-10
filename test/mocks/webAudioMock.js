@@ -225,6 +225,20 @@ class MockAudioWorkletNode extends MockAudioNode {
     if (ctx && Array.isArray(ctx._nodes)) ctx._nodes.push(this);
     this.name = name;
     this.processorOptions = options?.processorOptions;
+    // W3.1 — a stateful stand-in for the processor on the other side of the
+    // port. It applies the same transport protocol the real
+    // `stretch-worklet.js` implements (load / play / pause / seek), so a test
+    // can assert what the worklet would be HOLDING and DOING after any
+    // sequence of app messages — not just that some message was sent. The
+    // looper worklet shares the node class; its messages are recorded and
+    // otherwise ignored by this state machine.
+    this.state = {
+      channels: null,     // transferred copies the worklet keeps resident
+      sampleRate: null,
+      playing: false,
+      offset: 0,          // seconds, last play/seek target
+    };
+    const node = this;
     this.port = {
       onmessage: null,
       _listeners: new Set(),
@@ -239,8 +253,35 @@ class MockAudioWorkletNode extends MockAudioNode {
       },
       postMessage(msg) {
         this.postedMessages.push(msg);
+        const m = msg || {};
+        const st = node.state;
+        if (m.type === "load") {
+          st.channels = m.channels || null;
+          // Processor falls back to the context rate when none is sent.
+          st.sampleRate = m.sampleRate || ctx?.sampleRate || null;
+          st.playing = false;
+          st.offset = 0;
+        } else if (m.type === "play") {
+          st.offset = m.offset || 0;
+          st.playing = true;
+        } else if (m.type === "pause") {
+          st.playing = false;
+        } else if (m.type === "seek") {
+          st.offset = m.offset || 0;
+        }
       },
       start() {},
+    };
+    // Deliver a worklet → main-thread message (e.g. { type: "position",
+    // seconds } or { type: "ended" }) to whatever the app registered.
+    this.emit = (data) => {
+      // The processor stops itself when the read head runs off the end
+      // *before* it reports "ended" — mirror that so a test asserting
+      // `state.playing` after an ended report is not vacuous.
+      if (data?.type === "ended") this.state.playing = false;
+      const ev = { data };
+      if (typeof this.port.onmessage === "function") this.port.onmessage(ev);
+      for (const fn of this.port._listeners) fn(ev);
     };
     // W3.1 — AudioParam map (rate / pitchRatio on the stretch worklet).
     // Lazily creates a MockAudioParam per requested name.

@@ -138,6 +138,7 @@ This is enforced mechanically, so it cannot quietly lapse:
 | No two controls share an accessible name | same — three decks means `LOW` must be `LOW EQ on deck A` |
 | The load-bearing control inventory is intact | same — a checked-in manifest, drift fails in both directions |
 | Every control is actually *driven*, not just present | same — clicked twice, sliders to both extremes, selects through every option, momentary controls pressed without release, on a loaded **and** an empty deck |
+| Keyboard focus never strands | same — after any button is activated from the keyboard, focus must still rest on a connected, enabled control (a button that disables itself must hand focus on, or stay enabled and report `aria-disabled`) |
 | Every process reaches its end state | `test/process-e2e.test.jsx` — pipelines traced to the terminal artifact (downloaded file, loaded pad, crate entry) |
 
 Consequences for new work:
@@ -152,6 +153,15 @@ Consequences for new work:
 - A new user-facing process needs a `process-e2e` test that follows it all the
   way to its end state, including its negative case (the operation attempted
   when it should be inert).
+- A control that disables itself as a result of its own activation (EJECT,
+  a one-shot capture) must either move focus to a sensible neighbour first or
+  stay enabled and report `aria-disabled` while inert. Letting
+  `disabled` land on the focused element drops focus to `<body>`.
+- KEYLOCK transport paths are asserted against the mock worklet's **state**
+  (`MockAudioWorkletNode.state`, which mirrors `stretch-worklet.js`'s
+  load/play/pause/seek protocol), not just against "a message was posted".
+  A new transport action needs a case in `Deck.test.jsx > worklet state
+  follows every transport path`.
 
 ## WC-REAL — two test layers, and what each one can prove
 
@@ -284,7 +294,7 @@ explain *why*.
 - [x] **W3 batch (partial, 2026-08-09)** — **W3.3** EQ kill switches (−26 dB kill floor, kill state separate from knob state). **W3.2** VOX voice/mic recording panel (`VoxRecorder.jsx`: local `getUserMedia`, music-tuned constraints, take → Deck/Crate/SamplePad via `adoptBuffer`, monitor toggle, secure-context gating; Permissions-Policy `microphone=(self)`). **W3.7** component isolation (ISOLATE row: BASS/VOCAL/INSTR/PERC — dry + four gated wet paths between deck gain and EQ, bit-transparent when off). **W3.6** sound-bite extraction (BITE row: IN/OUT region + waveform overlay, loop preview, slice → pad/crate/WAV via `wavEncode.js`; isolation-aware offline render via `isolationRender.js`; `Deck.seekTo` exposed). **W3.5** PUMP ducking (`pumpGain` post-filter, per-beat `setValueCurveAtTime` windows armed ~4 beats ahead, tracks effective BPM). **W3.1** DONE (experimental) — granular time-stretch DSP core (`audio/timeStretch.js`) + `worklets/stretch-worklet.js`, integrated as an opt-in per-deck VARI/KEYLOCK toggle: KEYLOCK streams through the stretch worklet (rate = speed + bend at constant pitch, port-message transport, position-report drift correction, VARI fallback if worklets unavailable); VARI remains the bit-identical default. **W3.4** DONE — momentary loop roll (¼/½/1/2 beats, hold-to-engage on the bite-preview source path; the wall-clock timeline runs underneath and release re-anchors; press-time quantized).
 - [x] **IO Contract (Phase B)** — full I/O matrix in [`docs/IO_CONTRACT.md`](docs/IO_CONTRACT.md). Adds `test/build.test.js` (PWA manifest + sw.js + registerSW.js validation), `test/build-single.test.js` (single-file self-containment + inlined fonts), `test/csp.test.js` (CSP enforcement from source AND from `vite.config.js#CSP_CONTENT`), `test/limiter.test.jsx` (master brickwall limiter parameters + topology trace), `test/focus-rings.test.js` (CSS `*:focus-visible` rule with the correct token), `test/animations.test.js` (`@keyframes beatPulse` plus a component-side consumer), and adversarial Web MIDI cases extended in `test/midiMap.test.js` (every kind-nibble branch, every channel, mid-stream disconnect, sysex rejection).
 
+- [x] **W4.1–W4.3 (2026-08)** — Electron desktop shell (`electron/main.cjs`, secure `wavecraft://` scheme, per-OS release matrix). Full interaction coverage made mechanical (WC-COVER: `test/interaction-census.test.jsx` + `test/process-e2e.test.jsx`) and a real-browser Playwright layer (WC-REAL: `test-browser/`). Field-test fixes from the first desktop session: per-deck **EJECT** (shared `resetTrack` with `adoptBuffer`; also drops the KEYLOCK worklet's channel copy and hands focus to the load button) and a window-level **drop guard** so a stray drop can never navigate the app away (sets `dropEffect="none"` outside real zones, never vetoes a zone that already claimed the event). Royalty-free sample packs live as generators in `tools/samplepacks/`, published to a Release by `samplepacks.yml`.
 ### Deferred
-- Electron wrapper (separate distribution concern; web app is complete)
 - Real-time beat-phase detection for fully synced beat indicators (current behavior: BPM-rate pulse, free-running phase)
 - Worker offload for auto-BPM detection on very long tracks
