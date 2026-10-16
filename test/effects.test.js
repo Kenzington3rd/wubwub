@@ -100,12 +100,40 @@ describe("buildDistortionCurve — US20", () => {
     expect(curve[256]).toBeLessThan(0);
   });
 
-  it("@us US20: higher drive yields stronger compression at the same input", () => {
+  it("@us US20: higher drive saturates harder (flatter toward the edge)", () => {
     const lowDrive = buildDistortionCurve(10, 4096);
     const highDrive = buildDistortionCurve(80, 4096);
-    // Both should be positive at the same edge index, but high drive should
-    // saturate further/sooner.
-    expect(highDrive[3500]).toBeGreaterThanOrEqual(lowDrive[3500]);
+    // Both are unity-gain near zero; compare how much of the linear value
+    // survives at x ~ 0.71 — the harder-driven curve keeps less of it.
+    const xi = 3500;
+    const x = (xi * 2) / 4096 - 1;
+    expect(highDrive[xi] / x).toBeLessThan(lowDrive[xi] / x);
+  });
+
+  it("@us US20: small-signal gain is ~unity across the UI drive range (MIX is not a loudness boost)", () => {
+    const n = 4096;
+    for (const drive of [0, 10, 25, 40, 60, 80, 100]) {
+      const c = buildDistortionCurve(drive, n);
+      const i = n / 2 + 8; // x = 8*2/n
+      const x = (i * 2) / n - 1;
+      const slope = c[i] / x;
+      expect(slope, `drive ${drive}`).toBeGreaterThan(0.8);
+      expect(slope, `drive ${drive}`).toBeLessThan(1.25);
+    }
+  });
+
+  it("@us US20: curve is bounded in [-1, 1], monotonic and odd-symmetric", () => {
+    const n = 4096;
+    for (const drive of [0, 40, 100]) {
+      const c = buildDistortionCurve(drive, n);
+      for (let i = 0; i < n; i++) {
+        expect(Math.abs(c[i])).toBeLessThanOrEqual(1);
+        if (i > 0) expect(c[i]).toBeGreaterThanOrEqual(c[i - 1]);
+      }
+      for (let d = 1; d < 1000; d += 97) {
+        expect(c[n / 2 + d] + c[n / 2 - d]).toBeCloseTo(0, 6);
+      }
+    }
   });
 });
 
@@ -125,6 +153,29 @@ describe("clamp — US53", () => {
   it("@us US53: handles negative ranges", () => {
     expect(clamp(0, -1, -0.5)).toBe(-0.5);
     expect(clamp(-2, -1, -0.5)).toBe(-1);
+  });
+});
+
+describe("rampGain — fallback without cancelAndHoldAtTime", () => {
+  it("@us US19: a same-instant wet pin survives and is not overridden by a stale param.value anchor", () => {
+    const ctx = new AudioContext();
+    ctx._currentTime = 2.0;
+    const node = ctx.createGain();
+    const param = node.gain;
+    param.cancelAndHoldAtTime = undefined; // older engine
+    param.value = 0.8; // stale pre-pin value
+    param.setValueAtTime(0, ctx.currentTime); // caller's duck pin
+    const before = param.scheduledValues.length;
+    rampGain(param, 0.5, ctx, 0.02);
+    const added = param.scheduledValues.slice(before);
+    const cancel = added.find((e) => e.type === "cancel");
+    // Cancel starts strictly AFTER now, so an event at exactly now survives.
+    expect(cancel.time).toBeGreaterThan(ctx.currentTime);
+    // No re-anchor to the stale value at `now`.
+    expect(
+      added.some((e) => e.type === "setValue" && e.time === ctx.currentTime)
+    ).toBe(false);
+    expect(added.at(-1).type).toBe("setTarget");
   });
 });
 

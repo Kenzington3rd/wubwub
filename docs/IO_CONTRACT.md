@@ -30,11 +30,12 @@ hash routing, no fetch, no XHR, no WebSocket, no sendBeacon.
 |---|---|---|---|
 | Deck A playback (audible) | `Deck.jsx:1393` PLAY button → `togglePlay` → `src.connect(chain.gain)` ultimately reaches `AudioContext.destination` via `App.jsx:208` `gain.connect(ctx.destination)` | PLAY button on Deck A (or `Space` while focused) | `Deck.test.jsx > @us US2`; e2e `App.e2e.test.jsx > @us US26: Space toggles play` |
 | Deck B playback (audible) | same as Deck A through Deck B's chain | PLAY button on Deck B (or `Space` while focused) | `Deck.test.jsx > @us US2` |
-| Looper slot playback | `Looper.jsx` Play button per slot → `BufferSource → slotGain → masterCompressor → … → destination` | Play / Stop button per slot in Looper | `Looper.test.jsx > @us US61` |
+| Looper capture tap | `App.jsx` looper `AudioWorkletNode` input is the pre-limiter record tap GainNode (`recordTapRef`), not the compressor output (loops re-enter the compressor, so a post-limiter tap would limit them twice) | Capture button per slot | `limiter.test.jsx > Looper capture tap` |
+| Looper slot playback | `Looper.jsx` Play button per slot → `BufferSource → slotGain → masterCompressor → … → destination` | Play / Stop button per slot in Looper (stop = ~5 ms slot-gain fade + `src.stop(now+0.006)`) | `Looper.test.jsx > @us US61` |
 | Sample pad trigger | `SamplePad.jsx` pad → `BufferSource → padGain → masterCompressor → … → destination` | Pad click (or `Q W E R A S D F`) | `SamplePad.test.jsx > @us US31 / US32` |
 | Bass-drop automated sweep | `Deck.jsx` bassDrop scheduling on `chain.filter.frequency` + `chain.eqLow.gain` AudioParams | BASS DROP button per deck | `Deck.test.jsx > @us US24` |
 | Wobble LFO (Wobble preset) | `Deck.jsx` spawns an `OscillatorNode → eqLow.gain` modulator | BASS DROP button + wobble preset in BassDropMenu | `Deck.test.jsx > @us US24/US34` |
-| Master compressor / brickwall limiter | `App.jsx:191-209` configured DynamicsCompressor with threshold -9, ratio 20, knee 0, attack 0.003, release 0.1 | Always-on safety net; not user-toggleable | `test/limiter.test.js` (new — Phase B4) + `chain.test.js > @us US55` (topology) |
+| Master compressor / brickwall limiter | `App.jsx:191-209` configured DynamicsCompressor (safety net, not a true brickwall) with threshold -2, ratio 20, knee 0, attack 0.003, release 0.1, then 0.65 trim | Always-on safety net; not user-toggleable | `test/limiter.test.js` (new — Phase B4) + `chain.test.js > @us US55` (topology) |
 
 ### Downloads (anchor click → user disk)
 

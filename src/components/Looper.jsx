@@ -45,6 +45,9 @@ export default function Looper({
   const tapAttachedRefs = useRef(Array(SLOT_COUNT).fill(false));
   // State (not a ref) so the Capture button's busy state re-renders while a
   // capture is in flight.
+  // Last user-set volume per slot, so stopSource can restore the gain after
+  // its stop-fade (the fade drives the shared slot GainNode to 0).
+  const slotVolRef = useRef(slots.map((r) => r.volume));
   const [pendingSlot, setPendingSlot] = useState(null);
   // D6 — which slot's bars <select> is currently hovered (-1 = none). Native
   // selects can't carry a CSS :hover from inline styles.
@@ -135,14 +138,35 @@ export default function Looper({
   const stopSource = (slot) => {
     const src = sourceRefs.current[slot];
     if (!src) return;
+    sourceRefs.current[slot] = null;
+    const ctx = audioCtxRef.current;
+    const g = gainRefs.current[slot];
     try {
       src.onended = null;
+    } catch {}
+    if (ctx && g && g.gain && typeof g.gain.setTargetAtTime === "function") {
+      // ~5 ms fade (no hard stop => no click). Stop slightly after the fade
+      // and restore the slot volume afterwards so the next play is audible.
+      const now = ctx.currentTime;
+      const vol = slotVolRef.current[slot];
+      g.gain.cancelScheduledValues(now);
+      g.gain.setValueAtTime(g.gain.value, now);
+      g.gain.setTargetAtTime(0, now, 0.001);
+      try {
+        src.stop(now + 0.006);
+      } catch {}
+      g.gain.setValueAtTime(vol, now + 0.007);
+      src.onended = () => {
+        try { src.disconnect(); } catch {}
+      };
+      return;
+    }
+    try {
       src.stop();
     } catch {}
     try {
       src.disconnect();
     } catch {}
-    sourceRefs.current[slot] = null;
   };
 
   const togglePlay = (slot) => {
@@ -177,6 +201,7 @@ export default function Looper({
     const ctx = audioCtxRef.current;
     const g = gainRefs.current[slot];
     if (g && ctx) g.gain.setTargetAtTime(v, ctx.currentTime, 0.02);
+    slotVolRef.current[slot] = v;
     setSlot(slot, { volume: v });
   };
 

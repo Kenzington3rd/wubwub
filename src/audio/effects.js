@@ -48,13 +48,19 @@ export function buildReverbIR(
 }
 
 // Soft-clip distortion curve. `drive` in [0, 100].
+//
+// Normalised to UNITY small-signal gain (slope 1 at x -> 0) so the wet path
+// adds colour, not loudness: the previous rational curve had a slope of
+// (3+drive)/9 (about +13.6 dB at drive 40), making MIX double as a level boost.
+// Shape is tanh(a*x)/a with a = 1 + drive/20: odd-symmetric, monotonic,
+// bounded by 1/a (inside [-1, 1]); higher drive saturates sooner and lower.
 export function buildDistortionCurve(drive = 40, samples = 4096) {
   const curve = new Float32Array(samples);
   const k = Math.max(0, drive);
-  const deg = Math.PI / 180;
+  const a = 1 + k / 20;
   for (let i = 0; i < samples; i++) {
     const x = (i * 2) / samples - 1;
-    curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+    curve[i] = Math.tanh(a * x) / a;
   }
   return curve;
 }
@@ -85,8 +91,13 @@ export function rampGain(param, target, ctx, tau = 0.02) {
   if (typeof param.cancelAndHoldAtTime === "function") {
     param.cancelAndHoldAtTime(now);
   } else {
-    param.cancelScheduledValues(now);
-    param.setValueAtTime(param.value, now);
+    // Fallback for engines without cancelAndHoldAtTime. Cancel from just
+    // AFTER `now` so a caller's same-instant pin (setValueAtTime(0, now), used
+    // to duck the wet path before an IR / curve swap) survives, and do NOT
+    // re-anchor with `param.value` — that is still the pre-pin value and, being
+    // scheduled later at the same time, would override the pin. The new
+    // setTargetAtTime starts from whatever the surviving timeline yields.
+    param.cancelScheduledValues(now + 1e-6);
   }
   param.setTargetAtTime(target, now, tau);
   if (target === 0) {
