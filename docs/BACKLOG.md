@@ -680,4 +680,6 @@ checks wherever it's reasonable from a headless test environment.
 
 - `load` while sounding still hard-cuts in the worklet. The ~4 ms edge fades cover pause, seek, play-over-sound and loop-region jumps, but not replacing a track that is already playing.
 - Master compressor lookahead is still absent (`DynamicsCompressorNode` has no lookahead), so the master stage is a safety net, not a true brickwall. Closing this needs a lookahead limiter, likely an AudioWorklet.
+- Stamp worklet messages with the worklet's `currentTime` so main-thread jank cannot shift the KEYLOCK timeline.
+- Stagger the three KEYLOCK decks' alignment searches on mobile.
 - A real-browser listening pass of the KEYLOCK WSOLA core is still owed (human): check rates 1.02 / 1.12 / 2.0 on vocals and on transient-heavy material.

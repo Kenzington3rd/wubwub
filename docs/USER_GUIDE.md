@@ -84,7 +84,7 @@ Each deck has Reverb, Delay, and Distortion. Click an effect's title to toggle i
 on. Knobs:
 - **Reverb** — MIX, SIZE (room length).
 - **Delay** — MIX, TIME, FB (feedback; capped at 90% so it can't run away).
-- **Distortion** — MIX, DRIVE. The shaper is normalised, so raising MIX adds colour without boosting the level.
+- **Distortion** — MIX, DRIVE. DRIVE keeps the level roughly constant on loud material (quiet passages get a little louder as DRIVE rises), so raising MIX or DRIVE adds colour rather than turning the deck down.
 
 ## Bass drop
 
@@ -171,7 +171,7 @@ moment you press it. Because it's a BPM snapshot, the captured loop won't be
 exactly N bars if the tempo drifts afterward. Click **Capture**, then **Play**
 to loop it. While a capture is running that slot's button shows "…" and
 ignores further presses; the rest of the looper stays usable. The volume
-slider sets the loop's level. Loops are captured before the master limiter, so they are not limited twice, and stopping a slot fades it out in about 5 ms with no click.
+slider sets the loop's level. Loops are captured before the master limiter, so they are not limited twice, and starting and stopping a slot fade in and out in a few milliseconds with no click, and the volume slider is unaffected by stop and play.
 
 ## Sample pad
 

@@ -110,15 +110,47 @@ describe("buildDistortionCurve — US20", () => {
     expect(highDrive[xi] / x).toBeLessThan(lowDrive[xi] / x);
   });
 
-  it("@us US20: small-signal gain is ~unity across the UI drive range (MIX is not a loudness boost)", () => {
+  it("@us US20: low-drive small-signal gain stays ~unity (MIX is not a loudness boost)", () => {
+    // Makeup gain (see buildDistortionCurve) deliberately raises small-signal
+    // gain at high drive, so this slope bound only holds for low drives.
     const n = 4096;
-    for (const drive of [0, 10, 25, 40, 60, 80, 100]) {
+    for (const drive of [0, 5, 10]) {
       const c = buildDistortionCurve(drive, n);
       const i = n / 2 + 8; // x = 8*2/n
       const x = (i * 2) / n - 1;
       const slope = c[i] / x;
       expect(slope, `drive ${drive}`).toBeGreaterThan(0.8);
       expect(slope, `drive ${drive}`).toBeLessThan(1.25);
+    }
+  });
+
+  it("@us US20: DRIVE keeps loud material at ~constant level (wet/dry RMS within 3 dB, drives 0-100)", () => {
+    const n = 4096;
+    const apply = (curve, x) => {
+      const pos = ((Math.max(-1, Math.min(1, x)) + 1) / 2) * (curve.length - 1);
+      const i = Math.floor(pos);
+      const f = pos - i;
+      return curve[i] * (1 - f) + (curve[Math.min(i + 1, curve.length - 1)]) * f;
+    };
+    const rms = (arr) => Math.sqrt(arr.reduce((t, v) => t + v * v, 0) / arr.length);
+    const N = 48000;
+    const peak3 = Math.pow(10, -3 / 20);
+    const sine = Float32Array.from({ length: N }, (_, i) => peak3 * Math.sin((2 * Math.PI * 440 * i) / 48000));
+    // Dense multi-tone: 6 partials, scaled to a -3 dBFS peak.
+    const freqs = [110, 247, 523, 1100, 2300, 4200];
+    const raw = Float32Array.from({ length: N }, (_, i) =>
+      freqs.reduce((t, f, k) => t + Math.sin((2 * Math.PI * f * i) / 48000 + k), 0)
+    );
+    let mx = 0;
+    for (const v of raw) mx = Math.max(mx, Math.abs(v));
+    const dense = raw.map((v) => (v / mx) * peak3);
+    for (const [name, sig] of [["sine", sine], ["dense", dense]]) {
+      for (const drive of [0, 25, 50, 100]) {
+        const c = buildDistortionCurve(drive, n);
+        const wet = Float32Array.from(sig, (v) => apply(c, v));
+        const db = 20 * Math.log10(rms(wet) / rms(sig));
+        expect(Math.abs(db), `${name} drive ${drive}: ${db.toFixed(2)} dB`).toBeLessThanOrEqual(3);
+      }
     }
   });
 

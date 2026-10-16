@@ -209,7 +209,8 @@ export default function App() {
       //   knee      0      — abrupt onset
       //   attack    0.003  — catches most transients, but
       //   DynamicsCompressorNode has no lookahead, so this is NOT a true
-      //   brickwall; the 0.65 trim below is what guarantees headroom.
+      //   brickwall; the 0.65 trim below gives ~3.7 dB of margin but it is a
+      //   safety net, not a guarantee.
       //   release   0.1    — quick recovery without audible pumping
       const comp = ctx.createDynamicsCompressor();
       comp.threshold.value = -2;
@@ -219,9 +220,9 @@ export default function App() {
       comp.release.value = 0.1;
       // A1 — fixed make-up trim *down* between the limiter and the master
       // gain. Even a brickwall limiter passes a peak slightly above threshold
-      // during its short attack window; a 0.65 trim guarantees the signal
-      // reaching the destination stays below full scale under worst-case
-      // simultaneous playback. The user's master volume is applied after this.
+      // during its short attack window; a 0.65 trim leaves ~3.7 dB of
+      // margin below full scale (no lookahead, so a safety net, not a
+      // guarantee, under worst-case simultaneous playback). The user's master volume is applied after this.
       const trim = ctx.createGain();
       trim.gain.value = 0.65;
       const gain = ctx.createGain();

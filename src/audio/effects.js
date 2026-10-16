@@ -49,18 +49,32 @@ export function buildReverbIR(
 
 // Soft-clip distortion curve. `drive` in [0, 100].
 //
-// Normalised to UNITY small-signal gain (slope 1 at x -> 0) so the wet path
-// adds colour, not loudness: the previous rational curve had a slope of
-// (3+drive)/9 (about +13.6 dB at drive 40), making MIX double as a level boost.
-// Shape is tanh(a*x)/a with a = 1 + drive/20: odd-symmetric, monotonic,
-// bounded by 1/a (inside [-1, 1]); higher drive saturates sooner and lower.
+// Shape is tanh(a*x) with a = 1 + drive/20: odd-symmetric, monotonic, and
+// bounded inside [-1, 1] on the WaveShaper's input domain.
+//
+// Level: a bare tanh(a*x)/a has unity small-signal gain but caps its output at
+// 1/a, so DRIVE turned loud material DOWN (-9.5 dBFS ceiling at drive 40,
+// -15.6 at drive 100; measured -2 to -12 dB on hot/dense program). The earlier
+// rational curve went the other way (+13.6 dB at drive 40). We now add makeup
+// so a loud reference level passes through at the same level at every drive:
+// the curve is scaled by a*X_REF/tanh(a*X_REF), so an input of X_REF (0.4,
+// about -8 dBFS peak) maps to itself. 0.4 balances the two failure modes: a
+// pure sine at -3 dBFS still loses ~2.5 dB at drive 100 (tanh flattens its
+// peaks) while a high-crest multi-tone gains ~2.6 dB (its small-signal gain
+// dominates); a larger X_REF would push the dense case past +3 dB. Consequence: quiet passages gain up to
+// a*X_REF/tanh(a*X_REF) of small-signal gain (about +7.7 dB at drive 100),
+// which is what a distortion's DRIVE is expected to do, and drive 0 is within
+// 0.5 dB of unity. Loud material (peaks at or above X_REF) stays near its
+// original level instead of collapsing.
+const DISTORTION_X_REF = 0.4;
 export function buildDistortionCurve(drive = 40, samples = 4096) {
   const curve = new Float32Array(samples);
   const k = Math.max(0, drive);
   const a = 1 + k / 20;
+  const makeup = (a * DISTORTION_X_REF) / Math.tanh(a * DISTORTION_X_REF);
   for (let i = 0; i < samples; i++) {
     const x = (i * 2) / samples - 1;
-    curve[i] = Math.tanh(a * x) / a;
+    curve[i] = (Math.tanh(a * x) / a) * makeup;
   }
   return curve;
 }

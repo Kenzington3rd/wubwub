@@ -6,6 +6,10 @@ import { LOOPER_BAR_OPTIONS } from "../data.js";
 const SLOT_COUNT = 4;
 const SLOT_COLORS = ["#00f5d4", "#a78bfa", "#f0c040", "#f472b6"];
 const DEFAULT_BPM = 128;
+// Edge fades (per-source GainNode). tau = fade/4 settles ~98% in the fade time.
+const LOOP_FADE_IN_TAU = 0.001; // ~4 ms
+const LOOP_FADE_OUT_TAU = 0.001; // ~5 ms
+const LOOP_STOP_DELAY = 0.006; // src.stop() after the fade-out has run
 
 // Build an AudioBuffer from two Float32Array channels (raw PCM from the worklet).
 function pcmToAudioBuffer(ctx, left, right, sampleRate) {
@@ -45,9 +49,11 @@ export default function Looper({
   const tapAttachedRefs = useRef(Array(SLOT_COUNT).fill(false));
   // State (not a ref) so the Capture button's busy state re-renders while a
   // capture is in flight.
-  // Last user-set volume per slot, so stopSource can restore the gain after
-  // its stop-fade (the fade drives the shared slot GainNode to 0).
-  const slotVolRef = useRef(slots.map((r) => r.volume));
+  // Per-source edge-fade GainNodes (BufferSource -> fade -> slot gain), keyed by
+  // slot. Start/stop fades live on THIS node, never on the shared slot gain,
+  // which belongs to the volume slider alone (so a stop/restart or a volume
+  // change can never race a fade).
+  const fadeRefs = useRef(Array(SLOT_COUNT).fill(null));
   const [pendingSlot, setPendingSlot] = useState(null);
   // D6 — which slot's bars <select> is currently hovered (-1 = none). Native
   // selects can't carry a CSS :hover from inline styles.
@@ -135,38 +141,35 @@ export default function Looper({
     node.port.postMessage({ type: "capture", slot, seconds });
   };
 
+  // Fade a slot's current source out on its own fade node and release it from
+  // `onended`, once the tail has actually played. The slot gain is not touched.
   const stopSource = (slot) => {
     const src = sourceRefs.current[slot];
     if (!src) return;
+    const fade = fadeRefs.current[slot];
     sourceRefs.current[slot] = null;
+    fadeRefs.current[slot] = null;
     const ctx = audioCtxRef.current;
-    const g = gainRefs.current[slot];
-    try {
-      src.onended = null;
-    } catch {}
-    if (ctx && g && g.gain && typeof g.gain.setTargetAtTime === "function") {
-      // ~5 ms fade (no hard stop => no click). Stop slightly after the fade
-      // and restore the slot volume afterwards so the next play is audible.
+    const release = () => {
+      try { src.disconnect(); } catch {}
+      try { fade?.disconnect(); } catch {}
+    };
+    if (ctx && fade && fade.gain && typeof fade.gain.setTargetAtTime === "function") {
       const now = ctx.currentTime;
-      const vol = slotVolRef.current[slot];
-      g.gain.cancelScheduledValues(now);
-      g.gain.setValueAtTime(g.gain.value, now);
-      g.gain.setTargetAtTime(0, now, 0.001);
+      fade.gain.cancelScheduledValues(now);
+      fade.gain.setValueAtTime(fade.gain.value, now);
+      fade.gain.setTargetAtTime(0, now, LOOP_FADE_OUT_TAU);
+      src.onended = release;
       try {
-        src.stop(now + 0.006);
-      } catch {}
-      g.gain.setValueAtTime(vol, now + 0.007);
-      src.onended = () => {
-        try { src.disconnect(); } catch {}
-      };
+        src.stop(now + LOOP_STOP_DELAY);
+      } catch {
+        release();
+      }
       return;
     }
-    try {
-      src.stop();
-    } catch {}
-    try {
-      src.disconnect();
-    } catch {}
+    try { src.onended = null; } catch {}
+    try { src.stop(); } catch {}
+    release();
   };
 
   const togglePlay = (slot) => {
@@ -185,9 +188,17 @@ export default function Looper({
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.loop = true;
-    src.connect(gain);
+    // ~4 ms fade-in on the source's own node: starting a loop mid-waveform is a
+    // step, and a re-play right after a stop must not inherit a fade-out.
+    const fade = ctx.createGain();
+    const now = ctx.currentTime;
+    fade.gain.setValueAtTime(0, now);
+    fade.gain.setTargetAtTime(1, now, LOOP_FADE_IN_TAU);
+    src.connect(fade);
+    fade.connect(gain);
     src.start();
     sourceRefs.current[slot] = src;
+    fadeRefs.current[slot] = fade;
     setSlots((s) =>
       s.map((row, i) => (i === slot ? { ...row, isPlaying: true } : row))
     );
@@ -201,7 +212,6 @@ export default function Looper({
     const ctx = audioCtxRef.current;
     const g = gainRefs.current[slot];
     if (g && ctx) g.gain.setTargetAtTime(v, ctx.currentTime, 0.02);
-    slotVolRef.current[slot] = v;
     setSlot(slot, { volume: v });
   };
 
