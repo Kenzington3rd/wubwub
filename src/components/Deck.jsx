@@ -87,8 +87,14 @@ function ensureStretchModule(ctx) {
 // instant, long enough to round off the step. The NEXT source starts at once
 // on its own fade node, so a fade-out never delays the following start.
 const EDGE_FADE_S = 0.004;
-const EDGE_FADE_TAU = EDGE_FADE_S / 4; // ~98% settled by EDGE_FADE_S
-const sourceFades = new WeakMap(); // BufferSource → its per-source GainNode
+// τ = S/6: e^-6 ≈ 0.25% (−52 dB) remains when the source stops at
+// EDGE_FADE_S. (τ = S/4 left ~1.8%, −35 dB — a larger step than a full-scale
+// 100 Hz sine's own per-sample step, i.e. still a faint click.)
+const EDGE_FADE_TAU = EDGE_FADE_S / 6;
+const sourceFades = new WeakMap();
+// W3.1 × W3.4 — shortest KEYLOCK roll region: comfortably above the stretch
+// worklet's one-HOP (512-frame) minimum at any sample rate ≥ 32 kHz.
+const KEYLOCK_MIN_ROLL_S = 0.02; // BufferSource → its per-source GainNode
 
 // Wire src → fade → dest with a short fade-in. Returns the fade node.
 function connectWithEdgeFade(ctx, src, dest) {
@@ -1314,7 +1320,10 @@ const Deck = forwardRef(function Deck(
       if (playModeRef.current === "keylock" && node) {
         const pos = livePosition(ctx, effRate);
         const loopStart = Math.max(0, pos - len);
-        const loopEnd = Math.max(loopStart + 0.01, pos);
+        // The worklet ignores a region shorter than one HOP (512 frames,
+        // ~11.6 ms at 44.1k) — a roll pressed in the first few ms would be
+        // silently dropped. Floor the region at KEYLOCK_MIN_ROLL_S.
+        const loopEnd = Math.max(loopStart + KEYLOCK_MIN_ROLL_S, pos);
         rollRef.current = { keylock: true };
         setRollActive(beats);
         try {
@@ -1433,6 +1442,22 @@ const Deck = forwardRef(function Deck(
       updateStretchRate();
       return;
     }
+    // W3.4 — mid-roll in VARI there is no main source, but the wall-clock
+    // timeline keeps running underneath at the effective rate (same as the
+    // speed effect's mid-roll branch): re-anchor it from the LIVE position at
+    // the previous rate, and keep the roll source in tempo. Without this the
+    // release re-seek lands (time since anchor) × bend away from the audio.
+    if (!src && ctx && rollRef.current?.source && isPlayingRef.current) {
+      const prevRate = clamp(speedRef.current + bendRef.current, 0.5, 2.0);
+      const newEff = clamp(speedRef.current + offset, 0.5, 2.0);
+      const live = livePosition(ctx, prevRate);
+      currentTimeRef.current = live;
+      setCurrentTime(live);
+      startTimeRef.current = ctx.currentTime - live / newEff;
+      bendRef.current = offset;
+      rollRef.current.source.playbackRate.setTargetAtTime(newEff, ctx.currentTime, 0.015);
+      return;
+    }
     if (!src || !ctx) {
       bendRef.current = offset;
       return;
@@ -1460,7 +1485,7 @@ const Deck = forwardRef(function Deck(
     // setTargetAtTime (not a hard .value write) avoids an audible click as the
     // pitch slides in/out.
     src.playbackRate.setTargetAtTime(target, ctx.currentTime, 0.015);
-  }, [audioCtxRef, updateStretchRate]);
+  }, [audioCtxRef, updateStretchRate, livePosition]);
 
   const [bendActive, setBendActive] = useState(0); // -1 | 0 | +1, for UI state
   const startNudge = useCallback(
@@ -1568,6 +1593,15 @@ const Deck = forwardRef(function Deck(
       // no snap-set is needed (the old set produced an audible chirp when the
       // ramp ended at 20k). The LFO then sums its depth on top of baseFreq.
       osc.start(t2);
+      // The LFO is SUMMED onto the filter cutoff, so stopping it removes its
+      // whole instantaneous contribution in one sample — a cutoff step unless
+      // the sine happens to sit at a zero crossing at t3 (it only does for
+      // presets whose freq × decay is a whole number of cycles). Fade the
+      // depth to 0 over the last ~20 ms so the cutoff settles on baseFreq
+      // before the oscillator stops. Audio-thread automation, no timers.
+      const wobbleFadeStart = Math.max(t2, t3 - 0.02);
+      depthGain.gain.setValueAtTime(preset.wobble.depth, wobbleFadeStart);
+      depthGain.gain.linearRampToValueAtTime(0, t3);
       osc.stop(t3);
       wobbleNodesRef.current = { osc, depthGain };
       // Cleanup
@@ -1581,9 +1615,9 @@ const Deck = forwardRef(function Deck(
         wobbleNodesRef.current = null;
         // Restore the filter to the user's *current* slider value (read via
         // ref, not the closure, in case it moved during the wobble). Glide,
-        // don't jump: the LFO leaves the cutoff wherever its last cycle
-        // ended, and a setValueAtTime step from there is an audible snap.
-        // Same tau as the user filter sweep.
+        // don't jump: the faded-out LFO leaves the cutoff at the preset's
+        // baseFreq, and a setValueAtTime step from there to the user's
+        // cutoff is an audible snap. Same tau as the user filter sweep.
         chain.filter.frequency.setTargetAtTime(filterFreqRef.current, ctx.currentTime, 0.03);
         bassDropRunningRef.current = false;
       };
@@ -1713,8 +1747,9 @@ const Deck = forwardRef(function Deck(
       stretchNodeRef.current = null;
       stretchLoadedBufferRef.current = null;
       // W3.6 — release any looping bite-preview source.
-      try { bitePreviewSourceRef.current?.stop(); } catch {}
-      try { bitePreviewSourceRef.current?.disconnect(); } catch {}
+      // Through the edge-fade path so its per-source fade node is released
+      // with it (a bare stop()/disconnect() orphaned the fade GainNode).
+      stopWithEdgeFade(audioCtxRef.current, bitePreviewSourceRef.current);
       bitePreviewSourceRef.current = null;
       clearInterval(timeIntervalRef.current);
       clearTimeout(bassDropTimeoutRef.current);
@@ -2523,8 +2558,8 @@ const Deck = forwardRef(function Deck(
           );
         })}
         {playMode === "keylock" && (
-          <span style={{ fontSize: 8, color: "#8892b0" }}>
-            experimental — trust your ears
+          <span style={{ fontSize: 9, color: "#8892b0" }}>
+            experimental — flip to VARI if it smears
           </span>
         )}
       </div>

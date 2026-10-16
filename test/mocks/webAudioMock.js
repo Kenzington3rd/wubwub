@@ -195,10 +195,12 @@ class MockOscillatorNode extends MockAudioNode {
     this.onended = null;
     this.started = false;
     this.stopped = false;
+    this.stopTime = null; // the `when` passed to stop() (wobble fade tests)
   }
   start() { this.started = true; }
-  stop() {
+  stop(when = 0) {
     this.stopped = true;
+    this.stopTime = when;
     if (this.onended) setTimeout(() => this.onended(), 0);
   }
 }
@@ -271,9 +273,12 @@ class MockAudioWorkletNode extends MockAudioNode {
           st.sampleRate = m.sampleRate || ctx?.sampleRate || null;
           st.playing = false;
           st.offset = 0;
-          // A new track resets any region; `loop` (when sent) is whole-track.
+          // A new track resets any region. Like the processor
+          // (`this.loop = m.loop ? whole-track : null`), `loop: true` loops
+          // the whole track and anything else — including no `loop` key —
+          // clears the loop.
           st.loop = {
-            enabled: "loop" in m ? !!m.loop : st.loop.enabled,
+            enabled: !!m.loop,
             start: null,
             end: null,
           };

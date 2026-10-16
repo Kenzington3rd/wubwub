@@ -114,7 +114,7 @@ The **MODE** row on each deck picks how the speed slider works:
   original pitch. Perfect for running a vocal at 128 BPM without the
   chipmunk effect. It's waveform-aligned (WSOLA-style) time-stretching done live in your browser
   — marked *experimental* because texture quality depends on the material:
-  trust your ears, and flip back to VARI any time (switching is seamless,
+  if it smears, flip back to VARI any time (switching is seamless,
   even mid-play). NUDGE in keylock bends tempo, not pitch — which is what
   you want for beatmatching. LOOP and ROLL work in keylock too, and keep the
   track's pitch. At tempos away from 1.0x it no longer warbles the way early builds did.
