@@ -1,5 +1,6 @@
 import { defineConfig } from "vite";
 import { readFileSync } from "node:fs";
+import { transform } from "esbuild";
 import { resolve } from "node:path";
 import react from "@vitejs/plugin-react";
 import { VitePWA } from "vite-plugin-pwa";
@@ -95,6 +96,36 @@ function reinjectSecurityMeta({ isSingle, projectRoot } = {}) {
   };
 }
 
+/**
+ * Vite plugin: minify `src/worklets/*.js?raw` imports at build time.
+ *
+ * Worklets are imported as `?raw` strings and registered via a Blob URL, so
+ * without this they ship verbatim (comments and all) inside the main chunk.
+ * Only the string content shrinks — the `?raw` + Blob-URL contract is
+ * unchanged. Full minify is safe: processor names are string literals, and
+ * `class X extends AudioWorkletProcessor` references a worklet-scope global
+ * that esbuild leaves alone. `apply: "build"` keeps dev/vitest on raw source.
+ */
+function minifyRawWorklets() {
+  const RE = /[\\/]src[\\/]worklets[\\/][^\\/?]+\.js\?raw$/;
+  return {
+    name: "wavecraft:minify-raw-worklets",
+    apply: "build",
+    enforce: "pre",
+    async load(id) {
+      if (!RE.test(id)) return null;
+      const file = id.slice(0, -"?raw".length);
+      this.addWatchFile(file);
+      const { code } = await transform(readFileSync(file, "utf8"), {
+        minify: true,
+        target: "es2020",
+        legalComments: "none",
+      });
+      return `export default ${JSON.stringify(code)};`;
+    },
+  };
+}
+
 export default defineConfig(({ mode }) => {
   const isSingle = mode === "single";
   const projectRoot = process.cwd();
@@ -102,6 +133,7 @@ export default defineConfig(({ mode }) => {
   return {
     base: "./",
     plugins: [
+      minifyRawWorklets(),
       react(),
       isSingle
         ? viteSingleFile({
