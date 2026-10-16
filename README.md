@@ -120,7 +120,7 @@ wubwub/
 - **P0** dual deck, file decode, 3-band EQ, volume/speed/filter, crossfade, bass drop, waveform + freq viz, BPM tap, loop, Camelot wheel, genre BPM, DJ tips.
 - **P1a** seekTo primitive, click-to-seek waveform, beat indicator, mobile responsive.
 - **P1b** effects rack (reverb / delay / distortion + master compressor), 8 cue points, beat sync, keyboard shortcuts with focus model.
-- **P2** looper (4 slots, master-tap capture), 8-pad sampler, bass drop presets, crossfade curves, deck color themes.
+- **P2** looper (4 slots, pre-limiter record-tap capture), 8-pad sampler, bass drop presets, crossfade curves, deck color themes.
 - **P3** mix recording (MediaRecorder + local download), PWA + offline precache, MIDI Learn (Chrome/Edge/Opera), autocorrelation BPM, single-file build.
 - **W1** harmonic key suggestions, momentary pitch-bend NUDGE, recording cue markers + `.cue.txt`, settings export/import, session crate, recorder pre/post-limiter tap.
 - **W3** EQ kill switches (one-tap −26 dB band kill), VOX voice/mic recording panel (local `getUserMedia`, take → deck / crate / pad), ISOLATE component modes (bass / vocal / instrumental / percussion, EQ+phase math), BITE sound-bite extraction (mark IN/OUT, preview, slice → pad / crate / 16-bit WAV download), PUMP beat-rate sidechain ducking, momentary loop ROLL (¼ / ½ / 1 / 2 beats), and a VARI / KEYLOCK playback mode (experimental WSOLA time-stretch — tempo moves, pitch stays).
