@@ -19,7 +19,9 @@
 //     overlap-adding, the grain's start is nudged within ±SEARCH samples of
 //     its nominal position to the offset whose opening CORR_LEN samples best
 //     match the natural continuation of the previous grain (normalized
-//     cross-correlation, coarse-to-fine). The nudge never accumulates: the
+//     cross-correlation, coarse-to-fine). Candidates lie on the natural
+//     continuation's sub-sample grid, so the winning grain is interpolated
+//     at the same fraction as the one it overlaps. The nudge never accumulates: the
 //     next grain's nominal position still comes from N × hopOut × rate, so
 //     tempo is exact over time. At rate 1 / pitch 1 the natural continuation
 //     IS the nominal position, the search is skipped and the output equals
@@ -178,9 +180,19 @@ export function stretchChannel(input, rate, pitchRatio = 1, grainSize = GRAIN_SI
     if (prevActual !== null) {
       const natural = prevActual + hopOut * pitchRatio;
       if (Math.abs(natural - nominal) > 1e-9 && search > 0) {
+        // Search on the natural continuation's sub-sample grid (natural +
+        // m × pitchRatio, the point nearest the nominal start). Candidates on
+        // the nominal grid sit at a different fractional position than the
+        // grain they overlap whenever hopOut × rate is non-integer, so the
+        // interpolation differs and high frequencies never line up (white
+        // noise lost ~2.5 dB, its HF band ~4 dB, at rates 0.9–1.3).
+        const base =
+          pitchRatio === 1
+            ? natural + Math.round(nominal - natural)
+            : natural + Math.round((nominal - natural) / pitchRatio) * pitchRatio;
         readGrain(input, natural, corrLen, pitchRatio, ref);
-        readGrain(input, nominal - search * pitchRatio, region.length, pitchRatio, region);
-        actual = nominal + findBestLag(ref, region, corrLen, search, scratch) * pitchRatio;
+        readGrain(input, base - search * pitchRatio, region.length, pitchRatio, region);
+        actual = base + findBestLag(ref, region, corrLen, search, scratch) * pitchRatio;
       } else {
         actual = natural;
       }

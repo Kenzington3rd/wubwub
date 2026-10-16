@@ -317,24 +317,46 @@ describe("stretch worklet — position report is the audible playhead — US73",
     expect(checked).toBeGreaterThan(2);
   });
 
-  it("@us US73: at rate 1.5 the report equals offset + emitted × rate (not a hop ahead)", () => {
-    const { Processor: P, posted, clock } = loadProcessor();
-    const p = new P();
-    send(p, { type: "load", channels: [tone(SAMPLE_RATE * 6)], sampleRate: SAMPLE_RATE });
-    send(p, { type: "play", offset: 1 });
-    let emitted = 0;
-    let checked = 0;
-    for (let k = 0; k < 400; k++) {
-      const before = posted.length;
-      render(p, QUANTUM, { rate: 1.5, clock });
-      emitted += QUANTUM;
-      const rep = posted.slice(before).find((m) => m.type === "position");
-      if (!rep) continue;
-      const expected = 1 + (emitted * 1.5) / SAMPLE_RATE;
-      expect(Math.abs(rep.seconds - expected) * SAMPLE_RATE).toBeLessThan(QUANTUM * 1.5);
-      checked++;
+  it("@us US73: at rates ≠ 1 the report matches a ramp-marker channel within one quantum (overlap-add group delay included)", () => {
+    // Replaces "report = offset + emitted × rate": that write-head estimate
+    // ignores the overlap-add group delay ≈ (GRAIN/2)·(pitch − rate) and the
+    // mean WSOLA nudge — measured +705 / −448 / −705 / −1209 samples off at
+    // rates 0.5 / 1.25 / 1.5 / 2.0, which also fired 'ended' ~27 ms early at
+    // 2.0. Channel 1 is a tiny ramp whose value is its own index, so the
+    // output's channel 1 IS the audible source position, whatever the
+    // grains did; channel 0 carries music-like material that drives the
+    // (channel-summed) alignment.
+    const len = SAMPLE_RATE * 10;
+    const K = 1e-7;
+    let seed = 1;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32) - 0.5;
+    const music = new Float32Array(len);
+    const marker = new Float32Array(len);
+    for (let i = 0; i < len; i++) {
+      music[i] = 0.4 * Math.sin((2 * Math.PI * 220 * i) / SAMPLE_RATE) + 0.3 * Math.sin((2 * Math.PI * 331 * i) / SAMPLE_RATE) + 0.05 * rnd();
+      marker[i] = K * i;
     }
-    expect(checked).toBeGreaterThan(2);
+    for (const rate of [0.5, 1.25, 1.5, 2.0]) {
+      const { Processor: P, posted, clock } = loadProcessor();
+      const p = new P();
+      send(p, { type: "load", channels: [music, marker], sampleRate: SAMPLE_RATE });
+      send(p, { type: "play", offset: 2 });
+      let rep = null;
+      let checked = 0;
+      let worst = 0;
+      for (let k = 0; k < 600; k++) {
+        const before = posted.length;
+        const [, m] = render(p, QUANTUM, { rate, clock, channels: 2 });
+        // A report describes the sample about to leave: this quantum's first.
+        if (rep && k > 8) {
+          worst = Math.max(worst, Math.abs(rep.seconds * SAMPLE_RATE - m[0] / K));
+          checked++;
+        }
+        rep = posted.slice(before).find((x) => x.type === "position") || null;
+      }
+      expect(checked, `rate ${rate}`).toBeGreaterThan(10);
+      expect(worst, `rate ${rate}`).toBeLessThanOrEqual(QUANTUM);
+    }
   });
 });
 
@@ -704,5 +726,195 @@ describe("stretch worklet — edge fades — US73", () => {
     expect(proc.tail).toBeNull();
     const post = render(proc, QUANTUM * 10);
     expect(maxStep(cat(pre, post), pre.length - 1)).toBeLessThan(LIMIT);
+  });
+});
+
+// ── review pass 1: HF alignment grid, end-of-track fade, eject fade, loop
+//    bookkeeping, audio-thread allocation ──
+describe("stretch worklet — review pass 1 fixes — US73", () => {
+  const FADE = Math.round(SAMPLE_RATE * 0.004);
+  const F0 = 440;
+  const NATURAL = (2 * Math.PI * F0) / SAMPLE_RATE;
+  const LIMIT = NATURAL + 2 / FADE + 0.01; // same click threshold as the edge-fade suite
+  const maxStep = (a, from = 1, to = a.length) => {
+    let m = 0;
+    for (let i = Math.max(1, from); i < to; i++) m = Math.max(m, Math.abs(a[i] - a[i - 1]));
+    return m;
+  };
+  const diffRmsDb = (a) => {
+    let e = 0;
+    for (let i = 1; i < a.length; i++) e += (a[i] - a[i - 1]) ** 2;
+    return 10 * Math.log10(e / (a.length - 1));
+  };
+  // Mean 11.5–12.5 kHz band power (Hann frames + per-bin Goertzel), dB.
+  const bandPowerDb = (a, lo = 11500, hi = 12500) => {
+    const N = 2048;
+    const k0 = Math.ceil((lo * N) / SAMPLE_RATE);
+    const k1 = Math.floor((hi * N) / SAMPLE_RATE);
+    let total = 0;
+    let frames = 0;
+    for (let s = 0; s + N <= a.length; s += N, frames++) {
+      for (let k = k0; k <= k1; k++) {
+        const c = 2 * Math.cos((2 * Math.PI * k) / N);
+        let s1 = 0;
+        let s2 = 0;
+        for (let i = 0; i < N; i++) {
+          const v = a[s + i] * 0.5 * (1 - Math.cos((2 * Math.PI * i) / N)) + c * s1 - s2;
+          s2 = s1;
+          s1 = v;
+        }
+        total += s1 * s1 + s2 * s2 - c * s1 * s2;
+      }
+    }
+    return 10 * Math.log10(total / frames);
+  };
+
+  it("@us US73: alignment searches the natural continuation's sub-sample grid — noise HF and a 12 kHz partial within 0.5 dB at rates 1.04 / 0.92", () => {
+    // Measured before the fix: noise −2.0 / −2.5 dB overall, first-difference
+    // −3.2 / −4.0 dB at 0.92 / 1.04 (rates 1.5 / 2.0, where HOP × rate is an
+    // integer, were already clean). After: −0.02 dB.
+    let seed = 7;
+    const rnd = () => ((seed = (seed * 1103515245 + 12345) >>> 0) / 2 ** 32) - 0.5;
+    const noise = new Float32Array(SAMPLE_RATE * 4).map(() => 0.5 * rnd());
+    const partial = tone(SAMPLE_RATE * 4, 12000).map((v, i) => 0.3 * v + 0.3 * Math.sin((2 * Math.PI * 150 * i) / SAMPLE_RATE));
+    const run = (src, rate) => {
+      const { Processor: P } = loadProcessor();
+      const p = new P();
+      send(p, { type: "load", channels: [src], sampleRate: SAMPLE_RATE });
+      send(p, { type: "play", offset: 0.5 });
+      render(p, GRAIN_SIZE * 2, { rate }); // past the fade-in
+      return render(p, SAMPLE_RATE * 1.5, { rate });
+    };
+    const ref = (src) => src.subarray(SAMPLE_RATE, SAMPLE_RATE * 2.5);
+    for (const rate of [1.04, 0.92]) {
+      expect(Math.abs(diffRmsDb(run(noise, rate)) - diffRmsDb(ref(noise))), `noise HF @ ${rate}`).toBeLessThan(0.5);
+      expect(Math.abs(bandPowerDb(run(partial, rate)) - bandPowerDb(ref(partial))), `12 kHz @ ${rate}`).toBeLessThan(0.5);
+    }
+  });
+
+  it("@us US73: the end of the track fades out — no click at rates 1.5 and 2.0", () => {
+    // 'ended' fires while the grains still hold signal (|out| ≈ 0.35–0.5 on a
+    // unit sine); it used to stop dead — step 0.82 at 1.5 / 0.69 at 2.0 on a
+    // 440 Hz sine before the group-delay fix, still 0.085 / 0.195 on 100 Hz
+    // with the corrected 'ended' timing alone. 100 Hz keeps the natural step
+    // small (0.014), so any residual cut stands out.
+    const f = 100;
+    const limit = (2 * Math.PI * f) / SAMPLE_RATE + 2 / FADE + 0.01; // ≈ 0.036
+    for (const rate of [1.5, 2.0]) {
+      const { Processor: P, posted } = loadProcessor();
+      const p = new P();
+      send(p, { type: "load", channels: [tone(SAMPLE_RATE * 3, f)], sampleRate: SAMPLE_RATE });
+      send(p, { type: "play", offset: 2.5 });
+      const out = render(p, QUANTUM * 300, { rate });
+      expect(ofType(posted, "ended"), `rate ${rate}`).toHaveLength(1);
+      expect(maxStep(out, FADE), `rate ${rate}`).toBeLessThan(limit);
+      expect(rms(out.subarray(out.length - QUANTUM * 20)), `rate ${rate}`).toBe(0);
+    }
+  });
+
+  it("@us US73: load (eject: channels null) over a sounding stream fades the old track out within 5 ms", () => {
+    // Find a quantum boundary near a peak, where a hard cut jumps by ~1.
+    const src = tone(SAMPLE_RATE * 2, F0);
+    const { Processor: R } = loadProcessor();
+    const r = new R();
+    send(r, { type: "load", channels: [src], sampleRate: SAMPLE_RATE });
+    send(r, { type: "play", offset: 0 });
+    const ref = render(r, QUANTUM * 80);
+    let q = 24;
+    while (Math.abs(ref[q * QUANTUM]) < 0.9) q++;
+
+    const { Processor: P } = loadProcessor();
+    const p = new P();
+    send(p, { type: "load", channels: [src], sampleRate: SAMPLE_RATE });
+    send(p, { type: "play", offset: 0 });
+    const pre = render(p, q * QUANTUM);
+    send(p, { type: "pause" }); // the host pauses first — the eject must not cut it short
+    send(p, { type: "load", channels: null, sampleRate: SAMPLE_RATE });
+    const post = render(p, QUANTUM * 8);
+    const all = new Float32Array(pre.length + post.length);
+    all.set(pre);
+    all.set(post, pre.length);
+    expect(maxStep(all, pre.length - 1)).toBeLessThan(LIMIT);
+    expect(rms(post.subarray(0, 64))).toBeGreaterThan(0.1); // a tail, not a cut
+    expect(post.subarray(Math.ceil(0.005 * SAMPLE_RATE)).every((v) => v === 0)).toBe(true);
+    expect(p.channels).toBe(null);
+    expect(p.playing).toBe(false);
+  });
+
+  it("@us US73: a seek just before a loop wrap posts no stray 'looped' — exactly one, at the next real wrap", () => {
+    // The tail rendered for the seek crossfade runs the OLD stream across its
+    // seam; that must not announce a wrap the listener never reaches.
+    const len = SAMPLE_RATE / 2;
+    const { Processor: P, posted } = loadProcessor();
+    const p = new P();
+    send(p, { type: "load", channels: [tone(len)], sampleRate: SAMPLE_RATE, loop: true });
+    send(p, { type: "play", offset: (len - 300) / SAMPLE_RATE });
+    render(p, QUANTUM); // 172 frames before the seam
+    send(p, { type: "seek", offset: 0.1 });
+    render(p, FADE * 2);
+    expect(ofType(posted, "looped")).toHaveLength(0);
+    render(p, len - 0.1 * SAMPLE_RATE); // through the next real wrap
+    expect(ofType(posted, "looped")).toHaveLength(1);
+  });
+
+  it("@us US73: a loop region that moves the read position announces exactly one 'looped'", () => {
+    const { Processor: P, posted } = loadProcessor();
+    const p = new P();
+    send(p, { type: "load", channels: [tone(SAMPLE_RATE * 3)], sampleRate: SAMPLE_RATE });
+    send(p, { type: "setLoop", enabled: true });
+    send(p, { type: "play", offset: 2 });
+    render(p, QUANTUM * 40);
+    send(p, { type: "setLoop", enabled: true, start: 0.5, end: 0.7 });
+    render(p, QUANTUM * 20); // < one lap of the 0.2 s region
+    expect(ofType(posted, "looped")).toHaveLength(1);
+  });
+
+  it("@us US73: setLoop off after the write head wrapped but before the wrap is audible plays on to the end", () => {
+    // Ramp source: value = position / len, so a restart shows as a drop to ~0.
+    const len = SAMPLE_RATE / 2;
+    const ramp = new Float32Array(len);
+    for (let i = 0; i < len; i++) ramp[i] = i / len;
+    const { Processor: P, posted } = loadProcessor();
+    const p = new P();
+    send(p, { type: "load", channels: [ramp], sampleRate: SAMPLE_RATE, loop: true });
+    send(p, { type: "play", offset: (len - 4000) / SAMPLE_RATE });
+    let guard = 0;
+    while (p.sourcePos > len / 2 && guard++ < 100) render(p, QUANTUM);
+    // Write head has wrapped; the listener has not reached the seam.
+    expect(p.sourcePos).toBeLessThan(len / 2);
+    expect(ofType(posted, "looped")).toHaveLength(0);
+    send(p, { type: "setLoop", enabled: false });
+    let lowest = Infinity;
+    for (let k = 0; k < 40 && ofType(posted, "ended").length === 0; k++) {
+      // Exact zeros are the track having ended (reads past the last frame).
+      for (const v of render(p, QUANTUM)) if (v !== 0) lowest = Math.min(lowest, v);
+    }
+    expect(ofType(posted, "looped")).toHaveLength(0);
+    expect(ofType(posted, "ended")).toHaveLength(1);
+    // Never went back to the start (a restart reads ~0). The 4 ms re-anchor
+    // crossfade dips to ~0.7 × like every seek crossfade (start-of-stream
+    // normalisation floor), hence 0.5 rather than ~1.
+    expect(lowest).toBeGreaterThan(0.5);
+  });
+
+  it("@us US73: play / seek / loop jumps reuse the preallocated accumulator and tail buffers", () => {
+    const { Processor: P } = loadProcessor();
+    const p = new P();
+    send(p, { type: "load", channels: [tone(SAMPLE_RATE * 2), tone(SAMPLE_RATE * 2)], sampleRate: SAMPLE_RATE, loop: true });
+    send(p, { type: "play", offset: 0 });
+    render(p, QUANTUM * 4, { channels: 2 });
+    const pending = p.pending;
+    const pending0 = p.pending[0];
+    send(p, { type: "seek", offset: 1 });
+    const seen = new Set([p.tail.buf[0]]);
+    render(p, QUANTUM * 4, { channels: 2 });
+    for (const msg of [{ type: "play", offset: 0.5 }, { type: "seek", offset: 1.2 }, { type: "setLoop", enabled: true, start: 0.1, end: 0.3 }, { type: "seek", offset: 1.5 }]) {
+      send(p, msg);
+      if (p.tail) seen.add(p.tail.buf[0]);
+      render(p, QUANTUM * 4, { channels: 2 });
+    }
+    expect(p.pending).toBe(pending);
+    expect(p.pending[0]).toBe(pending0);
+    expect(seen.size).toBeLessThanOrEqual(2); // two alternating tail slots, never fresh arrays
   });
 });

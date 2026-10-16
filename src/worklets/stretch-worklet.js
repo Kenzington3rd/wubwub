@@ -20,12 +20,20 @@
 //        state stands); enabled: false → no loop, play to the end.
 // Worklet → host:
 //   { type: "position", seconds }  ~every 100 ms: the source position of the
-//        sample about to leave the node (the AUDIBLE playhead, not the
-//        synthesis write head, which runs one hop ahead).
+//        sample about to leave the node (the AUDIBLE playhead). That sample is
+//        an overlap-add of up to four grains, each reading the source at its
+//        own aligned start + offset × pitch; the playhead is their window-
+//        weighted mean read position (exact for a linear ramp). This includes
+//        the overlap-add group delay ≈ (GRAIN/2)·(pitch − rate) plus the mean
+//        WSOLA nudge, which a write-head estimate (nominal + emitted × rate)
+//        misses by up to ~27 ms at rate 2.
 //   { type: "looped", seconds }    once per wrap, when the audible position
-//        wraps; `seconds` is the loop start (0 for a whole-track loop).
+//        crosses the seam (or at once when play / seek / a region change
+//        lands past the region end); `seconds` is the loop start (0 for a
+//        whole-track loop). Never posted by a fading tail.
 //   { type: "ended" }              no loop enabled and the audible position
-//        reached the end of the track. Playback stops.
+//        reached the end of the track. Playback stops with the ~4 ms fade
+//        (the grains still hold signal at that point).
 // AudioParams:
 //   rate       — tempo ratio (0.5–2.0); track time advances at this rate
 //   pitchRatio — resample ratio (2^(semitones/12)); 1 = keylock
@@ -38,10 +46,18 @@
 // through a linear-interp resampler at pitchRatio. At rate 1 / pitch 1 the
 // search is skipped and output equals input after the 3-hop fade-in.
 //
+// Alignment grid: candidates are read on the natural continuation's
+// sub-sample grid (natural + m × pitch), not the nominal one. When HOP × rate
+// is non-integer the two sit on different fractional positions, every
+// candidate is interpolated at a different fraction than the grain it
+// overlaps, and high frequencies never line up (white noise lost 2.0–2.5 dB,
+// its HF band 3–4 dB, at rates 0.9–1.3).
+//
 // Edge fades (~4 ms, FADE samples): the host fades its VARI BufferSources on
-// start / stop / seek, so this node has to do the same for itself. pause
-// keeps rendering the live grain state down to zero; seek / play-over-sound /
-// a loop-region change that moves the read position render the OLD stream's
+// start / stop / seek, so this node has to do the same for itself. pause and
+// end-of-track keep rendering the live grain state down to zero; seek /
+// play-over-sound / load (including eject, `channels: null`) / a loop change
+// that moves the read position render the OLD stream's
 // next FADE samples into a tail ramped to zero while the NEW stream fades in
 // (a short crossfade, ≤ 5 ms total, still instant to the ear). A fresh
 // stream's partial-overlap start is level-normalised so the new position is
@@ -51,7 +67,12 @@
 // Looping happens here, not in the host: the read position wraps modulo the
 // loop region inside synthesizeBlock and grain reads wrap with it, so grains
 // straddling the seam read continuous material — no ended → play(0) round
-// trip, no gap, no abandoned tail.
+// trip, no gap, no abandoned tail. Grain positions are kept in "stream"
+// coordinates that never wrap (each wrap adds the region length); each wrap
+// queues its seam in those coordinates and is announced, and subtracted from
+// the reported position, only once the audible playhead crosses it. Turning
+// the loop off while wrapped material is already in flight re-anchors the
+// stream at the audible position, so the track does not restart once.
 //
 // Buffers at a sample rate other than the context's are read at
 // sourceSampleRate / sampleRate frames per output frame (pitch AND tempo), so
@@ -90,27 +111,39 @@ class StretchProcessor extends AudioWorkletProcessor {
     this.playing = false;
     // Nominal source position (fractional source frames) of the NEXT grain.
     this.sourcePos = 0;
-    // Nominal position + effective rate of the grain currently streaming
-    // out — the audible playhead derives from these and pendingRead.
-    this.grainNominal = 0;
-    this.grainRate = 1;
     // Actual (aligned) read position of the previous grain; null right after
     // play / seek / load, when there is nothing to align to.
     this.prevActual = null;
     // Loop request: null (off) or { start, end } in seconds (null = track
     // edge). Resolved against the loaded track per block.
     this.loop = null;
-    // Index within the current block at which the audible position wraps
-    // (−1 = none pending).
-    this.wrapAt = -1;
     this.window = new Float32Array(GRAIN);
     for (let i = 0; i < GRAIN; i++) {
       this.window[i] = OLA_GAIN * 0.5 * (1 - Math.cos((2 * Math.PI * i) / GRAIN));
     }
     // Overlap-add accumulator per channel; [0..HOP) is final after each
-    // synthesizeBlock and streams out.
-    this.pending = null;
+    // synthesizeBlock and streams out. Allocated per channel layout (the
+    // first block after a load that changes the channel count) and reused —
+    // play / seek / loop jumps only clear it. `streaming` says it holds a live
+    // stream.
+    this.pending = [];
+    this.streaming = false;
     this.pendingRead = 0;
+    // Stream coordinates (see header): unwrapped start (gPos) and pitch of
+    // the last four grains, ring-indexed by grainCount & 3; lapFrames is the
+    // total wrapped off sourcePos since the stream began.
+    this.gPos = new Float64Array(4);
+    this.gPitch = new Float64Array(4);
+    this.lapFrames = 0;
+    // Seams queued by the write head, not yet audible: stream coordinate and
+    // the amount to subtract once crossed. audLap = sum of crossed seams.
+    this.seamAt = new Float64Array(16);
+    this.seamShift = new Float64Array(16);
+    this.seamHead = 0;
+    this.seamCount = 0;
+    this.audLap = 0;
+    // A stream that started past the region end wrapped at once.
+    this.startWrapped = false;
     this.lastReport = 0;
     // Edge-fade state. release: samples of pause fade-out left. inPos: how
     // far the current stream's fade-in has progressed. tail: the previous
@@ -118,6 +151,11 @@ class StretchProcessor extends AudioWorkletProcessor {
     this.release = 0;
     this.inPos = FADE;
     this.tail = null;
+    // Two preallocated tail slots (a capture during a fading tail mixes the
+    // old slot into the other one). Re-allocated only if the output channel
+    // count changes.
+    this.tails = [0, 1].map(() => ({ buf: [new Float32Array(FADE), new Float32Array(FADE)], pos: 0 }));
+    this.tailIdx = 0;
     this.lastRate = 1;
     this.lastPitch = 1;
     this.outCh = 0;
@@ -126,7 +164,7 @@ class StretchProcessor extends AudioWorkletProcessor {
     this.norm = new Float32Array(HOP);
     this.normOn = false;
     this.grainCount = 0;
-    // WSOLA scratch (allocated once — no garbage on the audio thread).
+    // WSOLA scratch (allocated once).
     this.ref = new Float32Array(CORR);
     this.region = new Float32Array(CORR + 2 * SEARCH);
     this.tmp = new Float32Array(CORR + 2 * SEARCH);
@@ -138,13 +176,15 @@ class StretchProcessor extends AudioWorkletProcessor {
 
   onMessage(m) {
     if (m.type === "load") {
+      // A load (eject included) over a sounding stream fades the OLD
+      // channels out — the tail is rendered before they are dropped.
+      this.captureTail();
       this.channels = m.channels || null;
       this.sourceSampleRate = m.sampleRate || sampleRate;
       this.playing = false;
       this.sourcePos = 0;
       this.loop = m.loop ? { start: null, end: null } : null;
       this.release = 0;
-      this.tail = null;
       this.resetStream();
     } else if (m.type === "play") {
       this.captureTail(); // play over a sounding stream / fade crossfades
@@ -153,7 +193,7 @@ class StretchProcessor extends AudioWorkletProcessor {
       this.release = 0;
       this.playing = true;
     } else if (m.type === "pause") {
-      if (this.playing && this.pending && this.channels) this.release = FADE;
+      if (this.playing && this.streaming && this.channels) this.release = FADE;
       this.playing = false;
     } else if (m.type === "seek") {
       this.captureTail();
@@ -167,7 +207,7 @@ class StretchProcessor extends AudioWorkletProcessor {
 
   setLoop(m) {
     if (!m.enabled) {
-      this.loop = null;
+      this.disableLoop();
       return;
     }
     const hasStart = typeof m.start === "number" && Number.isFinite(m.start);
@@ -190,14 +230,18 @@ class StretchProcessor extends AudioWorkletProcessor {
         return;
       }
       // A region that leaves the audible playhead past its end moves the read
-      // position (next grain wraps to the region start): crossfade it. The
-      // synth then wraps the unwrapped position itself and announces `looped`
-      // exactly as before.
-      const p = this.grainNominal + this.pendingRead * this.grainRate;
-      if (this.playing && this.pending && p >= b.end) {
-        this.captureTail();
-        this.sourcePos = p;
-        this.resetStream();
+      // position (next grain wraps to the region start): crossfade it, the
+      // tail rendered under the OLD loop state. The synth then wraps the
+      // position itself and announces `looped` once.
+      if (this.playing && this.streaming) {
+        this.loop = prev;
+        const p = this.audibleFrame();
+        if (p >= b.end) {
+          this.captureTail();
+          this.sourcePos = p;
+          this.resetStream();
+        }
+        this.loop = next;
       }
       return;
     }
@@ -205,11 +249,34 @@ class StretchProcessor extends AudioWorkletProcessor {
     this.loop = next;
   }
 
+  // Loop off. If the write head has already wrapped, or grains in flight
+  // already read past the seam, while the audible playhead has not reached
+  // it, re-anchor the stream (crossfaded) at the audible position so the
+  // wrap never becomes audible; otherwise just drop the loop.
+  disableLoop() {
+    const b = this.loopBounds();
+    if (b && this.playing && this.streaming) {
+      const p = this.audibleFrame();
+      const ahead = 2 * GRAIN * Math.max(1, this.lastRate, this.lastPitch);
+      if (this.seamCount > 0 || p + ahead >= b.end) {
+        this.captureTail();
+        this.loop = null;
+        this.sourcePos = p;
+        this.resetStream();
+        return;
+      }
+    }
+    this.loop = null;
+  }
+
   resetStream() {
-    this.pending = null;
+    this.streaming = false;
     this.prevActual = null;
-    this.wrapAt = -1;
-    this.grainNominal = this.sourcePos;
+    this.lapFrames = 0;
+    this.seamHead = 0;
+    this.seamCount = 0;
+    this.audLap = 0;
+    this.startWrapped = false;
     this.pendingRead = 0;
     this.inPos = 0; // new stream fades in over FADE samples
     this.grainCount = 0;
@@ -218,10 +285,10 @@ class StretchProcessor extends AudioWorkletProcessor {
   }
 
   // True while anything is (or just was) audible: a stream that has emitted
-  // at least one sample (`pending` exists), or a fading tail.
+  // at least one sample (`streaming`), or a fading tail.
   sounding() {
     return !!(
-      ((this.playing || this.release > 0) && this.pending && this.channels && this.channels.length) ||
+      ((this.playing || this.release > 0) && this.streaming && this.channels && this.channels.length) ||
       this.tail
     );
   }
@@ -229,13 +296,20 @@ class StretchProcessor extends AudioWorkletProcessor {
   // Render the old stream's next FADE samples (everything it would emit —
   // pause fade, an in-flight crossfade — continuing seamlessly from the last
   // sample out) ramped linearly to zero, to be mixed under the new stream.
+  // Side-effect free beyond the stream state every caller discards right
+  // after (resetStream): produce() posts nothing, and seams it queues while
+  // rendering are dropped with the stream, so a wrap inside the tail never
+  // announces `looped`.
   captureTail() {
     if (!this.sounding()) return;
     const n = this.outCh || (this.channels ? this.channels.length : 1);
-    const buf = Array.from({ length: n }, () => new Float32Array(FADE));
-    this.produce(FADE, this.lastRate, this.lastPitch, buf, 0);
-    for (const ch of buf) for (let k = 0; k < FADE; k++) ch[k] *= (FADE - k) / FADE;
-    this.tail = { buf, pos: 0 };
+    this.tailIdx ^= 1;
+    const t = this.tails[this.tailIdx];
+    if (t.buf.length !== n) t.buf = Array.from({ length: n }, () => new Float32Array(FADE));
+    this.produce(FADE, this.lastRate, this.lastPitch, t.buf, 0);
+    for (const ch of t.buf) for (let k = 0; k < FADE; k++) ch[k] *= (FADE - k) / FADE;
+    t.pos = 0;
+    this.tail = t;
   }
 
   // Loop region in source frames, or null when no (valid) loop is active.
@@ -367,14 +441,29 @@ class StretchProcessor extends AudioWorkletProcessor {
     return bestOff - SEARCH;
   }
 
+  queueSeam(at, shift) {
+    // Unheard seams span at most ~GRAIN × rate of write-head lead over a
+    // region ≥ HOP long: a handful even at the extreme rate, never 16.
+    if (this.seamCount >= this.seamAt.length) return;
+    const k = (this.seamHead + this.seamCount) % this.seamAt.length;
+    this.seamAt[k] = at;
+    this.seamShift[k] = shift;
+    this.seamCount++;
+  }
+
   // Produce HOP fresh output samples: shift the accumulator left by one hop,
   // overlap-add one aligned grain across [0..GRAIN), and advance the nominal
   // read head by HOP × rate (wrapping inside an active loop).
   synthesizeBlock(rate, pitch) {
     const chs = this.channels;
     const n = chs.length;
-    if (!this.pending) {
-      this.pending = Array.from({ length: n }, () => new Float32Array(GRAIN));
+    if (!this.streaming) {
+      if (this.pending.length !== n) {
+        this.pending = Array.from({ length: n }, () => new Float32Array(GRAIN));
+      } else {
+        for (const buf of this.pending) buf.fill(0);
+      }
+      this.streaming = true;
     }
     this.grainCount++;
     this.normOn = this.grainCount < 4;
@@ -391,22 +480,42 @@ class StretchProcessor extends AudioWorkletProcessor {
     const b = this.loopBounds();
     let nominal = this.sourcePos;
     if (b && nominal >= b.end) {
-      // play / seek landed at or past the region end → wrap to its start.
-      nominal = this.wrap(nominal, b, false);
-      this.wrapAt = 0;
+      const w = this.wrap(nominal, b, false);
+      if (this.prevActual === null) {
+        // play / seek landed at or past the region end → jump to its start.
+        this.startWrapped = true;
+      } else {
+        // A region change put the write head past the end: a real wrap.
+        this.queueSeam(b.end + this.lapFrames, nominal - w);
+        this.lapFrames += nominal - w;
+      }
+      nominal = w;
     }
     const both = !!b && nominal >= b.start && nominal < b.end;
     let actual = nominal;
+    let delta = 0; // actual − nominal before wrapping (small, wrap-free)
     if (this.prevActual !== null) {
       const natural = this.wrap(this.prevActual + HOP * pitch, b, both);
       if (Math.abs(natural - nominal) > 1e-9) {
+        // Candidates on the natural continuation's sub-sample grid, within
+        // ½ pitch of the nominal start (natural and nominal may sit a loop
+        // length apart across the seam; the rounding absorbs that).
+        const base =
+          pitch === 1
+            ? natural + Math.round(nominal - natural)
+            : natural + Math.round((nominal - natural) / pitch) * pitch;
         this.readMono(natural, pitch, CORR, this.ref, b, both);
-        this.readMono(nominal - SEARCH * pitch, pitch, CORR + 2 * SEARCH, this.region, b, both);
-        actual = this.wrap(nominal + this.bestLag() * pitch, b, both);
+        this.readMono(base - SEARCH * pitch, pitch, CORR + 2 * SEARCH, this.region, b, both);
+        const pre = base + this.bestLag() * pitch;
+        delta = pre - nominal;
+        actual = this.wrap(pre, b, both);
       } else {
         actual = natural;
+        delta = natural - nominal;
       }
     }
+    this.gPos[this.grainCount & 3] = nominal + this.lapFrames + delta;
+    this.gPitch[this.grainCount & 3] = pitch;
     for (let c = 0; c < n; c++) {
       const buf = this.pending[c];
       buf.copyWithin(0, HOP);
@@ -414,35 +523,50 @@ class StretchProcessor extends AudioWorkletProcessor {
       this.read(chs[c], actual, pitch, GRAIN, buf, b, both, this.window);
     }
     this.prevActual = actual;
-    this.grainNominal = nominal;
-    this.grainRate = rate;
     let next = nominal + HOP * rate;
     if (b && next >= b.end) {
-      // First sample of this block whose audible position is ≥ end (a wrap
-      // landing exactly on the next block's first sample is announced with
-      // this block's last one — one sample early, never a block late).
-      this.wrapAt = Math.min(HOP - 1, Math.max(0, Math.ceil((b.end - nominal) / rate)));
-      next = this.wrap(next, b, false);
+      // The write head wraps now; the seam becomes audible later (process()
+      // announces it when the audible playhead crosses it).
+      const w = this.wrap(next, b, false);
+      this.queueSeam(b.end + this.lapFrames, next - w);
+      this.lapFrames += next - w;
+      next = w;
     }
     this.sourcePos = next;
   }
 
+  // Stream coordinate of the sample about to leave the node: the window-
+  // weighted mean read position of the (up to four) grains it is summed
+  // from — the overlap-add group delay included.
+  audibleStream() {
+    if (!this.streaming) return this.sourcePos + this.audLap;
+    const live = Math.min(this.grainCount, 4);
+    let sw = 0;
+    let sp = 0;
+    for (let k = 0; k < live; k++) {
+      const d = this.pendingRead + k * HOP;
+      if (d >= GRAIN) break;
+      const g = (this.grainCount - k) & 3;
+      const w = this.window[d];
+      sw += w;
+      sp += w * (this.gPos[g] + d * this.gPitch[g]);
+    }
+    return sw > 1e-9 ? sp / sw : this.gPos[this.grainCount & 3];
+  }
+
   // Source frame of the sample about to leave the node.
   audibleFrame() {
-    let p = this.grainNominal + this.pendingRead * this.grainRate;
-    const b = this.loopBounds();
-    if (b && p >= b.end) p = this.wrap(p, b, false);
-    return Math.max(0, p);
+    return Math.max(0, this.audibleStream() - this.audLap);
   }
 
   // Fill `out[c][off .. off+frames)` with the stream (edge-faded), plus any
-  // fading tail. Shared by process() and captureTail().
+  // fading tail. Shared by process() and captureTail(); posts no messages.
   produce(frames, rate, pitch, out, off) {
     const hasTrack = this.channels && this.channels.length;
     for (let f = 0; f < frames; f++) {
       // Per sample: a pause fade-out can run dry mid-quantum.
       if (hasTrack && (this.playing || this.release > 0)) {
-        if (!this.pending || this.pendingRead >= HOP) {
+        if (!this.streaming || this.pendingRead >= HOP) {
           this.synthesizeBlock(rate, pitch);
           this.pendingRead = 0;
         }
@@ -457,14 +581,6 @@ class StretchProcessor extends AudioWorkletProcessor {
           out[c][off + f] = srcCh[this.pendingRead] * g;
         }
         this.pendingRead++;
-        if (this.wrapAt >= 0 && this.pendingRead > this.wrapAt) {
-          this.wrapAt = -1;
-          const b = this.loopBounds();
-          this.port.postMessage({
-            type: "looped",
-            seconds: b ? b.start / this.sourceSampleRate : 0,
-          });
-        }
       } else {
         for (let c = 0; c < out.length; c++) out[c][off + f] = 0;
       }
@@ -476,7 +592,7 @@ class StretchProcessor extends AudioWorkletProcessor {
         if (++t.pos >= FADE) this.tail = null;
       }
     }
-    if (!this.playing && this.release <= 0) this.pending = null; // faded out
+    if (!this.playing && this.release <= 0) this.streaming = false; // faded out
   }
 
   process(inputs, outputs, parameters) {
@@ -502,7 +618,21 @@ class StretchProcessor extends AudioWorkletProcessor {
     // Pause fade-out / tail only: no transport bookkeeping while not playing.
     if (!this.playing || !this.channels || this.channels.length === 0) return true;
 
-    const audible = this.audibleFrame();
+    // Seams the audible playhead has crossed this quantum → `looped`.
+    const u = this.audibleStream();
+    let wrapped = this.startWrapped;
+    this.startWrapped = false;
+    while (this.seamCount > 0 && u >= this.seamAt[this.seamHead]) {
+      this.audLap += this.seamShift[this.seamHead];
+      this.seamHead = (this.seamHead + 1) % this.seamAt.length;
+      this.seamCount--;
+      wrapped = true;
+    }
+    if (wrapped) {
+      const b = this.loopBounds();
+      this.port.postMessage({ type: "looped", seconds: b ? b.start / this.sourceSampleRate : 0 });
+    }
+    const audible = Math.max(0, u - this.audLap);
     // Position report (~10 Hz) in source-track seconds.
     const nowSec = currentTime;
     if (nowSec - this.lastReport > 0.1) {
@@ -512,10 +642,11 @@ class StretchProcessor extends AudioWorkletProcessor {
         seconds: audible / this.sourceSampleRate,
       });
     }
-    // End of track (no loop) → report and stop producing.
+    // End of track (no loop) → report and fade out: the grains still hold
+    // signal here, and a hard stop would click.
     if (!this.loopBounds() && audible >= this.channels[0].length) {
       this.playing = false;
-      this.release = 0;
+      this.release = FADE;
       this.port.postMessage({ type: "ended" });
     }
     return true;

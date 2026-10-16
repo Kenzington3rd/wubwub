@@ -678,7 +678,8 @@ checks wherever it's reasonable from a headless test environment.
 
 ### W4.4 follow-ups
 
-- `load` while sounding still hard-cuts in the worklet. The ~4 ms edge fades cover pause, seek, play-over-sound and loop-region jumps, but not replacing a track that is already playing.
+- Turning the loop off within ~4 ms of the seam can leave a little already-wrapped audio at low level in the fade-out tail (the `load`-while-sounding hard cut itself was closed in the pass-1 fixes).
+- Every worklet crossfade (seek, loop-off restart) dips to ~0.7× for ~3 ms because of the level floor at stream start; inaudible on program material, measurable on a sine.
 - Master compressor lookahead is still absent (`DynamicsCompressorNode` has no lookahead), so the master stage is a safety net, not a true brickwall. Closing this needs a lookahead limiter, likely an AudioWorklet.
 - Stamp worklet messages with the worklet's `currentTime` so main-thread jank cannot shift the KEYLOCK timeline.
 - Stagger the three KEYLOCK decks' alignment searches on mobile.

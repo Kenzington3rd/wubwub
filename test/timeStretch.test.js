@@ -130,6 +130,40 @@ function zeroCrossingHz(out) {
   return (count - 1) / ((last - first) / SR);
 }
 
+// First-difference RMS in dB — a high-frequency proxy (|1 − z⁻¹| rises
+// 6 dB/oct), so HF smeared by misaligned grains shows up here first.
+function diffRmsDb(a) {
+  let e = 0;
+  for (let i = 1; i < a.length; i++) e += (a[i] - a[i - 1]) ** 2;
+  return 10 * Math.log10(e / (a.length - 1));
+}
+// Mean power in the 11.5–12.5 kHz band (Hann-windowed 2048-sample frames,
+// Goertzel per bin) in dB — catches a 12 kHz partial smeared out of its bin
+// as well as one lost outright.
+function bandPowerDb(a, lo = 11500, hi = 12500, sr = SR) {
+  const N = 2048;
+  const w = new Float32Array(N);
+  for (let i = 0; i < N; i++) w[i] = 0.5 * (1 - Math.cos((2 * Math.PI * i) / N));
+  const k0 = Math.ceil((lo * N) / sr);
+  const k1 = Math.floor((hi * N) / sr);
+  let total = 0;
+  let frames = 0;
+  for (let s = 0; s + N <= a.length; s += N, frames++) {
+    for (let k = k0; k <= k1; k++) {
+      const c = 2 * Math.cos((2 * Math.PI * k) / N);
+      let s1 = 0;
+      let s2 = 0;
+      for (let i = 0; i < N; i++) {
+        const v = a[s + i] * w[i] + c * s1 - s2;
+        s2 = s1;
+        s1 = v;
+      }
+      total += s1 * s1 + s2 * s2 - c * s1 * s2;
+    }
+  }
+  return 10 * Math.log10(total / frames);
+}
+
 describe("timeStretch WSOLA quality — US71", () => {
   it("@us US71: 440 Hz sine keeps a flat envelope — AM depth ≤ 0.5 dB at rates 1.02 / 1.12 / 2.0", () => {
     // Measured: 0.01 / 0.00 / 0.00 dB (plain OLA: 10.9 / 16.3 / 13.6 dB).
@@ -183,6 +217,28 @@ describe("timeStretch WSOLA quality — US71", () => {
       worst = Math.max(worst, Math.abs(out[i] - src[i]));
     }
     expect(worst).toBeLessThan(1e-6);
+  });
+
+  it("@us US71: high frequencies survive the alignment — white noise HF and a 12 kHz partial within 0.5 dB at rates 1.04 / 0.92", () => {
+    // Candidates searched on the NOMINAL grid sat at a different sub-sample
+    // fraction than the grain they overlap whenever hopOut × rate is
+    // non-integer, so HF never lined up. Measured before the fix (worklet,
+    // same core): noise −2.0…−2.5 dB, first-difference (HF proxy) −3.2…−4.0
+    // dB at rates 0.92–1.3; after: −0.02 dB.
+    let seed = 5;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+    const noise = new Float32Array(SR * 3).map(() => rnd());
+    const partial = new Float32Array(SR * 3);
+    for (let i = 0; i < partial.length; i++) {
+      partial[i] = 0.3 * Math.sin((2 * Math.PI * 12000 * i) / SR) + 0.3 * Math.sin((2 * Math.PI * 150 * i) / SR);
+    }
+    for (const rate of [1.04, 0.92]) {
+      const out = stretchChannel(noise, rate);
+      const mid = (a) => a.subarray(GRAIN_SIZE * 2, a.length - GRAIN_SIZE * 2);
+      expect(Math.abs(diffRmsDb(mid(out)) - diffRmsDb(mid(noise))), `noise HF @ ${rate}`).toBeLessThan(0.5);
+      const p = stretchChannel(partial, rate);
+      expect(Math.abs(bandPowerDb(mid(p)) - bandPowerDb(mid(partial))), `12 kHz @ ${rate}`).toBeLessThan(0.5);
+    }
   });
 
   it("@us US71: findBestLag keeps lag 0 for silence and finds a known shift", () => {
