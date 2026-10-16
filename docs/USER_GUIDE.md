@@ -84,7 +84,7 @@ Each deck has Reverb, Delay, and Distortion. Click an effect's title to toggle i
 on. Knobs:
 - **Reverb** — MIX, SIZE (room length).
 - **Delay** — MIX, TIME, FB (feedback; capped at 90% so it can't run away).
-- **Distortion** — MIX, DRIVE.
+- **Distortion** — MIX, DRIVE. The shaper is normalised, so raising MIX adds colour without boosting the level.
 
 ## Bass drop
 
@@ -112,12 +112,12 @@ The **MODE** row on each deck picks how the speed slider works:
   This is the polished, battle-tested mode.
 - **KEYLOCK** — the speed slider changes *tempo only*; the track keeps its
   original pitch. Perfect for running a vocal at 128 BPM without the
-  chipmunk effect. It's granular time-stretching done live in your browser
+  chipmunk effect. It's waveform-aligned (WSOLA-style) time-stretching done live in your browser
   — marked *experimental* because texture quality depends on the material:
   trust your ears, and flip back to VARI any time (switching is seamless,
   even mid-play). NUDGE in keylock bends tempo, not pitch — which is what
   you want for beatmatching. LOOP and ROLL work in keylock too, and keep the
-  track's pitch.
+  track's pitch. At tempos away from 1.0x it no longer warbles the way early builds did.
 
 ## Roll
 
@@ -171,7 +171,7 @@ moment you press it. Because it's a BPM snapshot, the captured loop won't be
 exactly N bars if the tempo drifts afterward. Click **Capture**, then **Play**
 to loop it. While a capture is running that slot's button shows "…" and
 ignores further presses; the rest of the looper stays usable. The volume
-slider sets the loop's level.
+slider sets the loop's level. Loops are captured before the master limiter, so they are not limited twice, and stopping a slot fades it out in about 5 ms with no click.
 
 ## Sample pad
 
