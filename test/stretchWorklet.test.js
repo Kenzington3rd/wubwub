@@ -128,6 +128,7 @@ describe("stretch worklet — streaming DSP — US73", () => {
     proc.port.onmessage({ data: { type: "play", offset: 0 } });
     expect(rms(render(proc, QUANTUM * 8))).toBeGreaterThan(0.01);
     proc.port.onmessage({ data: { type: "pause" } });
+    render(proc, QUANTUM * 2); // ~4 ms fade-out tail (see edge-fade suite)
     expect(rms(render(proc, QUANTUM * 8))).toBe(0);
   });
 
@@ -533,5 +534,175 @@ describe("stretch worklet — sample-rate guard — US73", () => {
     let worst = 0;
     for (let i = GRAIN_SIZE - HOP; i < out.length; i++) worst = Math.max(worst, Math.abs(out[i] - src[i]));
     expect(worst).toBeLessThan(1e-6);
+  });
+});
+
+// ── edge fades: no click on pause / seek / play-over-fade ──
+describe("stretch worklet — edge fades — US73", () => {
+  const FADE = Math.round(SAMPLE_RATE * 0.004); // 176
+  const F0 = 440;
+  // A 440 Hz unit sine moves at most 2π·f/sr per sample; the fade/crossfade
+  // adds at most (|a|+|b|)/FADE on top. Anything above this is a click.
+  const NATURAL = (2 * Math.PI * F0) / SAMPLE_RATE; // ≈ 0.0627
+  const LIMIT = NATURAL + 2 / FADE + 0.01; // ≈ 0.085
+  const maxStep = (a, from = 1, to = a.length) => {
+    let m = 0;
+    for (let i = Math.max(1, from); i < to; i++) m = Math.max(m, Math.abs(a[i] - a[i - 1]));
+    return m;
+  };
+  const cat = (...parts) => {
+    const o = new Float32Array(parts.reduce((n, p) => n + p.length, 0));
+    let w = 0;
+    for (const p of parts) { o.set(p, w); w += p.length; }
+    return o;
+  };
+  const src = tone(SAMPLE_RATE * 3, F0);
+  // Exact value of the source sine at a fractional frame (offsets land
+  // between samples; comparing to src[round()] would be a half-sample error).
+  const sine = (frame) => Math.sin((2 * Math.PI * F0 * frame) / SAMPLE_RATE);
+  let proc;
+  beforeEach(() => {
+    const { Processor } = loadProcessor();
+    proc = new Processor();
+    send(proc, { type: "load", channels: [src], sampleRate: SAMPLE_RATE });
+  });
+
+  // Quantum boundary q (in [24, 80)) where the un-paused stream is near a
+  // peak, so a hard cut there would jump by ~1.
+  function peakQuantum() {
+    const { Processor } = loadProcessor();
+    const p = new Processor();
+    send(p, { type: "load", channels: [src], sampleRate: SAMPLE_RATE });
+    send(p, { type: "play", offset: 0 });
+    const ref = render(p, QUANTUM * 80);
+    for (let q = 24; q < 80; q++) if (Math.abs(ref[q * QUANTUM]) > 0.9) return { q, ref };
+    throw new Error("no peak found");
+  }
+
+  it("@us US73: pause mid-cycle fades to zero within 5 ms with no click", () => {
+    const { q, ref } = peakQuantum();
+    const hardCut = Math.abs(ref[q * QUANTUM]); // what the old zero-fill did
+    expect(hardCut).toBeGreaterThan(LIMIT * 8);
+    send(proc, { type: "play", offset: 0 });
+    const pre = render(proc, q * QUANTUM);
+    send(proc, { type: "pause" });
+    const post = render(proc, QUANTUM * 8);
+    expect(maxStep(cat(pre, post), q * QUANTUM - 1)).toBeLessThan(LIMIT);
+    // Still sounding right after pause (a tail, not an instant stop)…
+    expect(rms(post.subarray(0, 64))).toBeGreaterThan(0.1);
+    // …envelope strictly decays and is exactly zero within 5 ms.
+    expect(post.subarray(Math.ceil(0.005 * SAMPLE_RATE)).every((v) => v === 0)).toBe(true);
+    expect(rms(post.subarray(FADE - 32, FADE))).toBeLessThan(0.15);
+    expect(rms(post.subarray(FADE - 8, FADE))).toBeLessThan(0.03);
+    // Tail is the live stream scaled by the ramp (continues from the grain).
+    for (let k = 0; k < FADE; k += 11) {
+      expect(Math.abs(post[k] - ref[q * QUANTUM + k] * ((FADE - k) / FADE))).toBeLessThan(1e-4);
+    }
+  });
+
+  it("@us US73: pause reads playing=false at once while audio tails", () => {
+    send(proc, { type: "play", offset: 0 });
+    render(proc, QUANTUM * 10);
+    send(proc, { type: "pause" });
+    expect(proc.playing).toBe(false);
+    expect(rms(render(proc, QUANTUM))).toBeGreaterThan(0.01);
+    render(proc, QUANTUM * 2);
+    expect(rms(render(proc, QUANTUM * 4))).toBe(0);
+  });
+
+  it("@us US73: pause before any audio left the node stays silent", () => {
+    send(proc, { type: "play", offset: 0 });
+    send(proc, { type: "pause" });
+    expect(rms(render(proc, QUANTUM * 4))).toBe(0);
+  });
+
+  it("@us US73: seek while playing crossfades — no click, new position within 5 ms", () => {
+    send(proc, { type: "play", offset: 0 });
+    const pre = render(proc, QUANTUM * 40);
+    // Half a period off → worst-case phase discontinuity at the seam.
+    const seekTo = 1 + 0.5 / F0;
+    send(proc, { type: "seek", offset: seekTo });
+    const post = render(proc, QUANTUM * 20);
+    expect(maxStep(cat(pre, post), pre.length - 1)).toBeLessThan(LIMIT);
+    // Old position gone and new position exact once the 4 ms crossfade ends.
+    const base = seekTo * SAMPLE_RATE;
+    for (let k = FADE; k < 1500; k += 7) expect(Math.abs(post[k] - sine(base + k))).toBeLessThan(1e-3);
+    // Audible (≥ half scale) inside 5 ms, not after a multi-hop fade-in.
+    expect(rms(post.subarray(FADE, Math.ceil(0.005 * SAMPLE_RATE)))).toBeGreaterThan(0.5);
+  });
+
+  it("@us US73: seek while paused or silent is inert until play, then starts exactly", () => {
+    send(proc, { type: "seek", offset: 1 });
+    expect(rms(render(proc, QUANTUM * 4))).toBe(0);
+    send(proc, { type: "play", offset: 1 });
+    const out = render(proc, QUANTUM * 20);
+    const base = SAMPLE_RATE;
+    for (let k = FADE; k < 1500; k += 7) expect(Math.abs(out[k] - src[base + k])).toBeLessThan(1e-3);
+  });
+
+  it("@us US73: play during the pause fade-out crossfades — no click", () => {
+    send(proc, { type: "play", offset: 0 });
+    const pre = render(proc, QUANTUM * 41);
+    send(proc, { type: "pause" });
+    const mid = render(proc, QUANTUM); // 128 of the 176 fade samples
+    const off = 2 + 0.5 / F0;
+    send(proc, { type: "play", offset: off });
+    const post = render(proc, QUANTUM * 20);
+    expect(maxStep(cat(pre, mid, post), pre.length - 1)).toBeLessThan(LIMIT);
+    const base = off * SAMPLE_RATE;
+    for (let k = FADE; k < 1500; k += 7) expect(Math.abs(post[k] - sine(base + k))).toBeLessThan(1e-3);
+  });
+
+  it("@us US73: a play after pause begins at the requested offset", () => {
+    send(proc, { type: "play", offset: 0 });
+    render(proc, QUANTUM * 30);
+    send(proc, { type: "pause" });
+    render(proc, QUANTUM * 10);
+    send(proc, { type: "play", offset: 1.25 });
+    const out = render(proc, QUANTUM * 20);
+    const base = 1.25 * SAMPLE_RATE;
+    for (let k = FADE; k < 1500; k += 7) expect(Math.abs(out[k] - sine(base + k))).toBeLessThan(1e-3);
+  });
+
+  it("@us US73: re-pressing play over a sounding stream crossfades too", () => {
+    send(proc, { type: "play", offset: 0 });
+    const pre = render(proc, QUANTUM * 40);
+    send(proc, { type: "play", offset: 1 + 0.5 / F0 });
+    const post = render(proc, QUANTUM * 10);
+    expect(maxStep(cat(pre, post), pre.length - 1)).toBeLessThan(LIMIT);
+  });
+
+  it("@us US73: back-to-back seeks stay click-free", () => {
+    send(proc, { type: "play", offset: 0 });
+    let all = render(proc, QUANTUM * 30);
+    for (const o of [0.5 / F0 + 1, 2.3, 0.7]) {
+      send(proc, { type: "seek", offset: o });
+      all = cat(all, render(proc, QUANTUM)); // lands mid-crossfade
+    }
+    expect(maxStep(all, QUANTUM * 30 - 1)).toBeLessThan(LIMIT * 1.6);
+  });
+
+  it("@us US73: a loop region that moves the read position crossfades; looped still fires", () => {
+    const { Processor, posted } = loadProcessor();
+    const p = new Processor();
+    send(p, { type: "load", channels: [src], sampleRate: SAMPLE_RATE });
+    send(p, { type: "play", offset: 2 });
+    const pre = render(p, QUANTUM * 40);
+    // Region entirely behind the playhead.
+    send(p, { type: "setLoop", enabled: true, start: 0.5 + 0.5 / F0, end: 0.7 });
+    const post = render(p, QUANTUM * 20);
+    expect(maxStep(cat(pre, post), pre.length - 1)).toBeLessThan(LIMIT);
+    expect(ofType(posted, "looped").length).toBeGreaterThan(0);
+    // …and the jumped-to material is sounding at full level once it ends.
+    expect(rms(post.subarray(FADE, FADE + 1024))).toBeGreaterThan(0.6);
+  });
+
+  it("@us US73: a loop region that does not move the read position is left alone", () => {
+    send(proc, { type: "play", offset: 0.5 });
+    const pre = render(proc, QUANTUM * 20);
+    send(proc, { type: "setLoop", enabled: true, start: 0.2, end: 2.5 });
+    expect(proc.tail).toBeNull();
+    const post = render(proc, QUANTUM * 10);
+    expect(maxStep(cat(pre, post), pre.length - 1)).toBeLessThan(LIMIT);
   });
 });

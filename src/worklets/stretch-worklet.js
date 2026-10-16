@@ -10,7 +10,8 @@
 //        whole track; anything else clears any loop (a region belongs to the
 //        track it was set on).
 //   { type: "play", offset }   — start synthesis from `offset` seconds
-//   { type: "pause" }          — stop producing (emit silence)
+//   { type: "pause" }          — stop producing; the output ramps to zero over
+//        ~4 ms (state reads playing=false at once, audio tails for the fade)
 //   { type: "seek", offset }   — jump the read position
 //   { type: "setLoop", enabled, start?, end? }
 //        seconds in source time. enabled + no start/end → whole track;
@@ -37,6 +38,16 @@
 // through a linear-interp resampler at pitchRatio. At rate 1 / pitch 1 the
 // search is skipped and output equals input after the 3-hop fade-in.
 //
+// Edge fades (~4 ms, FADE samples): the host fades its VARI BufferSources on
+// start / stop / seek, so this node has to do the same for itself. pause
+// keeps rendering the live grain state down to zero; seek / play-over-sound /
+// a loop-region change that moves the read position render the OLD stream's
+// next FADE samples into a tail ramped to zero while the NEW stream fades in
+// (a short crossfade, ≤ 5 ms total, still instant to the ear). A fresh
+// stream's partial-overlap start is level-normalised so the new position is
+// at full level within ~3 ms instead of rising over three hops. The loop
+// wrap itself is already continuous and is not touched.
+//
 // Looping happens here, not in the host: the read position wraps modulo the
 // loop region inside synthesizeBlock and grain reads wrap with it, so grains
 // straddling the seam read continuous material — no ended → play(0) round
@@ -59,6 +70,10 @@ const SEARCH = 384;
 const CORR = GRAIN - HOP;
 const DECIM = 4;
 const EPS = 1e-12;
+// ~4 ms edge fade, in samples at the context rate.
+const FADE = Math.max(1, Math.round(sampleRate * 0.004));
+// Start-of-stream level normalisation floor (see synthesizeBlock).
+const NORM_FLOOR = 0.02;
 
 class StretchProcessor extends AudioWorkletProcessor {
   static get parameterDescriptors() {
@@ -97,6 +112,20 @@ class StretchProcessor extends AudioWorkletProcessor {
     this.pending = null;
     this.pendingRead = 0;
     this.lastReport = 0;
+    // Edge-fade state. release: samples of pause fade-out left. inPos: how
+    // far the current stream's fade-in has progressed. tail: the previous
+    // stream's fading remainder after a seek / re-play / loop jump.
+    this.release = 0;
+    this.inPos = FADE;
+    this.tail = null;
+    this.lastRate = 1;
+    this.lastPitch = 1;
+    this.outCh = 0;
+    // Window-sum bookkeeping for the first (partially overlapped) hops.
+    this.wsum = new Float32Array(GRAIN);
+    this.norm = new Float32Array(HOP);
+    this.normOn = false;
+    this.grainCount = 0;
     // WSOLA scratch (allocated once — no garbage on the audio thread).
     this.ref = new Float32Array(CORR);
     this.region = new Float32Array(CORR + 2 * SEARCH);
@@ -114,16 +143,23 @@ class StretchProcessor extends AudioWorkletProcessor {
       this.playing = false;
       this.sourcePos = 0;
       this.loop = m.loop ? { start: null, end: null } : null;
+      this.release = 0;
+      this.tail = null;
       this.resetStream();
     } else if (m.type === "play") {
+      this.captureTail(); // play over a sounding stream / fade crossfades
       this.sourcePos = (m.offset || 0) * this.sourceSampleRate;
       this.resetStream();
+      this.release = 0;
       this.playing = true;
     } else if (m.type === "pause") {
+      if (this.playing && this.pending && this.channels) this.release = FADE;
       this.playing = false;
     } else if (m.type === "seek") {
+      this.captureTail();
       this.sourcePos = (m.offset || 0) * this.sourceSampleRate;
       this.resetStream();
+      this.release = 0;
     } else if (m.type === "setLoop") {
       this.setLoop(m);
     }
@@ -148,7 +184,21 @@ class StretchProcessor extends AudioWorkletProcessor {
       // is re-checked (and dropped if too short) once one arrives.
       const prev = this.loop;
       this.loop = next;
-      if (!this.loopBounds()) this.loop = prev;
+      const b = this.loopBounds();
+      if (!b) {
+        this.loop = prev;
+        return;
+      }
+      // A region that leaves the audible playhead past its end moves the read
+      // position (next grain wraps to the region start): crossfade it. The
+      // synth then wraps the unwrapped position itself and announces `looped`
+      // exactly as before.
+      const p = this.grainNominal + this.pendingRead * this.grainRate;
+      if (this.playing && this.pending && p >= b.end) {
+        this.captureTail();
+        this.sourcePos = p;
+        this.resetStream();
+      }
       return;
     }
     if (next.end !== null && (next.end - s) * this.sourceSampleRate < HOP) return;
@@ -161,6 +211,31 @@ class StretchProcessor extends AudioWorkletProcessor {
     this.wrapAt = -1;
     this.grainNominal = this.sourcePos;
     this.pendingRead = 0;
+    this.inPos = 0; // new stream fades in over FADE samples
+    this.grainCount = 0;
+    this.normOn = false;
+    this.wsum.fill(0);
+  }
+
+  // True while anything is (or just was) audible: a stream that has emitted
+  // at least one sample (`pending` exists), or a fading tail.
+  sounding() {
+    return !!(
+      ((this.playing || this.release > 0) && this.pending && this.channels && this.channels.length) ||
+      this.tail
+    );
+  }
+
+  // Render the old stream's next FADE samples (everything it would emit —
+  // pause fade, an in-flight crossfade — continuing seamlessly from the last
+  // sample out) ramped linearly to zero, to be mixed under the new stream.
+  captureTail() {
+    if (!this.sounding()) return;
+    const n = this.outCh || (this.channels ? this.channels.length : 1);
+    const buf = Array.from({ length: n }, () => new Float32Array(FADE));
+    this.produce(FADE, this.lastRate, this.lastPitch, buf, 0);
+    for (const ch of buf) for (let k = 0; k < FADE; k++) ch[k] *= (FADE - k) / FADE;
+    this.tail = { buf, pos: 0 };
   }
 
   // Loop region in source frames, or null when no (valid) loop is active.
@@ -301,6 +376,18 @@ class StretchProcessor extends AudioWorkletProcessor {
     if (!this.pending) {
       this.pending = Array.from({ length: n }, () => new Float32Array(GRAIN));
     }
+    this.grainCount++;
+    this.normOn = this.grainCount < 4;
+    if (this.normOn) {
+      // Hops 1-3 after a (re)start overlap fewer than four grains, so the
+      // window sum is < 1 there; divide it back out (floored at the very
+      // first samples, where the window is ~0) for a full-level start.
+      const ws = this.wsum;
+      ws.copyWithin(0, HOP);
+      ws.fill(0, GRAIN - HOP);
+      for (let i = 0; i < GRAIN; i++) ws[i] += this.window[i];
+      for (let i = 0; i < HOP; i++) this.norm[i] = 1 / Math.max(ws[i], NORM_FLOOR);
+    }
     const b = this.loopBounds();
     let nominal = this.sourcePos;
     if (b && nominal >= b.end) {
@@ -348,11 +435,56 @@ class StretchProcessor extends AudioWorkletProcessor {
     return Math.max(0, p);
   }
 
+  // Fill `out[c][off .. off+frames)` with the stream (edge-faded), plus any
+  // fading tail. Shared by process() and captureTail().
+  produce(frames, rate, pitch, out, off) {
+    const hasTrack = this.channels && this.channels.length;
+    for (let f = 0; f < frames; f++) {
+      // Per sample: a pause fade-out can run dry mid-quantum.
+      if (hasTrack && (this.playing || this.release > 0)) {
+        if (!this.pending || this.pendingRead >= HOP) {
+          this.synthesizeBlock(rate, pitch);
+          this.pendingRead = 0;
+        }
+        let g = this.inPos < FADE ? this.inPos++ / FADE : 1;
+        if (this.normOn) g *= this.norm[this.pendingRead];
+        if (!this.playing) {
+          g *= this.release / FADE;
+          this.release--;
+        }
+        for (let c = 0; c < out.length; c++) {
+          const srcCh = this.pending[Math.min(c, this.pending.length - 1)];
+          out[c][off + f] = srcCh[this.pendingRead] * g;
+        }
+        this.pendingRead++;
+        if (this.wrapAt >= 0 && this.pendingRead > this.wrapAt) {
+          this.wrapAt = -1;
+          const b = this.loopBounds();
+          this.port.postMessage({
+            type: "looped",
+            seconds: b ? b.start / this.sourceSampleRate : 0,
+          });
+        }
+      } else {
+        for (let c = 0; c < out.length; c++) out[c][off + f] = 0;
+      }
+      if (this.tail) {
+        const t = this.tail;
+        for (let c = 0; c < out.length; c++) {
+          out[c][off + f] += t.buf[Math.min(c, t.buf.length - 1)][t.pos];
+        }
+        if (++t.pos >= FADE) this.tail = null;
+      }
+    }
+    if (!this.playing && this.release <= 0) this.pending = null; // faded out
+  }
+
   process(inputs, outputs, parameters) {
     const out = outputs[0];
     if (!out || out.length === 0) return true;
     const frames = out[0].length;
-    if (!this.playing || !this.channels || this.channels.length === 0) {
+    const live = (this.playing || this.release > 0) && this.channels && this.channels.length;
+    if (!live && !this.tail) {
       for (const ch of out) ch.fill(0);
       return true;
     }
@@ -362,26 +494,13 @@ class StretchProcessor extends AudioWorkletProcessor {
     const srRatio = this.sourceSampleRate / sampleRate;
     const rate = parameters.rate[0] * srRatio;
     const pitch = parameters.pitchRatio[0] * srRatio;
+    this.lastRate = rate;
+    this.lastPitch = pitch;
+    this.outCh = out.length;
 
-    for (let f = 0; f < frames; f++) {
-      if (!this.pending || this.pendingRead >= HOP) {
-        this.synthesizeBlock(rate, pitch);
-        this.pendingRead = 0;
-      }
-      for (let c = 0; c < out.length; c++) {
-        const srcCh = this.pending[Math.min(c, this.pending.length - 1)];
-        out[c][f] = srcCh[this.pendingRead];
-      }
-      this.pendingRead++;
-      if (this.wrapAt >= 0 && this.pendingRead > this.wrapAt) {
-        this.wrapAt = -1;
-        const b = this.loopBounds();
-        this.port.postMessage({
-          type: "looped",
-          seconds: b ? b.start / this.sourceSampleRate : 0,
-        });
-      }
-    }
+    this.produce(frames, rate, pitch, out, 0);
+    // Pause fade-out / tail only: no transport bookkeeping while not playing.
+    if (!this.playing || !this.channels || this.channels.length === 0) return true;
 
     const audible = this.audibleFrame();
     // Position report (~10 Hz) in source-track seconds.
@@ -396,6 +515,7 @@ class StretchProcessor extends AudioWorkletProcessor {
     // End of track (no loop) → report and stop producing.
     if (!this.loopBounds() && audible >= this.channels[0].length) {
       this.playing = false;
+      this.release = 0;
       this.port.postMessage({ type: "ended" });
     }
     return true;
