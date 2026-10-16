@@ -230,4 +230,35 @@ describe("Looper — US28", () => {
     expect(slotGain.connections).toContain(refs.outputNodeRef.current);
     expect(slotGain.connections).toContain(refs.recordTapRef.current);
   });
+
+  it("@us US61: stopping a slot fades the slot gain and schedules a future stop (no hard click)", () => {
+    let workletNode;
+    render(<Harness workletReady onWorklet={(n) => { workletNode = n; }} />);
+    const ctx = workletNode.context;
+    const buf = new Float32Array(1024);
+    act(() => {
+      for (const fn of workletNode.port._listeners) {
+        fn({ data: { type: "capture", slot: 0, left: buf.buffer.slice(0), right: buf.buffer.slice(0), sampleRate: ctx.sampleRate } });
+      }
+    });
+    const playBtn = screen.getByRole("button", { name: /Play loop 1/i });
+    act(() => fireEvent.click(playBtn));
+    const src = ctx._lastStartedSource;
+    const slotGain = src.connections[0];
+    const stops = [];
+    src.stop = (when) => stops.push(when);
+    ctx._currentTime = 3.0;
+    const before = slotGain.gain.scheduledValues.length;
+    act(() => fireEvent.click(playBtn)); // stop
+    const events = slotGain.gain.scheduledValues.slice(before);
+    const ramp = events.find((e) => e.type === "setTarget" && e.target === 0);
+    expect(ramp, "stop must ramp the slot gain to 0").toBeTruthy();
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toBeGreaterThan(3.0);
+    expect(stops[0]).toBeLessThan(3.02);
+    // Volume is restored after the stop so the next play is audible.
+    const restore = events.filter((e) => e.type === "setValue").at(-1);
+    expect(restore.value).toBeGreaterThan(0);
+    expect(restore.time).toBeGreaterThan(stops[0]);
+  });
 });

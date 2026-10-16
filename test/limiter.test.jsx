@@ -53,10 +53,16 @@ function trackContexts() {
 }
 
 // Brickwall limiter spec — every value here is the documented contract from
-// App.jsx:182-196 ("A1 — true brickwall safety-net limiter"). Drift between
-// this table and the runtime configuration is the bug this test catches.
+// App.jsx ("A1 — safety-net limiter"). Drift between this table and the
+// runtime configuration is the bug this test catches.
+//
+// Why -2 dB and not lower: this is a SAFETY NET, not a program compressor. A
+// single deck at default fader peaks around -5 dBFS, so the former -9 dB
+// threshold kept it permanently over threshold and audibly pumped. The fixed
+// 0.65 post-compressor trim is what guarantees headroom; DynamicsCompressorNode
+// has no lookahead, so this is not a true brickwall.
 const LIMITER_SPEC = {
-  threshold: -9, // dB — start limiting before the sum reaches 0 dBFS
+  threshold: -2, // dB — only engage on genuine summed overs
   knee: 0, // abrupt onset = a true limiter (not a soft comp)
   ratio: 20, // near-infinite ratio = hard ceiling
   attack: 0.003, // fast enough to catch transients
@@ -69,7 +75,7 @@ describe("Master brickwall limiter — Phase B4 — configuration trace", () => 
     // threshold or relaxes the ratio, the source-grep catches it even if the
     // runtime test were somehow bypassed.
     const src = readFileSync(APP_JSX, "utf8");
-    expect(src).toMatch(/comp\.threshold\.value\s*=\s*-9\b/);
+    expect(src).toMatch(/comp\.threshold\.value\s*=\s*-2\b/);
     expect(src).toMatch(/comp\.knee\.value\s*=\s*0\b/);
     expect(src).toMatch(/comp\.ratio\.value\s*=\s*20\b/);
     expect(src).toMatch(/comp\.attack\.value\s*=\s*0\.003\b/);
@@ -204,7 +210,7 @@ describe("Master brickwall limiter — Phase B4 — configuration trace", () => 
       // AudioParam scheduling machinery records the call (sanity for the
       // mock — and a regression guard if the limiter starts being driven by
       // AudioParam ramps in a later round). We deliberately don't change the
-      // configured -9 here; just probe that the scheduling pathway works.
+      // configured -2 here; just probe that the scheduling pathway works.
       comp.threshold.cancelScheduledValues(0);
       comp.threshold.setValueAtTime(LIMITER_SPEC.threshold, ctx.currentTime);
       const lastEntry =
@@ -213,6 +219,37 @@ describe("Master brickwall limiter — Phase B4 — configuration trace", () => 
         ];
       expect(lastEntry.type).toBe("setValue");
       expect(lastEntry.value).toBe(LIMITER_SPEC.threshold);
+    } finally {
+      restore();
+    }
+  });
+});
+
+describe("Looper capture tap", () => {
+  it("the looper worklet's input comes from the pre-limiter record tap, not the compressor output", async () => {
+    // Loops play back INTO the compressor, so capturing from its output would
+    // limit them twice. The worklet must hang off the record tap (the parallel
+    // pre-limiter sum) instead.
+    const { contexts, restore } = trackContexts();
+    try {
+      render(<App />);
+      await act(async () => {
+        fireEvent.click(
+          screen.getByRole("button", { name: /Record the master mix/i })
+        );
+      });
+      const ctx = contexts[0];
+      const comp = ctx._nodes.find((n) => n.nodeType === "DynamicsCompressorNode");
+      const worklet = ctx._nodes.find(
+        (n) => n.nodeType === "AudioWorkletNode" && n.name === "looper-processor"
+      );
+      expect(worklet, "looper worklet should exist").toBeTruthy();
+      const feeders = ctx._nodes.filter((n) => n.connections?.includes(worklet));
+      expect(feeders).toHaveLength(1);
+      expect(feeders[0]).not.toBe(comp);
+      expect(feeders[0].nodeType).toBe("GainNode");
+      // The record tap has no downstream audible connection other than the tap.
+      expect(feeders[0].connections).not.toContain(ctx.destination);
     } finally {
       restore();
     }

@@ -41,9 +41,9 @@ AudioBufferSource → Gain (volume × crossfade)
   → AudioContext.destination
 ```
 
-The master compressor is **shared** across decks (acts as a safety-net limiter against summed clipping). It serves as the **tap point** for the looper AudioWorklet and is the default ("Radio") tap for the MediaRecorder.
+The master compressor is **shared** across decks (acts as a safety-net limiter against summed clipping). It is configured as a **safety net** (threshold −2 dB, ratio 20, knee 0, attack 3 ms, release 100 ms, then a fixed 0.65 trim) — not a true brickwall, since `DynamicsCompressorNode` has no lookahead; the trim guarantees headroom. It is the default ("Radio") tap for the MediaRecorder.
 
-A parallel **record tap** GainNode also exists: every deck's analyser fans out into it *in addition to* the master compressor. It carries the summed deck signal **before** the limiter and has no downstream connection (it is only a source for the recorder's `MediaStreamDestination`). The recorder tap toggle ("Clean" pre-limiter / "Radio" post-limiter) selects which node the recorder connects from; it is locked while a recording is in progress. A small `AnalyserNode` on the master gain feeds the clip meter.
+A parallel **record tap** GainNode also exists: every deck's analyser fans out into it *in addition to* the master compressor. It carries the summed deck signal **before** the limiter and has no downstream connection (it is only a source for the recorder's `MediaStreamDestination`). The recorder tap toggle ("Clean" pre-limiter / "Radio" post-limiter) selects which node the recorder connects from; it is locked while a recording is in progress. The record tap is also the **looper AudioWorklet's capture tap** (pre-limiter), because loops play back *into* the compressor and tapping its output would limit them twice; looper slots stop with a ~5 ms gain fade. A small `AnalyserNode` on the master gain feeds the clip meter.
 
 ### File layout
 

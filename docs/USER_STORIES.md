@@ -51,7 +51,7 @@ Persona: bedroom DJ who mixes local files in the browser. Sometimes streams, som
 | US18 | Reverb (dry/wet, size) — IR generated locally, no network | U | `test/effects.test.js` |
 | US19 | Delay (dry/wet, time, feedback clamped ≤ 0.9) | I + U | `test/Deck.test.jsx`, `test/effects.test.js` |
 | US20 | Distortion (dry/wet, drive curve) | U | `test/effects.test.js` |
-| US21 | Master compressor as safety-net limiter | I | `test/App.test.jsx` |
+| US21 | Master compressor as safety-net limiter (−2 dB threshold; looper taps pre-limiter record tap) | I | `test/App.test.jsx` |
 | US22 | Set cue point at current time (up to 8 max) | I | `test/Deck.test.jsx` |
 | US23 | Jump to cue point | I | `test/Deck.test.jsx` |
 | US24 | Delete cue point | C | `test/CuePanel.test.jsx` |
