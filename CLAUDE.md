@@ -277,7 +277,7 @@ explain *why*.
 | Delay feedback | Clamped ≤ 0.9. Don't remove the clamp. |
 | Network calls | **NEVER** add `fetch`, `XHR`, `WebSocket`, `sendBeacon`. PWA service worker must not touch external origins. |
 | User file data | Files stay in `ArrayBuffer`/`AudioBuffer` in memory. Never persisted (no localStorage for user content), never transmitted. |
-| Worklet path | Looper worklet source is `src/worklets/looper-worklet.js`, imported `?raw` and registered via a Blob URL in `src/App.jsx`. Don't re-introduce a static `/worklets/…` path — the Blob-URL registration is required for `file://` and PWA-subpath builds. |
+| Worklet path | Looper worklet source is `src/worklets/looper-worklet.js`, imported `?raw` and registered via a Blob URL in `src/App.jsx`. `?raw` worklet sources (`src/worklets/*.js`) are minified at build time by the `minifyRawWorklets` plugin in `vite.config.js` (build only; still Blob-URL registered, only the string shrinks). Don't re-introduce a static `/worklets/…` path — the Blob-URL registration is required for `file://` and PWA-subpath builds. |
 | Single-file build | `vite-plugin-singlefile` and `vite-plugin-pwa` are mutually exclusive in the same build. Use `--mode single` to pick singlefile. |
 | Desktop shell | `electron/main.cjs` must keep danger-zone parity with the web build: session-level cancel of every non-`wavecraft://` request, **no** auto-updater / telemetry / crash reporter (an updater is an outbound request), and `nodeIntegration:false` + `contextIsolation:true` + `sandbox:true`. It must load via the secure custom scheme, never `loadFile()`/`file://` — that's what makes the page a secure context so VOX/`getUserMedia` works. Pinned by `test/desktop.test.js`. |
 
