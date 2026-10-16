@@ -79,6 +79,54 @@ function ensureStretchModule(ctx) {
   return stretchModulePromises.get(ctx);
 }
 
+// Transport edge fade. A BufferSource stopped (or started) mid-waveform is a
+// sample-level step — an audible click on every pause / stop / seek / cue /
+// roll edge. Each source the deck starts gets its own tiny GainNode between
+// it and `chain.gain` (never `chain.gain` itself: volume × crossfade owns that
+// param). Edges ramp it over ~4 ms — short enough that a cue still feels
+// instant, long enough to round off the step. The NEXT source starts at once
+// on its own fade node, so a fade-out never delays the following start.
+const EDGE_FADE_S = 0.004;
+const EDGE_FADE_TAU = EDGE_FADE_S / 4; // ~98% settled by EDGE_FADE_S
+const sourceFades = new WeakMap(); // BufferSource → its per-source GainNode
+
+// Wire src → fade → dest with a short fade-in. Returns the fade node.
+function connectWithEdgeFade(ctx, src, dest) {
+  const fade = ctx.createGain();
+  const now = ctx.currentTime;
+  fade.gain.setValueAtTime(0, now);
+  fade.gain.setTargetAtTime(1, now, EDGE_FADE_TAU);
+  src.connect(fade);
+  fade.connect(dest);
+  sourceFades.set(src, fade);
+  return fade;
+}
+
+// Fade the source's own gain to silence and stop it once the fade has run.
+// The graph is released from `onended`, after the tail actually played —
+// disconnecting immediately would cut the fade off and re-create the click.
+function stopWithEdgeFade(ctx, src) {
+  if (!src) return;
+  const fade = sourceFades.get(src);
+  const now = ctx ? ctx.currentTime : 0;
+  src.onended = () => {
+    try { src.disconnect(); } catch {}
+    try { fade?.disconnect(); } catch {}
+    sourceFades.delete(src);
+  };
+  if (fade) {
+    try { fade.gain.setTargetAtTime(0, now, EDGE_FADE_TAU); } catch {}
+  }
+  try {
+    src.stop(fade ? now + EDGE_FADE_S : now);
+  } catch {
+    // Never started / already stopped — nothing will fire onended; release now.
+    try { src.disconnect(); } catch {}
+    try { fade?.disconnect(); } catch {}
+    sourceFades.delete(src);
+  }
+}
+
 // W3.6 — shared style for the bite-row buttons.
 function biteBtnStyle(active, color, enabled) {
   return {
@@ -181,6 +229,10 @@ const Deck = forwardRef(function Deck(
   const startTimeRef = useRef(0);
   const offsetRef = useRef(0);
   const speedRef = useRef(speed);
+  // The base speed the CURRENT wall-clock anchor (startTimeRef) was laid down
+  // against. speedRef is already the new value by the time the re-anchor
+  // effect runs, so the live position must be read through this one.
+  const prevSpeedRef = useRef(speed);
   // Temporary pitch-bend offset (NUDGE buttons). Added on top of `speed`;
   // never persisted to the speed state. 0 when no nudge is held.
   const bendRef = useRef(0);
@@ -261,7 +313,9 @@ const Deck = forwardRef(function Deck(
   // ("the timeline kept running underneath"). Press-time quantization —
   // free-running phase, per the spike findings.
   const [rollActive, setRollActive] = useState(null); // beats value while held
-  const rollRef = useRef(null); // { source }
+  // { source } for a VARI roll; { keylock: true } for a roll running as a
+  // loop region inside the stretch worklet.
+  const rollRef = useRef(null);
   // W3.1 — playback mode. "vari" (default) is the classic varispeed
   // BufferSource path, bit-for-bit unchanged. "keylock" routes playback
   // through the stretch worklet: tempo follows the speed slider while pitch
@@ -290,6 +344,14 @@ const Deck = forwardRef(function Deck(
   useEffect(() => {
     isLoopingRef.current = isLooping;
     if (sourceRef.current) sourceRef.current.loop = isLooping;
+    // W3.1 — in KEYLOCK the worklet owns the wrap (it reports `looped` /
+    // `ended`), so it must hear the toggle. A held roll owns the loop region
+    // until release; endRoll restores the whole-track state from the ref.
+    if (playModeRef.current === "keylock" && !rollRef.current) {
+      try {
+        stretchNodeRef.current?.port?.postMessage({ type: "setLoop", enabled: isLooping });
+      } catch {}
+    }
   }, [isLooping]);
   useEffect(() => { durationRef.current = duration; }, [duration]);
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
@@ -424,12 +486,12 @@ const Deck = forwardRef(function Deck(
   const stopBitePreview = useCallback(() => {
     const src = bitePreviewSourceRef.current;
     if (src) {
-      try { src.stop(); } catch {}
-      try { src.disconnect(); } catch {}
+      // Edge fade; stopWithEdgeFade releases the graph once the tail ends.
+      stopWithEdgeFade(audioCtxRef.current, src);
       bitePreviewSourceRef.current = null;
     }
     setBitePreviewing(false);
-  }, []);
+  }, [audioCtxRef]);
 
   // Loop-preview the region through the deck's own chain (EQ, effects and
   // any active isolation apply — so what you hear is what extraction saves).
@@ -448,7 +510,7 @@ const Deck = forwardRef(function Deck(
     src.loop = true;
     src.loopStart = bIn;
     src.loopEnd = bOut;
-    src.connect(chain.gain);
+    connectWithEdgeFade(ctx, src, chain.gain);
     bitePreviewSourceRef.current = src;
     setBitePreviewing(true);
     src.start(0, bIn);
@@ -499,19 +561,33 @@ const Deck = forwardRef(function Deck(
       // Bypass: drop any scheduled windows and return to exactly 1.0.
       clearInterval(pumpTimerRef.current);
       pumpTimerRef.current = null;
-      try { param.cancelScheduledValues(ctx.currentTime); } catch {}
-      param.setTargetAtTime(1, ctx.currentTime, 0.02);
+      // Freeze whatever a mid-flight curve window is producing (rather than
+      // letting cancelScheduledValues snap it back), then glide to unity.
+      // A curve window that overlaps `t` can make setTargetAtTime throw on
+      // some engines — the bypass must never throw out of the effect.
+      const t = ctx.currentTime;
+      try {
+        if (typeof param.cancelAndHoldAtTime === "function") param.cancelAndHoldAtTime(t);
+        else param.cancelScheduledValues(t);
+      } catch {
+        try { param.cancelScheduledValues(t); } catch {}
+      }
+      try { param.setTargetAtTime(1, t, 0.02); } catch {}
       pumpArmedUntilRef.current = 0;
       return;
     }
 
-    // One beat's curve: instant dip to (1 - depth), exponential recovery
-    // to 1.0 across the beat. 64 points is plenty for a gain envelope.
+    // One beat's curve: starts at exactly 1.0 (continuous with the previous
+    // window's recovery — a curve[0] of 1 - depth was a hard gain step, i.e.
+    // a click every beat), dips to (1 - depth) at point 1 — a linear attack of
+    // ~period/63, a few ms — then recovers exponentially to 1.0 across the
+    // beat. 64 points is plenty for a gain envelope.
     const makeCurve = (depth) => {
       const N = 64;
       const curve = new Float32Array(N);
-      for (let i = 0; i < N; i++) {
-        const phase = i / (N - 1);
+      curve[0] = 1;
+      for (let i = 1; i < N; i++) {
+        const phase = (i - 1) / (N - 2);
         curve[i] = 1 - depth * Math.exp(-5 * phase);
       }
       curve[N - 1] = 1;
@@ -706,22 +782,38 @@ const Deck = forwardRef(function Deck(
     if (roll) {
       rollRef.current = null;
       setRollActive(null);
-      try { roll.source.stop(); } catch {}
-      try { roll.source.disconnect(); } catch {}
+      if (roll.keylock) {
+        // The roll is a loop REGION inside the worklet — hand the worklet
+        // back the deck's own whole-track loop state.
+        try {
+          stretchNodeRef.current?.port?.postMessage({ type: "setLoop", enabled: isLoopingRef.current });
+        } catch {}
+      } else {
+        stopWithEdgeFade(audioCtxRef.current, roll.source);
+      }
     }
     const src = sourceRef.current;
     // W3.1 — silencing the deck also pauses a live KEYLOCK worklet stream
     // (harmless no-op when the node is idle or absent).
     try { stretchNodeRef.current?.port?.postMessage({ type: "pause" }); } catch {}
     if (!src) return;
-    try {
-      src.onended = null;
-      src.stop();
-    } catch {}
-    try {
-      src.disconnect();
-    } catch {}
+    // ~4 ms fade on the source's own gain, then stop — no hard-cut click.
+    // The next source (seek / cue / roll) starts immediately on its own fade
+    // node; this tail overlaps it rather than delaying it.
+    stopWithEdgeFade(audioCtxRef.current, src);
     sourceRef.current = null;
+  }, [audioCtxRef]);
+
+  // Where the playhead is RIGHT NOW on the wall-clock timeline, read through
+  // the rate the current anchor was laid down at. currentTimeRef is only as
+  // fresh as the last 100 ms interval tick — re-anchoring from it pins the
+  // position to a stale value (the speed-drag freeze).
+  const livePosition = useCallback((ctx, rate) => {
+    const pos = (ctx.currentTime - startTimeRef.current) * rate;
+    const d = durationRef.current;
+    if (!Number.isFinite(pos)) return currentTimeRef.current;
+    if (isLoopingRef.current && d > 0) return ((pos % d) + d) % d;
+    return Math.max(0, d > 0 ? Math.min(pos, d) : pos);
   }, []);
 
   // ─── W3.1 — KEYLOCK stretch node ───
@@ -753,25 +845,28 @@ const Deck = forwardRef(function Deck(
       node.port.onmessage = (e) => {
         const m = e.data || {};
         if (playModeRef.current !== "keylock") return;
-        if (m.type === "position" && isPlayingRef.current) {
+        if ((m.type === "position" || m.type === "looped") && isPlayingRef.current) {
           // Drift correction: the worklet's own read head is the truth in
           // KEYLOCK. Re-anchor the wall-clock so the interval agrees.
+          // `looped` is the worklet wrapping its loop on its own (sample-
+          // accurate, no host round-trip) — same re-anchor, at the region
+          // start it reports; the host never posts `play` for a wrap.
+          // While a roll is held the worklet is looping the ROLL region and
+          // the deck's timeline deliberately keeps running underneath — its
+          // reports must not drag the timeline back into the roll window.
+          if (rollRef.current) return;
+          const seconds = Number(m.seconds);
+          if (!Number.isFinite(seconds)) return;
           const c = audioCtxRef.current;
           const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
-          currentTimeRef.current = m.seconds;
-          setCurrentTime(m.seconds);
-          if (c) startTimeRef.current = c.currentTime - m.seconds / effRate;
+          currentTimeRef.current = seconds;
+          setCurrentTime(seconds);
+          if (c) startTimeRef.current = c.currentTime - seconds / effRate;
         } else if (m.type === "ended") {
-          if (isLoopingRef.current) {
-            // Coarse loop support: restart from the top.
-            const c = audioCtxRef.current;
-            node.port.postMessage({ type: "play", offset: 0 });
-            currentTimeRef.current = 0;
-            if (c) {
-              const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
-              startTimeRef.current = c.currentTime - 0 / effRate;
-            }
-          } else if (isPlayingRef.current) {
+          // The worklet only reports `ended` when no loop is enabled and the
+          // audible output reached the end — it has already stopped itself.
+          // (Looping is the worklet's job now: it wraps and reports `looped`.)
+          if (isPlayingRef.current) {
             isPlayingRef.current = false;
             setIsPlaying(false);
             offsetRef.current = 0;
@@ -797,7 +892,7 @@ const Deck = forwardRef(function Deck(
       channels.push(buf.getChannelData(c).slice());
     }
     node.port.postMessage(
-      { type: "load", channels, sampleRate: buf.sampleRate },
+      { type: "load", channels, sampleRate: buf.sampleRate, loop: isLoopingRef.current },
       channels.map((ch) => ch.buffer)
     );
     stretchLoadedBufferRef.current = buf;
@@ -851,6 +946,11 @@ const Deck = forwardRef(function Deck(
         if (node) {
           postBufferToStretch(node);
           updateStretchRate();
+          // The worklet owns the wrap: hand it the deck's whole-track loop
+          // state on every (re-)entry — `load` above only carries it when a
+          // new track's channels were posted, and a mode hop or a play after
+          // a loop toggle in VARI must not inherit a stale state.
+          node.port.postMessage({ type: "setLoop", enabled: isLoopingRef.current });
           node.port.postMessage({ type: "play", offset: target });
           const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
           startTimeRef.current = ctx.currentTime - target / effRate;
@@ -881,7 +981,9 @@ const Deck = forwardRef(function Deck(
       // pitch. bendRef is 0 unless a NUDGE button is currently held.
       const effRate = clamp(speedRef.current + bendRef.current, 0.5, 2.0);
       src.playbackRate.value = effRate;
-      src.connect(chain.gain);
+      // Per-source edge-fade node (≈4 ms fade-in) so a cue / seek landing
+      // mid-waveform starts without a click; the stop side fades the same way.
+      connectWithEdgeFade(ctx, src, chain.gain);
       src.start(0, target);
       sourceRef.current = src;
       // A3 — anchor startTimeRef against the *effective* rate the source is
@@ -895,6 +997,13 @@ const Deck = forwardRef(function Deck(
 
       src.onended = () => {
         if (!isLoopingRef.current && sourceRef.current === src) {
+          // Natural end of track: the source is finished, so release its
+          // graph here (a later stopWithEdgeFade on an ended source would
+          // never see another onended).
+          try { src.disconnect(); } catch {}
+          try { sourceFades.get(src)?.disconnect(); } catch {}
+          sourceFades.delete(src);
+          sourceRef.current = null;
           isPlayingRef.current = false;
           setIsPlaying(false);
           offsetRef.current = 0;
@@ -1144,15 +1253,34 @@ const Deck = forwardRef(function Deck(
     if (!roll) return;
     rollRef.current = null;
     setRollActive(null);
-    try { roll.source.stop(); } catch {}
-    try { roll.source.disconnect(); } catch {}
+    if (roll.keylock) {
+      // KEYLOCK roll: the worklet was looping the roll region in place. Give
+      // it back the deck's whole-track loop state, then move its read head to
+      // where the un-rolled timeline has run to — no new play, no rebuild.
+      const node = stretchNodeRef.current;
+      const ctx = audioCtxRef.current;
+      let pos = currentTimeRef.current;
+      if (ctx && isPlayingRef.current) {
+        const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
+        pos = livePosition(ctx, effRate);
+        currentTimeRef.current = pos;
+        setCurrentTime(pos);
+        startTimeRef.current = ctx.currentTime - pos / effRate;
+      }
+      try {
+        node?.port?.postMessage({ type: "setLoop", enabled: isLoopingRef.current });
+        if (isPlayingRef.current) node?.port?.postMessage({ type: "seek", offset: pos });
+      } catch {}
+      return;
+    }
+    stopWithEdgeFade(audioCtxRef.current, roll.source);
     // The deck's time interval kept advancing currentTimeRef while the roll
     // played (isPlayingRef stayed true), so re-anchoring at the live playhead
     // resumes exactly where the un-rolled timeline would be.
     if (isPlayingRef.current) {
       seekTo(currentTimeRef.current, { autoplay: true });
     }
-  }, [seekTo]);
+  }, [seekTo, audioCtxRef, livePosition]);
 
   const startRoll = useCallback(
     (beats) => {
@@ -1167,10 +1295,30 @@ const Deck = forwardRef(function Deck(
       // of wall time — the beat-synced length).
       const trackBpm = Math.max(40, bpmRef.current || 128);
       const len = (beats * 60) / trackBpm;
+      const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
+      const node = stretchNodeRef.current;
+
+      // W3.1 × W3.4 — KEYLOCK roll runs INSIDE the stretch worklet as a loop
+      // region, so it keeps the deck's constant pitch. (A VARI BufferSource at
+      // effRate here would be pitch-shifted by 12·log2(speed) semitones.) The
+      // worklet stays playing; the wall-clock timeline keeps running
+      // underneath and endRoll re-seeks to it.
+      if (playModeRef.current === "keylock" && node) {
+        const pos = livePosition(ctx, effRate);
+        const loopStart = Math.max(0, pos - len);
+        const loopEnd = Math.max(loopStart + 0.01, pos);
+        rollRef.current = { keylock: true };
+        setRollActive(beats);
+        try {
+          node.port.postMessage({ type: "setLoop", enabled: true, start: loopStart, end: loopEnd });
+          node.port.postMessage({ type: "seek", offset: loopStart });
+        } catch {}
+        return;
+      }
+
       const pos = currentTimeRef.current;
       const loopStart = Math.max(0, pos - len);
       const loopEnd = Math.max(loopStart + 0.01, pos);
-      const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
       // Silence the main source WITHOUT touching play state — the wall-clock
       // interval keeps the timeline running underneath the roll.
       stopAndDisconnectSource();
@@ -1180,31 +1328,50 @@ const Deck = forwardRef(function Deck(
       src.loopStart = loopStart;
       src.loopEnd = loopEnd;
       src.playbackRate.value = effRate;
-      src.connect(chain.gain);
+      connectWithEdgeFade(ctx, src, chain.gain);
       rollRef.current = { source: src };
       setRollActive(beats);
       src.start(0, loopStart);
     },
-    [audioCtxRef, endRoll, stopAndDisconnectSource]
+    [audioCtxRef, endRoll, stopAndDisconnectSource, livePosition]
   );
 
   // ─── Re-anchor on speed change ───
   useEffect(() => {
+    const prevSpeed = prevSpeedRef.current;
+    prevSpeedRef.current = speed;
+    const c = audioCtxRef.current;
+    // Keep any held pitch-bend layered on top of the new base speed.
+    const effRate = clamp(speed + bendRef.current, 0.5, 2.0);
+    // Snapshot the LIVE position through the rate the current anchor was laid
+    // down at (same as applyBend), then re-anchor at the new rate. Anchoring
+    // from currentTimeRef — only as fresh as the last 100 ms interval tick —
+    // pinned every re-anchor of a slider drag to one stale value: the display
+    // froze and pause() later resumed ~drag-length early.
+    const reanchor = () => {
+      if (!c) return;
+      const prevRate = clamp(prevSpeed + bendRef.current, 0.5, 2.0);
+      const live = livePosition(c, prevRate);
+      currentTimeRef.current = live;
+      setCurrentTime(live);
+      startTimeRef.current = c.currentTime - live / effRate;
+    };
     // W3.1 — KEYLOCK: the stretch worklet's rate param carries tempo; the
     // wall-clock anchor uses the same effective rate as the interval.
     if (playModeRef.current === "keylock" && isPlayingRef.current) {
-      const c = audioCtxRef.current;
       updateStretchRate();
-      if (c) {
-        const effRate = clamp(speed + bendRef.current, 0.5, 2.0);
-        startTimeRef.current = c.currentTime - currentTimeRef.current / effRate;
-      }
+      reanchor();
+      return;
+    }
+    // W3.4 — mid-roll in VARI there is no main source, but the timeline is
+    // still running underneath at the effective rate; keep it anchored and
+    // keep the roll in tempo.
+    if (!sourceRef.current && rollRef.current?.source && isPlayingRef.current) {
+      reanchor();
+      if (c) rollRef.current.source.playbackRate.setTargetAtTime(effRate, c.currentTime, 0.015);
       return;
     }
     if (sourceRef.current && isPlayingRef.current) {
-      // Keep any held pitch-bend layered on top of the new base speed.
-      const effRate = clamp(speed + bendRef.current, 0.5, 2.0);
-      const c = audioCtxRef.current;
       // R18 T2 — a direct `.value =` write on the live source's playbackRate
       // produces audible zipper noise under rapid slider drags. Use the same
       // setTargetAtTime tau applyBend uses for the same param (0.015 s) so
@@ -1221,13 +1388,13 @@ const Deck = forwardRef(function Deck(
         // A3 — anchor against the effective rate so the position interval
         // (also multiplying by effRate) stays consistent across a speed
         // change made while a NUDGE bend is held.
-        startTimeRef.current = c.currentTime - currentTimeRef.current / effRate;
+        reanchor();
       } else {
         // No ctx (shouldn't happen mid-playback, but be defensive).
         sourceRef.current.playbackRate.value = effRate;
       }
     }
-  }, [speed, audioCtxRef, updateStretchRate]);
+  }, [speed, audioCtxRef, updateStretchRate, livePosition]);
 
   // ─── Pitch-bend nudge (momentary) ───
   // Smoothly ramp the live playbackRate to base speed + bend offset, clamping
@@ -1401,8 +1568,11 @@ const Deck = forwardRef(function Deck(
         } catch {}
         wobbleNodesRef.current = null;
         // Restore the filter to the user's *current* slider value (read via
-        // ref, not the closure, in case it moved during the wobble).
-        chain.filter.frequency.setValueAtTime(filterFreqRef.current, ctx.currentTime);
+        // ref, not the closure, in case it moved during the wobble). Glide,
+        // don't jump: the LFO leaves the cutoff wherever its last cycle
+        // ended, and a setValueAtTime step from there is an audible snap.
+        // Same tau as the user filter sweep.
+        chain.filter.frequency.setTargetAtTime(filterFreqRef.current, ctx.currentTime, 0.03);
         bassDropRunningRef.current = false;
       };
     }
