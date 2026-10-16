@@ -1952,6 +1952,45 @@ describe("Deck loop roll — US72", () => {
     expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
   });
 
+  // Roll in/out points come from the live wall-clock playhead. The 100 ms
+  // interval never ticks here (fake timers), so currentTimeRef stays at the
+  // seek target (2 s): the old code would loop [2-len, 2] and resume at 2.
+  it("@us US72: roll in/out points come from the live playhead, not the stale 100 ms position ref", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 60, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "live.mp3"); });
+      await act(async () => { await api.deckRef.current.play(); });
+      const ctx = api.audioCtxRef.current;
+      await act(async () => { await api.deckRef.current.setSpeed(1.25); });
+      // Anchor deterministically at 5 s on the new rate.
+      await act(async () => { api.deckRef.current.seekTo(5); });
+      const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+
+      act(() => { ctx.advance(0.37); }); // live = 5 + 0.37 * 1.25 = 5.4625
+      await act(async () => { fireEvent.pointerDown(rollBtn); });
+      const rollSrc = ctx._lastStartedSource;
+      expect(rollSrc.loop).toBe(true);
+      expect(rollSrc.loopEnd).toBeCloseTo(5 + 0.37 * 1.25, 4);
+      expect(rollSrc.loopEnd - rollSrc.loopStart).toBeCloseTo(60 / 128, 4);
+
+      act(() => { ctx.advance(0.5); }); // timeline keeps running: live = 6.0875
+      await act(async () => {
+        fireEvent.pointerUp(rollBtn);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const resumed = ctx._lastStartedSource;
+      expect(resumed).not.toBe(rollSrc);
+      expect(resumed.startOffset).toBeCloseTo(5 + 0.87 * 1.25, 4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("@us US72: pausing mid-roll kills the roll source (nothing keeps ringing)", async () => {
     const api = await playingDeck();
     const ctx = api.audioCtxRef.current;

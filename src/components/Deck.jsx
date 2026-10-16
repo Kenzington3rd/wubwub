@@ -1274,11 +1274,19 @@ const Deck = forwardRef(function Deck(
       return;
     }
     stopWithEdgeFade(audioCtxRef.current, roll.source);
-    // The deck's time interval kept advancing currentTimeRef while the roll
-    // played (isPlayingRef stayed true), so re-anchoring at the live playhead
-    // resumes exactly where the un-rolled timeline would be.
+    // The wall-clock timeline (startTimeRef) kept running during the roll, so
+    // the un-rolled playhead is read from it directly. currentTimeRef lags by
+    // up to one 100 ms interval tick — resuming from it would jump back.
     if (isPlayingRef.current) {
-      seekTo(currentTimeRef.current, { autoplay: true });
+      const ctx = audioCtxRef.current;
+      let pos = currentTimeRef.current;
+      if (ctx) {
+        const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
+        pos = livePosition(ctx, effRate);
+        currentTimeRef.current = pos;
+        setCurrentTime(pos);
+      }
+      seekTo(pos, { autoplay: true });
     }
   }, [seekTo, audioCtxRef, livePosition]);
 
@@ -1316,7 +1324,11 @@ const Deck = forwardRef(function Deck(
         return;
       }
 
-      const pos = currentTimeRef.current;
+      // Live playhead, not the up-to-100 ms-stale currentTimeRef: the roll
+      // must capture the beat the listener just heard.
+      const pos = livePosition(ctx, effRate);
+      currentTimeRef.current = pos;
+      setCurrentTime(pos);
       const loopStart = Math.max(0, pos - len);
       const loopEnd = Math.max(loopStart + 0.01, pos);
       // Silence the main source WITHOUT touching play state — the wall-clock
