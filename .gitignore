@@ -21,3 +21,6 @@ Thumbs.db
 # the generators are the source of truth and the audio is large.
 tools/samplepacks/pack/
 tools/samplepacks/vol2/
+
+# Agent worktrees (isolated checkouts, never source)
+.claude/worktrees/
