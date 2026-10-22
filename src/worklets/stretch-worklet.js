@@ -111,9 +111,18 @@ const OLA_GAIN = (2 * HOP) / GRAIN;
 // edge every grain and the bass plays at f0 × rate. Multiple of DECIM.
 // Mirrors timeStretch.js#searchRadius. The WSOLA scratch buffers below are
 // sized from it in the constructor, after it is known.
-const SEARCH = Math.max(384, 4 * Math.ceil(sampleRate / 80 / 4));
+//
+// Coarse decimation scales with the context rate (4 at 44.1 / 48 kHz, 8 at
+// 96 kHz; power of two so it divides CORR and the 384 floor). The radius is
+// fixed in time, so with a fixed 4 the coarse pass at 96 kHz evaluated twice
+// the candidates for twice the grains per second (~10% of a core per stereo
+// deck); scaled, it stays at 277 / 301 / 301 candidates per grain and the
+// box sum spans the same time (nulls at ~11–12 kHz). The fine pass still
+// refines at full resolution within ±(DECIM − 1). Mirrors
+// timeStretch.js#coarseDecimation.
+const DECIM = 4 * 2 ** Math.max(0, Math.round(Math.log2(sampleRate / 44100)));
+const SEARCH = Math.max(384, DECIM * Math.ceil(sampleRate / 80 / DECIM));
 const CORR = GRAIN - HOP;
-const DECIM = 4;
 const EPS = 1e-12;
 // ~4 ms edge fade, in samples at the context rate.
 const FADE = Math.max(1, Math.round(sampleRate * 0.004));
@@ -199,6 +208,9 @@ class StretchProcessor extends AudioWorkletProcessor {
     this.refD = new Float32Array(CORR / DECIM);
     this.regD = new Float32Array((CORR + 2 * SEARCH) / DECIM);
     this.scores = new Float64Array((2 * SEARCH) / DECIM + 1);
+    // Cost probe (tests): alignment searches run, coarse candidates scored.
+    this.searches = 0;
+    this.coarseEvals = 0;
     this.port.onmessage = (e) => this.onMessage(e.data || {});
   }
 
@@ -445,14 +457,20 @@ class StretchProcessor extends AudioWorkletProcessor {
     const nRegD = regD.length;
     for (let j = 0; j < nRefD; j++) {
       const k = j * DECIM;
-      refD[j] = ref[k] + ref[k + 1] + ref[k + 2] + ref[k + 3];
+      let v = 0;
+      for (let i = 0; i < DECIM; i++) v += ref[k + i];
+      refD[j] = v;
     }
     for (let j = 0; j < nRegD; j++) {
       const k = j * DECIM;
-      regD[j] = region[k] + region[k + 1] + region[k + 2] + region[k + 3];
+      let v = 0;
+      for (let i = 0; i < DECIM; i++) v += region[k + i];
+      regD[j] = v;
     }
     const centreD = SEARCH / DECIM;
     const nLagsD = 2 * centreD + 1;
+    this.searches++;
+    this.coarseEvals += nLagsD;
     let energy = 0;
     for (let j = 0; j < nRefD; j++) energy += regD[j] * regD[j];
     for (let o = 0; o < nLagsD; o++) {

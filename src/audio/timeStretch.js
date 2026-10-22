@@ -43,16 +43,36 @@ export const OLA_GAIN = (2 * HOP_OUT) / GRAIN_SIZE;
 // radius is defined in TIME — half the period of 40 Hz (12.5 ms) — giving
 // 552 / 600 / 1200 samples at 44.1 / 48 / 96 kHz: keylocked down to ~40 Hz
 // at any rate. SEARCH (384) is the floor (low-rate contexts) and the old
-// fixed value. Multiple of DECIM so the coarse pass lands on lag 0.
+// fixed value. Multiple of coarseDecimation() so the coarse pass lands on
+// lag 0.
 export const SEARCH = 384;
 export function searchRadius(sampleRate = 44100) {
-  return Math.max(SEARCH, DECIM * Math.ceil(sampleRate / 80 / DECIM));
+  const d = coarseDecimation(sampleRate);
+  return Math.max(SEARCH, d * Math.ceil(sampleRate / 80 / d));
 }
 // Correlate the candidate grain's first half against the continuation.
 export const CORR_LEN = GRAIN_SIZE - HOP_OUT;
-// Coarse pass decimation (box-summed blocks). The search radius and CORR_LEN
-// must be multiples of it.
-const DECIM = 4;
+// Coarse pass decimation (box-summed blocks) at 44.1 / 48 kHz. The search
+// radius and CORR_LEN must be multiples of the decimation in use.
+export const DECIM = 4;
+// The radius is fixed in TIME, so in samples it grows with the rate, and the
+// coarse pass (one candidate per `decim` samples of lag, each a dot product
+// of CORR_LEN / decim box sums) grew with it: at 96 kHz twice the grains per
+// second × twice the candidates put a stereo KEYLOCK deck at ~10% of a core.
+// Decimating in proportion to the rate keeps the coarse candidate count
+// ~flat (277 / 301 / 301 at 44.1 / 48 / 96 kHz) and the box sum the same
+// length in TIME (a 4-sample box at 44.1 kHz ≈ an 8-sample box at 96 kHz,
+// both nulling at ~11–12 kHz), so the coarse pass sees the same signal.
+// The fine pass still refines at full resolution within ±(decim − 1) of the
+// coarse winner, so the chosen lag is exact. Power of two, so it divides
+// CORR_LEN (1536) and the 384 floor.
+export function coarseDecimation(sampleRate = 44100) {
+  return DECIM * 2 ** Math.max(0, Math.round(Math.log2(sampleRate / 44100)));
+}
+// Coarse candidates evaluated per grain search at a context rate.
+export function coarseCandidates(sampleRate = 44100) {
+  return (2 * searchRadius(sampleRate)) / coarseDecimation(sampleRate) + 1;
+}
 
 // Periodic Hann (denominator n, not n − 1) — the form whose shifted copies
 // sum to a constant, so OLA has no gain ripple.
@@ -89,29 +109,37 @@ export function readGrain(input, pos, count, pitchRatio, out) {
 // search samples). Returns the lag in [−search, search] (output samples)
 // that maximizes ref·cand / ‖cand‖. Ties — including all-silence — keep lag
 // 0, so silence and perfectly-continuous material never get nudged.
-// `scratch` (optional) avoids per-call allocation: { refD, regD }.
-export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH, scratch) {
-  const nRefD = corrLen / DECIM;
-  const nRegD = (corrLen + 2 * search) / DECIM;
+// `scratch` (optional) avoids per-call allocation: { refD, regD, scores };
+// when given, its `coarse` field counts the coarse candidates evaluated.
+// `decim` is the coarse decimation (coarseDecimation(); corrLen and search
+// must be multiples of it).
+export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH, scratch, decim = DECIM) {
+  const nRefD = corrLen / decim;
+  const nRegD = (corrLen + 2 * search) / decim;
   const refD = scratch?.refD || new Float32Array(nRefD);
   const regD = scratch?.regD || new Float32Array(nRegD);
   for (let j = 0; j < nRefD; j++) {
-    const k = j * DECIM;
-    refD[j] = ref[k] + ref[k + 1] + ref[k + 2] + ref[k + 3];
+    const k = j * decim;
+    let v = 0;
+    for (let i = 0; i < decim; i++) v += ref[k + i];
+    refD[j] = v;
   }
   for (let j = 0; j < nRegD; j++) {
-    const k = j * DECIM;
-    regD[j] = region[k] + region[k + 1] + region[k + 2] + region[k + 3];
+    const k = j * decim;
+    let v = 0;
+    for (let i = 0; i < decim; i++) v += region[k + i];
+    regD[j] = v;
   }
   const EPS = 1e-12;
-  // Coarse: lags in steps of DECIM on the box-summed signals. Running energy
-  // of the candidate window is updated incrementally.
-  const centreD = search / DECIM;
+  // Coarse: lags in steps of `decim` on the box-summed signals. Running
+  // energy of the candidate window is updated incrementally.
+  const centreD = search / decim;
   let energy = 0;
   for (let j = 0; j < nRefD; j++) energy += regD[j] * regD[j];
   let bestD = centreD;
   let bestScore = -Infinity;
   const nLagsD = 2 * centreD + 1;
+  if (scratch) scratch.coarse = (scratch.coarse || 0) + nLagsD;
   const scores = scratch?.scores || new Float64Array(nLagsD);
   for (let o = 0; o < nLagsD; o++) {
     if (o > 0) {
@@ -146,8 +174,8 @@ export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH, sc
   };
   let bestOff = search;
   let best = fullScore(search);
-  const lo = Math.max(0, bestD * DECIM - (DECIM - 1));
-  const hi = Math.min(2 * search, bestD * DECIM + (DECIM - 1));
+  const lo = Math.max(0, bestD * decim - (decim - 1));
+  const hi = Math.min(2 * search, bestD * decim + (decim - 1));
   for (let off = lo; off <= hi; off++) {
     if (off === search) continue;
     const s = fullScore(off);
@@ -163,17 +191,21 @@ export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH, sc
 // ≈ input.length / rate. `rate` > 0 (1 = original tempo); `pitchRatio` > 0
 // (1 = original pitch). `sampleRate` is the rate of `input` (and of the
 // output — the core never resamples) and only sets the alignment search
-// radius (searchRadius); it defaults to 44.1 kHz so existing callers keep
-// working. The 75% periodic-Hann overlap-add (× OLA_GAIN) sums to exactly
-// unity gain, so no makeup normalization is needed.
-export function stretchChannel(input, rate, pitchRatio = 1, grainSize = GRAIN_SIZE, sampleRate = 44100) {
+// radius (searchRadius) and coarse decimation (coarseDecimation); it
+// defaults to 44.1 kHz so existing callers keep working. The 75%
+// periodic-Hann overlap-add (× OLA_GAIN) sums to exactly unity gain, so no
+// makeup normalization is needed. `stats` (optional) receives
+// { searches, coarse }: alignment searches run and coarse candidates
+// evaluated in total (a cost probe for tests).
+export function stretchChannel(input, rate, pitchRatio = 1, grainSize = GRAIN_SIZE, sampleRate = 44100, stats) {
   const hopOut = grainSize / 4;
   const gain = (2 * hopOut) / grainSize;
   const corrLen = grainSize - hopOut;
+  const decim = coarseDecimation(sampleRate);
   // Grains smaller than the default scale the radius down in proportion
-  // (multiple of DECIM so the coarse pass lands on the nominal position).
+  // (multiple of decim so the coarse pass lands on the nominal position).
   const search =
-    Math.floor((searchRadius(sampleRate) * Math.min(1, grainSize / GRAIN_SIZE)) / DECIM) * DECIM;
+    Math.floor((searchRadius(sampleRate) * Math.min(1, grainSize / GRAIN_SIZE)) / decim) * decim;
   const outLength = Math.max(grainSize, Math.round(input.length / rate));
   const out = new Float32Array(outLength);
   const win = hannWindow(grainSize);
@@ -181,10 +213,12 @@ export function stretchChannel(input, rate, pitchRatio = 1, grainSize = GRAIN_SI
   const ref = new Float32Array(corrLen);
   const region = new Float32Array(corrLen + 2 * search);
   const scratch = {
-    refD: new Float32Array(corrLen / DECIM),
-    regD: new Float32Array((corrLen + 2 * search) / DECIM),
-    scores: new Float64Array((2 * search) / DECIM + 1),
+    refD: new Float32Array(corrLen / decim),
+    regD: new Float32Array((corrLen + 2 * search) / decim),
+    scores: new Float64Array((2 * search) / decim + 1),
+    coarse: 0,
   };
+  let searches = 0;
   const grainCount = Math.ceil((outLength - grainSize) / hopOut) + 1;
   let prevActual = null;
   for (let g = 0; g < grainCount; g++) {
@@ -206,7 +240,8 @@ export function stretchChannel(input, rate, pitchRatio = 1, grainSize = GRAIN_SI
             : natural + Math.round((nominal - natural) / pitchRatio) * pitchRatio;
         readGrain(input, natural, corrLen, pitchRatio, ref);
         readGrain(input, base - search * pitchRatio, region.length, pitchRatio, region);
-        actual = base + findBestLag(ref, region, corrLen, search, scratch) * pitchRatio;
+        actual = base + findBestLag(ref, region, corrLen, search, scratch, decim) * pitchRatio;
+        searches++;
       } else {
         actual = natural;
       }
@@ -217,6 +252,10 @@ export function stretchChannel(input, rate, pitchRatio = 1, grainSize = GRAIN_SI
     for (let i = 0; i < n; i++) {
       out[outPos + i] += grain[i] * win[i] * gain;
     }
+  }
+  if (stats) {
+    stats.searches = searches;
+    stats.coarse = scratch.coarse;
   }
   return out;
 }

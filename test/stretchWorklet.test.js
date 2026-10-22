@@ -1599,3 +1599,37 @@ describe("stretch worklet — review pass 7 — US73", () => {
     for (let k = FADE + 64; k < out.length; k++) expect(out[k], `sample ${k}`).toBeCloseTo(1, 4);
   });
 });
+
+// ── Ticket DD: coarse-search cost at any context rate ──
+// The search radius is fixed in TIME (552 / 600 / 1200 samples at 44.1 / 48
+// / 96 kHz). With a fixed 4× coarse decimation the 96 kHz coarse pass scored
+// 601 candidates per grain for twice the grains per second (~9–11% of a core
+// per stereo deck, measured); DECIM now scales with the context rate (4 / 4
+// / 8), so it scores 277 / 301 / 301 and a 96 kHz deck is back to ~5–6.5%.
+// A fixed DECIM of 4 fails this at 88.2 / 96 / 192 kHz (553 / 601 / 1201).
+describe("stretch worklet — coarse-search cost — US73", () => {
+  it("@us US73: coarse candidates per grain search stay ≤ 2·600/4 + 1 = 301 at 44.1 / 48 / 88.2 / 96 / 192 kHz contexts", () => {
+    const MAX_COARSE = (2 * 600) / 4 + 1;
+    for (const [sr, expected] of [
+      [44100, 277],
+      [48000, 301],
+      [88200, 277],
+      [96000, 301],
+      [192000, 301],
+    ]) {
+      let seed = 13;
+      const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+      const L = new Float32Array(sr * 2).map(() => rnd());
+      const R = new Float32Array(sr * 2).map(() => rnd());
+      const { Processor: P } = loadProcessor({ sampleRate: sr });
+      const p = new P();
+      send(p, { type: "load", channels: [L, R], sampleRate: sr });
+      send(p, { type: "play", offset: 0.1 });
+      render(p, sr * 0.5, { rate: 1.04, ctxRate: sr, channels: 2 });
+      expect(p.searches, `searches @ ${sr}`).toBeGreaterThan(10);
+      const perGrain = p.coarseEvals / p.searches;
+      expect(perGrain, `coarse candidates / grain @ ${sr}`).toBe(expected);
+      expect(perGrain, `coarse candidates / grain @ ${sr}`).toBeLessThanOrEqual(MAX_COARSE);
+    }
+  });
+});

@@ -6,6 +6,8 @@ import {
   stretchChannel,
   findBestLag,
   searchRadius,
+  coarseDecimation,
+  coarseCandidates,
   SEARCH,
   GRAIN_SIZE,
   HOP_OUT,
@@ -315,6 +317,89 @@ describe("timeStretch sub-bass keylock — US71", () => {
         expect(Math.abs(20 * Math.log10(hannAmp(y, f0, sr) / A)), `${tag}: level at f0`).toBeLessThan(0.5);
         expect(20 * Math.log10(hannAmp(y, f0 * rate, sr) / A), `${tag}: level at f0 × rate`).toBeLessThan(-20);
       }
+    }
+  });
+});
+
+describe("timeStretch coarse-search cost — US71", () => {
+  // Ticket DD: the radius is fixed in TIME, so a fixed 4× coarse decimation
+  // scored 601 candidates per grain at 96 kHz (vs 277 at 44.1 kHz) for twice
+  // the grains per second — ~10% of a core per stereo KEYLOCK deck. The
+  // decimation now scales with the rate so the candidate count stays flat.
+  // Bound: the 48 kHz count, 2 × 600 / 4 + 1 = 301 (44.1 kHz: 277).
+  const MAX_COARSE = (2 * 600) / 4 + 1;
+
+  it("@us US71: coarseDecimation is 4 at 44.1 / 48 kHz, 8 at 88.2 / 96 kHz, 16 at 192 kHz — and divides the radius and CORR_LEN", () => {
+    expect(coarseDecimation(22050)).toBe(4);
+    expect(coarseDecimation(44100)).toBe(4);
+    expect(coarseDecimation(48000)).toBe(4);
+    expect(coarseDecimation(88200)).toBe(8);
+    expect(coarseDecimation(96000)).toBe(8);
+    expect(coarseDecimation(192000)).toBe(16);
+    expect(coarseDecimation()).toBe(4);
+    for (const sr of [22050, 32000, 44100, 48000, 88200, 96000, 176400, 192000]) {
+      const d = coarseDecimation(sr);
+      expect(searchRadius(sr) % d, `radius @ ${sr}`).toBe(0);
+      expect((GRAIN_SIZE - HOP_OUT) % d, `CORR_LEN @ ${sr}`).toBe(0);
+    }
+  });
+
+  it("@us US71: coarse candidates per grain search stay ≤ 2·600/4 + 1 = 301 at every context rate (a fixed 4× decimation scores 601 at 96 kHz)", () => {
+    let seed = 11;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+    for (const sr of [22050, 44100, 48000, 88200, 96000, 192000]) {
+      const src = new Float32Array(sr).map(() => rnd());
+      const stats = {};
+      stretchChannel(src, 1.04, 1, GRAIN_SIZE, sr, stats);
+      expect(stats.searches, `searches @ ${sr}`).toBeGreaterThan(10);
+      const perGrain = stats.coarse / stats.searches;
+      expect(perGrain, `coarse candidates / grain @ ${sr}`).toBe(coarseCandidates(sr));
+      expect(perGrain, `coarse candidates / grain @ ${sr}`).toBeLessThanOrEqual(MAX_COARSE);
+    }
+    expect(coarseCandidates(44100)).toBe(277);
+    expect(coarseCandidates(96000)).toBe(301);
+  });
+
+  it("@us US71: the fine pass stays exact at the 96 kHz decimation — findBestLag(decim 8) finds the same known shifts", () => {
+    const corr = GRAIN_SIZE - HOP_OUT;
+    const search = searchRadius(96000);
+    let seed = 3;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
+    const region = new Float32Array(corr + 2 * search).map(() => rnd());
+    for (const shift of [37, -201, 3, -5, 1199, -1197]) {
+      const ref = region.slice(search + shift, search + shift + corr);
+      expect(findBestLag(ref, region, corr, search, undefined, 8), `shift ${shift}`).toBe(shift);
+    }
+    expect(findBestLag(new Float32Array(corr), new Float32Array(corr + 2 * search), corr, search, undefined, 8)).toBe(0);
+  });
+
+  it("@us US71: high frequencies survive the 96 kHz decimation — white-noise tilt within 0.2 dB of rate 1, floor within 0.75 dB, a 26 kHz partial within 0.5 dB at rates 0.92 / 1.04 / 1.1", () => {
+    // Same metrics as the 44.1 kHz HF test, at 96 kHz where the decimation
+    // changed (26 kHz is that test's 12 kHz scaled to the rate). Measured
+    // (decim 8): |tilt| ≤ 0.003 dB, floor −0.04…−0.17 dB, 26 kHz within
+    // 0.04 dB. The previous fixed decim 4: |tilt| ≤ 0.001 dB, the same floor,
+    // 26 kHz −0.12…−0.33 dB.
+    const sr = 96000;
+    let seed = 5;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+    const noise = new Float32Array(sr * 3).map(() => rnd());
+    const partial = new Float32Array(sr * 3);
+    for (let i = 0; i < partial.length; i++) {
+      partial[i] = 0.3 * Math.sin((2 * Math.PI * 26000 * i) / sr) + 0.3 * Math.sin((2 * Math.PI * 150 * i) / sr);
+    }
+    const mid = (a) => a.subarray(GRAIN_SIZE * 2, a.length - GRAIN_SIZE * 2);
+    const rmsDb = (a) => 10 * Math.log10(a.reduce((e, v) => e + v * v, 0) / a.length);
+    const band = (a) => bandPowerDb(a, 25500, 26500, sr);
+    const noise1 = mid(stretchChannel(noise, 1, 1, GRAIN_SIZE, sr));
+    const shape1 = diffRmsDb(noise1) - rmsDb(noise1);
+    for (const rate of [0.92, 1.04, 1.1]) {
+      const out = mid(stretchChannel(noise, rate, 1, GRAIN_SIZE, sr));
+      const tilt = diffRmsDb(out) - rmsDb(out) - shape1;
+      const floor = rmsDb(out) - rmsDb(noise1);
+      expect(Math.abs(tilt), `noise tilt @ ${rate}`).toBeLessThan(0.2);
+      expect(Math.abs(floor), `noise broadband floor @ ${rate}`).toBeLessThan(0.75);
+      const p = stretchChannel(partial, rate, 1, GRAIN_SIZE, sr);
+      expect(Math.abs(band(mid(p)) - band(mid(partial))), `26 kHz @ ${rate}`).toBeLessThan(0.5);
     }
   });
 });
