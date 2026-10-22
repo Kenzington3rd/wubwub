@@ -19,15 +19,18 @@
 //        shorter than one hop, or end ≤ start, is ignored — the previous loop
 //        state stands); enabled: false → no loop, play to the end.
 // Worklet → host:
-//   { type: "position", seconds }  ~every 100 ms: the source position of the
-//        sample about to leave the node (the AUDIBLE playhead). That sample is
+//   { type: "position", seconds, at }  ~every 100 ms: the source position of
+//        the sample about to leave the node (the AUDIBLE playhead), and `at`,
+//        the AudioWorkletGlobalScope currentTime (context seconds) of the
+//        render quantum it was measured in — anchor to `at`, not to message
+//        arrival, which lags by an unknown thread hop. That sample is
 //        an overlap-add of up to four grains, each reading the source at its
 //        own aligned start + offset × pitch; the playhead is their window-
 //        weighted mean read position (exact for a linear ramp). This includes
 //        the overlap-add group delay ≈ (GRAIN/2)·(pitch − rate) plus the mean
 //        WSOLA nudge, which a write-head estimate (nominal + emitted × rate)
 //        misses by up to ~27 ms at rate 2.
-//   { type: "looped", seconds }    once per wrap, when the audible position
+//   { type: "looped", seconds, at }  once per wrap, when the audible position
 //        crosses the seam (or at once when play / seek / a region change
 //        lands past the region end); `seconds` is the loop start (0 for a
 //        whole-track loop). Never posted by a fading tail.
@@ -284,15 +287,6 @@ class StretchProcessor extends AudioWorkletProcessor {
     this.wsum.fill(0);
   }
 
-  // True while anything is (or just was) audible: a stream that has emitted
-  // at least one sample (`streaming`), or a fading tail.
-  sounding() {
-    return !!(
-      ((this.playing || this.release > 0) && this.streaming && this.channels && this.channels.length) ||
-      this.tail
-    );
-  }
-
   // Render the old stream's next FADE samples (everything it would emit —
   // pause fade, an in-flight crossfade — continuing seamlessly from the last
   // sample out) ramped linearly to zero, to be mixed under the new stream.
@@ -300,14 +294,26 @@ class StretchProcessor extends AudioWorkletProcessor {
   // after (resetStream): produce() posts nothing, and seams it queues while
   // rendering are dropped with the stream, so a wrap inside the tail never
   // announces `looped`.
+  //
+  // With no live stream (the previous message already re-anchored it and
+  // nothing has been heard since — a roll's setLoop + seek, seek + seek in
+  // one quantum — or a paused stream with a tail still fading) only the
+  // existing tail is sounding, and it already ramps to zero on its own: keep
+  // it as is. Rendering here would start the not-yet-heard stream (at the old
+  // or wrapped position) under fade-in × fade-out — ~−12 dB of ghost
+  // material for 4 ms — and ramp the real tail a second time.
   captureTail() {
-    if (!this.sounding()) return;
-    const n = this.outCh || (this.channels ? this.channels.length : 1);
+    const hasTrack = this.channels && this.channels.length;
+    if (!(hasTrack && this.streaming && (this.playing || this.release > 0))) return;
+    const n = this.outCh || this.channels.length;
     this.tailIdx ^= 1;
     const t = this.tails[this.tailIdx];
     if (t.buf.length !== n) t.buf = Array.from({ length: n }, () => new Float32Array(FADE));
     this.produce(FADE, this.lastRate, this.lastPitch, t.buf, 0);
-    for (const ch of t.buf) for (let k = 0; k < FADE; k++) ch[k] *= (FADE - k) / FADE;
+    for (let c = 0; c < t.buf.length; c++) {
+      const ch = t.buf[c];
+      for (let k = 0; k < FADE; k++) ch[k] *= (FADE - k) / FADE;
+    }
     t.pos = 0;
     this.tail = t;
   }
@@ -317,9 +323,8 @@ class StretchProcessor extends AudioWorkletProcessor {
     if (!this.loop || !this.channels || this.channels.length === 0) return null;
     const len = this.channels[0].length;
     const sr = this.sourceSampleRate;
-    const clamp = (v) => Math.min(len, Math.max(0, v));
-    const start = this.loop.start === null ? 0 : clamp(Math.round(this.loop.start * sr));
-    const end = this.loop.end === null ? len : clamp(Math.round(this.loop.end * sr));
+    const start = this.loop.start === null ? 0 : Math.min(len, Math.max(0, Math.round(this.loop.start * sr)));
+    const end = this.loop.end === null ? len : Math.min(len, Math.max(0, Math.round(this.loop.end * sr)));
     if (end - start < HOP) return null;
     return { start, end, len: end - start };
   }
@@ -416,29 +421,34 @@ class StretchProcessor extends AudioWorkletProcessor {
         bestD = o;
       }
     }
-    const fullScore = (off) => {
-      let c = 0;
-      let e = 0;
-      for (let j = 0; j < CORR; j++) {
-        const v = region[off + j];
-        c += ref[j] * v;
-        e += v * v;
-      }
-      return c / Math.sqrt(e + EPS);
-    };
     let bestOff = SEARCH;
-    let best = fullScore(SEARCH);
+    let best = this.fullScore(SEARCH);
     const lo = Math.max(0, bestD * DECIM - (DECIM - 1));
     const hi = Math.min(2 * SEARCH, bestD * DECIM + (DECIM - 1));
     for (let off = lo; off <= hi; off++) {
       if (off === SEARCH) continue;
-      const s = fullScore(off);
+      const s = this.fullScore(off);
       if (s > best * (1 + 1e-9) + 1e-12) {
         best = s;
         bestOff = off;
       }
     }
     return bestOff - SEARCH;
+  }
+
+  // Full-resolution normalized cross-correlation of the reference against
+  // the search region at offset `off` (a method, not a per-grain closure).
+  fullScore(off) {
+    const ref = this.ref;
+    const region = this.region;
+    let c = 0;
+    let e = 0;
+    for (let j = 0; j < CORR; j++) {
+      const v = region[off + j];
+      c += ref[j] * v;
+      e += v * v;
+    }
+    return c / Math.sqrt(e + EPS);
   }
 
   queueSeam(at, shift) {
@@ -461,7 +471,7 @@ class StretchProcessor extends AudioWorkletProcessor {
       if (this.pending.length !== n) {
         this.pending = Array.from({ length: n }, () => new Float32Array(GRAIN));
       } else {
-        for (const buf of this.pending) buf.fill(0);
+        for (let c = 0; c < n; c++) this.pending[c].fill(0);
       }
       this.streaming = true;
     }
@@ -601,7 +611,7 @@ class StretchProcessor extends AudioWorkletProcessor {
     const frames = out[0].length;
     const live = (this.playing || this.release > 0) && this.channels && this.channels.length;
     if (!live && !this.tail) {
-      for (const ch of out) ch.fill(0);
+      for (let c = 0; c < out.length; c++) out[c].fill(0);
       return true;
     }
     // k-rate is fine for tempo/pitch — read the block's first value. Scale
@@ -630,16 +640,19 @@ class StretchProcessor extends AudioWorkletProcessor {
     }
     if (wrapped) {
       const b = this.loopBounds();
-      this.port.postMessage({ type: "looped", seconds: b ? b.start / this.sourceSampleRate : 0 });
+      this.port.postMessage({ type: "looped", seconds: b ? b.start / this.sourceSampleRate : 0, at: currentTime });
     }
     const audible = Math.max(0, u - this.audLap);
-    // Position report (~10 Hz) in source-track seconds.
+    // Position report (~10 Hz) in source-track seconds, stamped with the
+    // render quantum's context time so the host can anchor to worklet time
+    // rather than to whenever the message happens to arrive.
     const nowSec = currentTime;
     if (nowSec - this.lastReport > 0.1) {
       this.lastReport = nowSec;
       this.port.postMessage({
         type: "position",
         seconds: audible / this.sourceSampleRate,
+        at: nowSec,
       });
     }
     // End of track (no loop) → report and fade out: the grains still hold

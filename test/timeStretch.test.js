@@ -222,9 +222,10 @@ describe("timeStretch WSOLA quality — US71", () => {
   it("@us US71: high frequencies survive the alignment — white noise HF and a 12 kHz partial within 0.5 dB at rates 1.04 / 0.92", () => {
     // Candidates searched on the NOMINAL grid sat at a different sub-sample
     // fraction than the grain they overlap whenever hopOut × rate is
-    // non-integer, so HF never lined up. Measured before the fix (worklet,
-    // same core): noise −2.0…−2.5 dB, first-difference (HF proxy) −3.2…−4.0
-    // dB at rates 0.92–1.3; after: −0.02 dB.
+    // non-integer, so HF never lined up: 2–4 dB of first-difference (HF
+    // proxy) lost at rates 0.92–1.3. On the natural grid this full-period
+    // LCG noise measures −0.34 / −0.20 dB at 0.92 / 1.04 — the WSOLA floor,
+    // which grows to 1–3 dB at extreme rates (−1.0 at 0.75, −2.7 at 2.0).
     let seed = 5;
     const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
     const noise = new Float32Array(SR * 3).map(() => rnd());
