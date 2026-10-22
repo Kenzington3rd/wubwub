@@ -52,8 +52,9 @@
 //   rate       — tempo ratio (0.5–2.0); track time advances at this rate
 //   pitchRatio — resample ratio (2^(semitones/12)); 1 = keylock
 //
-// The synthesis mirrors src/audio/timeStretch.js: 2048-sample periodic-Hann
-// grains at 75% overlap (× ½ so the overlap sums to exactly 1), each grain's
+// The synthesis mirrors src/audio/timeStretch.js: GRAIN-sample periodic-Hann
+// grains (2048 at 44.1 / 48 kHz, 4096 at 88.2 / 96 kHz — ~45 ms, see below)
+// at 75% overlap (× ½ so the overlap sums to exactly 1), each grain's
 // start nudged within ±SEARCH samples (12.5 ms, see below) of its nominal
 // position to the offset that best matches the natural continuation of the
 // previous grain (WSOLA, normalized cross-correlation on the channel sum,
@@ -99,9 +100,6 @@
 // bit-identical default). Still flagged experimental in the UI pending real
 // listening tests.
 
-const GRAIN = 2048;
-const HOP = GRAIN / 4;
-const OLA_GAIN = (2 * HOP) / GRAIN;
 // Alignment search radius, defined in TIME: half the period of 40 Hz
 // (552 / 600 / 1200 samples at 44.1 / 48 / 96 kHz; `sampleRate` is the
 // AudioWorkletGlobalScope's context rate), so bass stays keylocked down to
@@ -121,6 +119,20 @@ const OLA_GAIN = (2 * HOP) / GRAIN;
 // refines at full resolution within ±(DECIM − 1). Mirrors
 // timeStretch.js#coarseDecimation.
 const DECIM = 4 * 2 ** Math.max(0, Math.round(Math.log2(sampleRate / 44100)));
+// Grain and hop scale with the context rate in the same steps as DECIM:
+// 2048 / 512 at 44.1 / 48 kHz, 4096 / 1024 at 88.2 / 96 kHz, 8192 / 2048 at
+// 192 kHz — so a grain spans ~43–46 ms at every rate. With a fixed 2048 the
+// grain was 21 ms at 96 kHz while the radius (fixed in time) spanned 2.3 hops
+// instead of ~1.1: grains re-read transients and short kicks played twice
+// (29 of 416 at 96 kHz vs 8 / 5 at 44.1 / 48 kHz; now 6 of 416). Everything
+// below is derived from GRAIN / HOP (FADE is in time already); 44.1 / 48 kHz
+// output is bit-identical to the fixed 2048. Mirrors
+// timeStretch.js#defaultGrainSize.
+const GRAIN = 2048 * (DECIM / 4);
+const HOP = GRAIN / 4;
+const OLA_GAIN = (2 * HOP) / GRAIN;
+// SEARCH is the ACTUAL radius in samples (the core calls this
+// searchRadius(sr); its SEARCH_FLOOR is the 384 here).
 const SEARCH = Math.max(384, DECIM * Math.ceil(sampleRate / 80 / DECIM));
 const CORR = GRAIN - HOP;
 const EPS = 1e-12;
@@ -203,8 +215,10 @@ class StretchProcessor extends AudioWorkletProcessor {
     this.grainCount = 0;
     // WSOLA scratch (allocated once).
     this.ref = new Float32Array(CORR);
-    this.region = new Float32Array(CORR + 2 * SEARCH);
-    this.tmp = new Float32Array(CORR + 2 * SEARCH);
+    // The region carries DECIM extra frames on each side so the fine pass can
+    // refine past a coarse winner at ±SEARCH (see bestLag).
+    this.region = new Float32Array(CORR + 2 * SEARCH + 2 * DECIM);
+    this.tmp = new Float32Array(CORR + 2 * SEARCH + 2 * DECIM);
     this.refD = new Float32Array(CORR / DECIM);
     this.regD = new Float32Array((CORR + 2 * SEARCH) / DECIM);
     this.scores = new Float64Array((2 * SEARCH) / DECIM + 1);
@@ -305,15 +319,19 @@ class StretchProcessor extends AudioWorkletProcessor {
       const p = this.audibleFrame();
       // How far past the audible playhead grains in flight can already read:
       // about one grain span at the current read rate plus the widest WSOLA
-      // nudge (SEARCH output samples, read at `pitch` source frames each).
-      // The 2× is a SAFETY FACTOR, not part of the bound. With the search
-      // radius in time (up to 1200 samples at 96 kHz) the worst measured gap
-      // (audible playhead → first grain reading past the seam, noise at the
-      // seam, 44.1 / 48 / 96 kHz contexts, rates 1–2) reaches 0.97–0.998× the
-      // old GRAIN × max(1, rate, pitch) term alone — no margin left there —
-      // and 0.84× of the bracketed bound (with the SEARCH term).
+      // nudge (SEARCH + DECIM − 1 output samples, read at `pitch` source
+      // frames each). The 2× is a SAFETY FACTOR, not part of the bound. The
+      // worst measured gap (audible playhead → first grain reading past the
+      // seam, noise at the seam, 44.1 / 48 / 96 kHz contexts with the
+      // rate-scaled grain, rates 1–2, 12 seeds) is 1.19× the GRAIN × max(1,
+      // rate, pitch) term alone (48 kHz, rate 1.25) — 0.96× of the bracket
+      // without the 2×, 0.48× of `ahead`; ≤ 0.99× at 44.1 / 96 kHz.
+      // NOT FALSIFIABLE at the current margin: either the (SEARCH + DECIM)
+      // term or the 2× alone covers every measured gap, so dropping one of
+      // them passes every test (the loop-off seam test pins only the GRAIN ×
+      // max(…) term). Both are kept by design, as margin.
       const ahead =
-        2 * (GRAIN * Math.max(1, this.lastRate, this.lastPitch) + SEARCH * this.lastPitch);
+        2 * (GRAIN * Math.max(1, this.lastRate, this.lastPitch) + (SEARCH + DECIM) * this.lastPitch);
       if (this.seamCount > 0 || p + ahead >= b.end) {
         this.captureTail();
         this.loop = null;
@@ -464,7 +482,7 @@ class StretchProcessor extends AudioWorkletProcessor {
     for (let j = 0; j < nRegD; j++) {
       const k = j * DECIM;
       let v = 0;
-      for (let i = 0; i < DECIM; i++) v += region[k + i];
+      for (let i = 0; i < DECIM; i++) v += region[DECIM + k + i];
       regD[j] = v;
     }
     const centreD = SEARCH / DECIM;
@@ -493,8 +511,13 @@ class StretchProcessor extends AudioWorkletProcessor {
     }
     let bestOff = SEARCH;
     let best = this.fullScore(SEARCH);
-    const lo = Math.max(0, bestD * DECIM - (DECIM - 1));
-    const hi = Math.min(2 * SEARCH, bestD * DECIM + (DECIM - 1));
+    // Not clamped to [0, 2·SEARCH]: on an exactly periodic tone the coarse
+    // scores tie and the first (lag −SEARCH) wins, and the true peak can sit
+    // just outside it; the padded region lets the fine pass reach it (with
+    // the clamp, every grain of a 3 kHz sine at 96 kHz, rate 0.94, came out
+    // 22.5–33.75° off). Lags span ±(SEARCH + DECIM − 1).
+    const lo = bestD * DECIM - (DECIM - 1);
+    const hi = bestD * DECIM + (DECIM - 1);
     for (let off = lo; off <= hi; off++) {
       if (off === SEARCH) continue;
       const s = this.fullScore(off);
@@ -514,7 +537,7 @@ class StretchProcessor extends AudioWorkletProcessor {
     let c = 0;
     let e = 0;
     for (let j = 0; j < CORR; j++) {
-      const v = region[off + j];
+      const v = region[DECIM + off + j];
       c += ref[j] * v;
       e += v * v;
     }
@@ -585,7 +608,7 @@ class StretchProcessor extends AudioWorkletProcessor {
             ? natural + Math.round(nominal - natural)
             : natural + Math.round((nominal - natural) / pitch) * pitch;
         this.readMono(natural, pitch, CORR, this.ref, b, both);
-        this.readMono(base - SEARCH * pitch, pitch, CORR + 2 * SEARCH, this.region, b, both);
+        this.readMono(base - (SEARCH + DECIM) * pitch, pitch, CORR + 2 * SEARCH + 2 * DECIM, this.region, b, both);
         const pre = base + this.bestLag() * pitch;
         delta = pre - nominal;
         actual = this.wrap(pre, b, both);

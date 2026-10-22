@@ -8,7 +8,8 @@ import {
   searchRadius,
   coarseDecimation,
   coarseCandidates,
-  SEARCH,
+  SEARCH_FLOOR,
+  defaultGrainSize,
   GRAIN_SIZE,
   HOP_OUT,
   OLA_GAIN,
@@ -259,16 +260,19 @@ describe("timeStretch WSOLA quality — US71", () => {
   it("@us US71: findBestLag keeps lag 0 for silence and finds a known shift", () => {
     const corr = GRAIN_SIZE - HOP_OUT;
     const search = 384;
+    const pad = 4; // the region carries `decim` frames of padding per side
     // Silence: every score ties → the nominal position wins.
-    expect(findBestLag(new Float32Array(corr), new Float32Array(corr + 2 * search), corr, search)).toBe(0);
+    expect(findBestLag(new Float32Array(corr), new Float32Array(corr + 2 * (search + pad)), corr, search)).toBe(0);
     // Noise: the continuation sits 37 samples after the nominal start.
     let seed = 3;
     const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
-    const region = new Float32Array(corr + 2 * search).map(() => rnd());
-    const ref = region.slice(search + 37, search + 37 + corr);
-    expect(findBestLag(ref, region, corr, search)).toBe(37);
-    const refBack = region.slice(search - 201, search - 201 + corr);
-    expect(findBestLag(refBack, region, corr, search)).toBe(-201);
+    const region = new Float32Array(corr + 2 * (search + pad)).map(() => rnd());
+    const at = (lag) => region.slice(pad + search + lag, pad + search + lag + corr);
+    expect(findBestLag(at(37), region, corr, search)).toBe(37);
+    expect(findBestLag(at(-201), region, corr, search)).toBe(-201);
+    // Past the coarse edge: the fine pass reaches ±(search + decim − 1).
+    expect(findBestLag(at(search + 3), region, corr, search)).toBe(search + 3);
+    expect(findBestLag(at(-search - 3), region, corr, search)).toBe(-search - 3);
   });
 });
 
@@ -292,7 +296,7 @@ describe("timeStretch sub-bass keylock — US71", () => {
   };
 
   it("@us US71: searchRadius is half the period of 40 Hz in samples (multiple of 4), floored at the old 384", () => {
-    expect(SEARCH).toBe(384);
+    expect(SEARCH_FLOOR).toBe(384);
     expect(searchRadius(44100)).toBe(552);
     expect(searchRadius(48000)).toBe(600);
     expect(searchRadius(96000)).toBe(1200);
@@ -312,7 +316,7 @@ describe("timeStretch sub-bass keylock — US71", () => {
       for (let i = 0; i < src.length; i++) src[i] = A * Math.sin((2 * Math.PI * f0 * i) / sr);
       for (const rate of [1.04, 0.92]) {
         const tag = `${f0} Hz @ ${sr} Hz, rate ${rate}`;
-        const out = stretchChannel(src, rate, 1, GRAIN_SIZE, sr);
+        const out = stretchChannel(src, rate, 1, undefined, sr);
         const y = out.subarray(Math.round(sr * 0.25), Math.round(sr * 2.25));
         expect(Math.abs(20 * Math.log10(hannAmp(y, f0, sr) / A)), `${tag}: level at f0`).toBeLessThan(0.5);
         expect(20 * Math.log10(hannAmp(y, f0 * rate, sr) / A), `${tag}: level at f0 × rate`).toBeLessThan(-20);
@@ -341,6 +345,8 @@ describe("timeStretch coarse-search cost — US71", () => {
       const d = coarseDecimation(sr);
       expect(searchRadius(sr) % d, `radius @ ${sr}`).toBe(0);
       expect((GRAIN_SIZE - HOP_OUT) % d, `CORR_LEN @ ${sr}`).toBe(0);
+      const g = defaultGrainSize(sr);
+      expect((g - g / 4) % d, `rate-scaled CORR_LEN @ ${sr}`).toBe(0);
     }
   });
 
@@ -350,7 +356,7 @@ describe("timeStretch coarse-search cost — US71", () => {
     for (const sr of [22050, 44100, 48000, 88200, 96000, 192000]) {
       const src = new Float32Array(sr).map(() => rnd());
       const stats = {};
-      stretchChannel(src, 1.04, 1, GRAIN_SIZE, sr, stats);
+      stretchChannel(src, 1.04, 1, undefined, sr, stats);
       expect(stats.searches, `searches @ ${sr}`).toBeGreaterThan(10);
       const perGrain = stats.coarse / stats.searches;
       expect(perGrain, `coarse candidates / grain @ ${sr}`).toBe(coarseCandidates(sr));
@@ -363,22 +369,24 @@ describe("timeStretch coarse-search cost — US71", () => {
   it("@us US71: the fine pass stays exact at the 96 kHz decimation — findBestLag(decim 8) finds the same known shifts", () => {
     const corr = GRAIN_SIZE - HOP_OUT;
     const search = searchRadius(96000);
+    const pad = 8;
     let seed = 3;
     const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) * 2 - 1;
-    const region = new Float32Array(corr + 2 * search).map(() => rnd());
-    for (const shift of [37, -201, 3, -5, 1199, -1197]) {
-      const ref = region.slice(search + shift, search + shift + corr);
+    const region = new Float32Array(corr + 2 * (search + pad)).map(() => rnd());
+    for (const shift of [37, -201, 3, -5, 1199, -1197, 1201, -1202]) {
+      const ref = region.slice(pad + search + shift, pad + search + shift + corr);
       expect(findBestLag(ref, region, corr, search, undefined, 8), `shift ${shift}`).toBe(shift);
     }
-    expect(findBestLag(new Float32Array(corr), new Float32Array(corr + 2 * search), corr, search, undefined, 8)).toBe(0);
+    expect(findBestLag(new Float32Array(corr), new Float32Array(corr + 2 * (search + pad)), corr, search, undefined, 8)).toBe(0);
   });
 
-  it("@us US71: high frequencies survive the 96 kHz decimation — white-noise tilt within 0.2 dB of rate 1, floor within 0.75 dB, a 26 kHz partial within 0.5 dB at rates 0.92 / 1.04 / 1.1", () => {
+  it("@us US71: high frequencies survive the 96 kHz decimation — white-noise tilt within 0.2 dB of rate 1, floor within 0.3 dB, a 26 kHz partial within 0.5 dB at rates 0.92 / 1.04 / 1.1", () => {
     // Same metrics as the 44.1 kHz HF test, at 96 kHz where the decimation
     // changed (26 kHz is that test's 12 kHz scaled to the rate). Measured
-    // (decim 8): |tilt| ≤ 0.003 dB, floor −0.04…−0.17 dB, 26 kHz within
-    // 0.04 dB. The previous fixed decim 4: |tilt| ≤ 0.001 dB, the same floor,
-    // 26 kHz −0.12…−0.33 dB.
+    // (decim 8, rate-scaled 4096 grain, padded fine pass): |tilt| ≤ 0.005
+    // dB, floor −0.09…−0.24 dB, 26 kHz −0.04…−0.13 dB. (With the 2048 grain:
+    // floor −0.04…−0.17 dB, 26 kHz within 0.04 dB; with a fixed decim 4,
+    // 26 kHz −0.12…−0.33 dB.)
     const sr = 96000;
     let seed = 5;
     const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
@@ -390,15 +398,15 @@ describe("timeStretch coarse-search cost — US71", () => {
     const mid = (a) => a.subarray(GRAIN_SIZE * 2, a.length - GRAIN_SIZE * 2);
     const rmsDb = (a) => 10 * Math.log10(a.reduce((e, v) => e + v * v, 0) / a.length);
     const band = (a) => bandPowerDb(a, 25500, 26500, sr);
-    const noise1 = mid(stretchChannel(noise, 1, 1, GRAIN_SIZE, sr));
+    const noise1 = mid(stretchChannel(noise, 1, 1, undefined, sr));
     const shape1 = diffRmsDb(noise1) - rmsDb(noise1);
     for (const rate of [0.92, 1.04, 1.1]) {
-      const out = mid(stretchChannel(noise, rate, 1, GRAIN_SIZE, sr));
+      const out = mid(stretchChannel(noise, rate, 1, undefined, sr));
       const tilt = diffRmsDb(out) - rmsDb(out) - shape1;
       const floor = rmsDb(out) - rmsDb(noise1);
       expect(Math.abs(tilt), `noise tilt @ ${rate}`).toBeLessThan(0.2);
-      expect(Math.abs(floor), `noise broadband floor @ ${rate}`).toBeLessThan(0.75);
-      const p = stretchChannel(partial, rate, 1, GRAIN_SIZE, sr);
+      expect(Math.abs(floor), `noise broadband floor @ ${rate}`).toBeLessThan(0.3);
+      const p = stretchChannel(partial, rate, 1, undefined, sr);
       expect(Math.abs(band(mid(p)) - band(mid(partial))), `26 kHz @ ${rate}`).toBeLessThan(0.5);
     }
   });
@@ -414,5 +422,168 @@ describe("stretch worklet source — US71", () => {
     // Danger-zone rule: no static worklet paths anywhere — this file is
     // designed for ?raw + Blob-URL registration like the looper worklet.
     expect(src).not.toMatch(/import /);
+  });
+});
+
+describe("timeStretch rate-scaled grain + edge-free fine pass — US71", () => {
+  // Review pass 8. The grain was a fixed 2048 samples while the radius and
+  // the decimation scaled with the rate: 21 ms at 96 kHz, with the radius
+  // spanning 2.3 hops instead of ~1.1, so grains re-read transients.
+  it("@us US71: defaultGrainSize is 2048 at 22.05 / 44.1 / 48 kHz, 4096 at 88.2 / 96 kHz, 8192 at 192 kHz — and stretchChannel uses it when grainSize is omitted", () => {
+    for (const [sr, g] of [[22050, 2048], [44100, 2048], [48000, 2048], [88200, 4096], [96000, 4096], [192000, 8192]]) {
+      expect(defaultGrainSize(sr), `@ ${sr}`).toBe(g);
+    }
+    expect(defaultGrainSize()).toBe(GRAIN_SIZE);
+    // Omitted vs explicit default grain: bit-identical at 44.1 and 96 kHz.
+    let seed = 21;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+    for (const sr of [44100, 96000]) {
+      const src = new Float32Array(sr).map(() => rnd());
+      expect(stretchChannel(src, 1.04, 1, undefined, sr)).toEqual(stretchChannel(src, 1.04, 1, defaultGrainSize(sr), sr));
+    }
+  });
+
+  it("@us US71: short kicks are not doubled at 96 kHz — ≤ 3 per 100 at 120–174 BPM, rates 0.92–1.08 (the fixed 2048 grain doubled 39 of 556)", () => {
+    // Measured: 9 of 556 (1.6 per 100) with the rate-scaled grain.
+    const sr = 96000;
+    let total = 0;
+    let doubled = 0;
+    for (const bpm of [120, 126, 140, 174]) {
+      const x = new Float32Array(sr * 8);
+      for (let i = 0; i < x.length; i++) {
+        x[i] = 0.2 * Math.sin((2 * Math.PI * 110.3 * i) / sr) + 0.15 * Math.sin((2 * Math.PI * 220.9 * i) / sr);
+      }
+      const per = Math.round((sr * 60) / bpm / 2);
+      const marks = [];
+      for (let t = per; t < x.length - per; t += per) {
+        marks.push(t);
+        for (let j = 0; j < 48; j++) x[t + j] += 0.9;
+      }
+      for (const rate of [0.92, 0.96, 1.04, 1.08]) {
+        const y = stretchChannel(x, rate, 1, undefined, sr);
+        for (const m of marks) {
+          const e = Math.round(m / rate);
+          if (e < sr * 0.3 || e > y.length - sr * 0.1) continue;
+          total++;
+          let clusters = 0;
+          let last = -Infinity;
+          for (let i = e - 2880; i < e + 2880; i++) {
+            if (y[i] > 0.45) {
+              if (i - last > 192) clusters++;
+              last = i;
+            }
+          }
+          if (clusters > 1) doubled++;
+        }
+      }
+    }
+    expect(total).toBeGreaterThan(500);
+    expect((100 * doubled) / total, `${doubled} of ${total} kicks doubled`).toBeLessThanOrEqual(3);
+  });
+
+  it("@us US71: exactly periodic tones stay phase-coherent — 3 kHz @ 96 kHz and 1 kHz / 3 kHz @ 48 kHz at rates 0.94 / 1.04: residual after a one-sine fit < −40 dB", () => {
+    // Coarse scores tie on an exactly periodic tone; the first (lag −search)
+    // wins, and a fine pass clamped to the region could not reach the true
+    // peak just outside it. Clamped: residual ≈ 0 dB (3 kHz @ 96 kHz), −13 /
+    // −1 dB (1 / 3 kHz @ 48 kHz, rate 0.94). Padded region: ≈ −149 dB.
+    for (const [sr, f] of [[96000, 3000], [48000, 1000], [48000, 3000]]) {
+      for (const rate of [0.94, 1.04]) {
+        const x = new Float32Array(sr * 3);
+        for (let i = 0; i < x.length; i++) x[i] = 0.5 * Math.sin((2 * Math.PI * f * i) / sr);
+        const y = stretchChannel(x, rate, 1, undefined, sr).subarray(Math.round(sr * 0.5), Math.round(sr * 2.5));
+        let cc = 0;
+        let ss = 0;
+        let sc = 0;
+        let yc = 0;
+        let ys = 0;
+        let yy = 0;
+        for (let i = 0; i < y.length; i++) {
+          const a = (2 * Math.PI * f * i) / sr;
+          const c = Math.cos(a);
+          const s = Math.sin(a);
+          cc += c * c;
+          ss += s * s;
+          sc += s * c;
+          yc += y[i] * c;
+          ys += y[i] * s;
+          yy += y[i] * y[i];
+        }
+        const det = cc * ss - sc * sc;
+        const A = (yc * ss - ys * sc) / det;
+        const B = (ys * cc - yc * sc) / det;
+        let r2 = 0;
+        for (let i = 0; i < y.length; i++) {
+          const a = (2 * Math.PI * f * i) / sr;
+          r2 += (y[i] - A * Math.cos(a) - B * Math.sin(a)) ** 2;
+        }
+        expect(10 * Math.log10(r2 / yy), `${f} Hz @ ${sr}, rate ${rate}`).toBeLessThan(-40);
+      }
+    }
+  });
+});
+
+// Coarse-pass anti-aliasing fixture (96 kHz, DECIM 8, CORR 3072, radius
+// 1200): bass (50–130 Hz + its 2.03× partial) under strong 10–20 kHz
+// content, the reference cut from the same material at a random shift plus
+// independent noise. The DECIM-sample box sum nulls ~12 kHz and keeps that
+// band out of the decimated coarse pass; a box over only 4 of the 8 samples
+// lets it alias into the coarse scores, which then pick lags the ±7 fine
+// pass cannot recover. Returns how often `lagOf(ref, region)` lands on the
+// exhaustive full-resolution optimum (the fine pass's own score).
+function coarseOptimumHits(lagOf, trials = 100) {
+  const sr = 96000;
+  const corr = 3072;
+  const search = 1200;
+  const pad = 8;
+  let seed = 1;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+  const n = corr + 2 * (search + pad) + 4000;
+  let hits = 0;
+  for (let t = 0; t < trials; t++) {
+    const s = new Float32Array(n);
+    for (let k = 0; k < 40; k++) {
+      const f = 10000 + 10000 * (rnd() + 0.5);
+      const ph = rnd() * 7;
+      const a = rnd() + 0.5;
+      for (let i = 0; i < n; i++) s[i] += (a * Math.sin((2 * Math.PI * f * i) / sr + ph)) / 6;
+    }
+    const f0 = 50 + 80 * (rnd() + 0.5);
+    for (let i = 0; i < n; i++) {
+      s[i] = s[i] * 2 + 0.6 * Math.sin((2 * Math.PI * f0 * i) / sr) + 0.3 * Math.sin((2 * Math.PI * 2.03 * f0 * i) / sr);
+    }
+    const region = s.subarray(2000, 2000 + corr + 2 * (search + pad));
+    const shift = Math.round(rnd() * 2 * search);
+    const at = 2000 + pad + search + shift;
+    const ref = Float32Array.from(s.subarray(at, at + corr), (v) => v + 0.3 * rnd());
+    const full = (off) => {
+      let c = 0;
+      let e = 0;
+      for (let j = 0; j < corr; j++) {
+        const v = region[pad + off + j];
+        c += ref[j] * v;
+        e += v * v;
+      }
+      return c / Math.sqrt(e + 1e-12);
+    };
+    let best = -Infinity;
+    let bestOff = 0;
+    for (let off = -(pad - 1); off <= 2 * search + pad - 1; off++) {
+      const sc = full(off);
+      if (sc > best) {
+        best = sc;
+        bestOff = off;
+      }
+    }
+    if (lagOf(ref, region) + search === bestOff) hits++;
+  }
+  return hits;
+}
+
+describe("timeStretch coarse-pass anti-aliasing at 96 kHz — US71", () => {
+  it("@us US71: the decimated coarse pass sums all DECIM samples per box — findBestLag(decim 8) lands on the exhaustive optimum for ≥ 80 of 100 bass + 10–20 kHz fixtures (a 4-of-8 box: 60)", () => {
+    // Measured: 88 / 100 with the full 8-sample box, 60 / 100 with a box
+    // over 4 of the 8 samples.
+    const hits = coarseOptimumHits((ref, region) => findBestLag(ref, region, 3072, 1200, undefined, 8));
+    expect(hits).toBeGreaterThanOrEqual(80);
   });
 });

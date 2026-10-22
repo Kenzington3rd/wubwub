@@ -6,9 +6,11 @@
 // binding constraint (see BACKLOG W3.1).
 //
 // Model:
-//   - Output is synthesized in grains of GRAIN samples at 75% overlap
-//     (hop OUT = GRAIN/4), each windowed by a periodic Hann window scaled by
-//     OLA_GAIN so the four overlapping windows sum to exactly 1.
+//   - Output is synthesized in grains of defaultGrainSize(sampleRate)
+//     samples (2048 at 44.1 / 48 kHz, 4096 at 88.2 / 96 kHz — ~45 ms at
+//     every rate) at 75% overlap (hop OUT = grain/4), each windowed by a
+//     periodic Hann window scaled by OLA_GAIN so the four overlapping
+//     windows sum to exactly 1.
 //   - Grain N is NOMINALLY read from the input at N × hopOut × rate — so
 //     rate > 1 plays faster (grains sample the input further apart) and
 //     rate < 1 slower, while each grain itself plays at its natural pitch.
@@ -30,7 +32,7 @@
 //     resampler at pitchRatio (2^(semitones/12)); rate and pitchRatio are
 //     fully independent knobs (keylock = rate ≠ 1, pitchRatio = 1).
 
-export const GRAIN_SIZE = 2048; // 46 ms @ 44.1 kHz
+export const GRAIN_SIZE = 2048; // 46 ms @ 44.1 kHz — the 44.1 / 48 kHz grain
 export const HOP_OUT = GRAIN_SIZE / 4; // 75% overlap
 // Four periodic-Hann windows at hop N/4 sum to 2 → scale each by ½.
 export const OLA_GAIN = (2 * HOP_OUT) / GRAIN_SIZE;
@@ -42,13 +44,13 @@ export const OLA_GAIN = (2 * HOP_OUT) / GRAIN_SIZE;
 // rate: ~57 Hz at 44.1 kHz, ~62 Hz at 48 kHz, ~125 Hz at 96 kHz). So the
 // radius is defined in TIME — half the period of 40 Hz (12.5 ms) — giving
 // 552 / 600 / 1200 samples at 44.1 / 48 / 96 kHz: keylocked down to ~40 Hz
-// at any rate. SEARCH (384) is the floor (low-rate contexts) and the old
-// fixed value. Multiple of coarseDecimation() so the coarse pass lands on
-// lag 0.
-export const SEARCH = 384;
+// at any rate. SEARCH_FLOOR (384, the old fixed value) is the floor for
+// low-rate contexts; searchRadius(sr) is the actual radius (the worklet's
+// SEARCH). Multiple of coarseDecimation() so the coarse pass lands on lag 0.
+export const SEARCH_FLOOR = 384;
 export function searchRadius(sampleRate = 44100) {
   const d = coarseDecimation(sampleRate);
-  return Math.max(SEARCH, d * Math.ceil(sampleRate / 80 / d));
+  return Math.max(SEARCH_FLOOR, d * Math.ceil(sampleRate / 80 / d));
 }
 // Correlate the candidate grain's first half against the continuation.
 export const CORR_LEN = GRAIN_SIZE - HOP_OUT;
@@ -68,6 +70,14 @@ export const DECIM = 4;
 // CORR_LEN (1536) and the 384 floor.
 export function coarseDecimation(sampleRate = 44100) {
   return DECIM * 2 ** Math.max(0, Math.round(Math.log2(sampleRate / 44100)));
+}
+// Grain size at a context rate: scales with the decimation (2048 at 44.1 /
+// 48 kHz, 4096 at 88.2 / 96 kHz, 8192 at 192 kHz) so a grain spans ~43–46 ms
+// at every rate. A fixed 2048 was 21 ms at 96 kHz while the radius (fixed in
+// time) spanned 2.3 hops instead of ~1.1, so grains re-read transients and
+// short kicks played twice (39 of 556 at 96 kHz; now 9 of 556).
+export function defaultGrainSize(sampleRate = 44100) {
+  return (GRAIN_SIZE * coarseDecimation(sampleRate)) / DECIM;
 }
 // Coarse candidates evaluated per grain search at a context rate.
 export function coarseCandidates(sampleRate = 44100) {
@@ -105,15 +115,20 @@ export function readGrain(input, pos, count, pitchRatio, out) {
 
 // WSOLA alignment search. `ref` holds the natural continuation of the
 // previous grain (corrLen samples); `region` holds the candidate material
-// starting `search` samples BEFORE the nominal grain start (corrLen + 2 ×
-// search samples). Returns the lag in [−search, search] (output samples)
-// that maximizes ref·cand / ‖cand‖. Ties — including all-silence — keep lag
+// starting `search + decim` samples BEFORE the nominal grain start (corrLen +
+// 2 × (search + decim) samples — `decim` frames of padding on each side).
+// Returns the lag in [−(search + decim − 1), search + decim − 1] (output
+// samples) that maximizes ref·cand / ‖cand‖. The padding lets the fine pass
+// refine past a coarse winner at ±search: on an exactly periodic tone the
+// coarse scores tie, the first (−search) wins, and the true peak can sit
+// just outside — clamped there, every grain of a 3 kHz sine at 96 kHz
+// (rate 0.94) came out 22.5–33.75° off. Ties — including all-silence — keep lag
 // 0, so silence and perfectly-continuous material never get nudged.
 // `scratch` (optional) avoids per-call allocation: { refD, regD, scores };
 // when given, its `coarse` field counts the coarse candidates evaluated.
 // `decim` is the coarse decimation (coarseDecimation(); corrLen and search
 // must be multiples of it).
-export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH, scratch, decim = DECIM) {
+export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH_FLOOR, scratch, decim = DECIM) {
   const nRefD = corrLen / decim;
   const nRegD = (corrLen + 2 * search) / decim;
   const refD = scratch?.refD || new Float32Array(nRefD);
@@ -127,7 +142,7 @@ export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH, sc
   for (let j = 0; j < nRegD; j++) {
     const k = j * decim;
     let v = 0;
-    for (let i = 0; i < decim; i++) v += region[k + i];
+    for (let i = 0; i < decim; i++) v += region[decim + k + i];
     regD[j] = v;
   }
   const EPS = 1e-12;
@@ -166,7 +181,7 @@ export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH, sc
     let c = 0;
     let e = 0;
     for (let j = 0; j < corrLen; j++) {
-      const v = region[off + j];
+      const v = region[decim + off + j];
       c += ref[j] * v;
       e += v * v;
     }
@@ -174,8 +189,8 @@ export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH, sc
   };
   let bestOff = search;
   let best = fullScore(search);
-  const lo = Math.max(0, bestD * decim - (decim - 1));
-  const hi = Math.min(2 * search, bestD * decim + (decim - 1));
+  const lo = bestD * decim - (decim - 1);
+  const hi = bestD * decim + (decim - 1);
   for (let off = lo; off <= hi; off++) {
     if (off === search) continue;
     const s = fullScore(off);
@@ -190,28 +205,31 @@ export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH, sc
 // Offline stretch of a whole channel. Returns a new Float32Array of length
 // ≈ input.length / rate. `rate` > 0 (1 = original tempo); `pitchRatio` > 0
 // (1 = original pitch). `sampleRate` is the rate of `input` (and of the
-// output — the core never resamples) and only sets the alignment search
-// radius (searchRadius) and coarse decimation (coarseDecimation); it
-// defaults to 44.1 kHz so existing callers keep working. The 75%
+// output — the core never resamples) and sets the alignment search radius
+// (searchRadius), coarse decimation (coarseDecimation) and, when
+// `grainSize` is omitted, the grain (defaultGrainSize); it defaults to 44.1
+// kHz — same API (default radius is now 552 at 44.1 kHz). The 75%
 // periodic-Hann overlap-add (× OLA_GAIN) sums to exactly unity gain, so no
 // makeup normalization is needed. `stats` (optional) receives
 // { searches, coarse }: alignment searches run and coarse candidates
 // evaluated in total (a cost probe for tests).
-export function stretchChannel(input, rate, pitchRatio = 1, grainSize = GRAIN_SIZE, sampleRate = 44100, stats) {
+export function stretchChannel(input, rate, pitchRatio = 1, grainSize, sampleRate = 44100, stats) {
+  grainSize ??= defaultGrainSize(sampleRate);
   const hopOut = grainSize / 4;
   const gain = (2 * hopOut) / grainSize;
   const corrLen = grainSize - hopOut;
   const decim = coarseDecimation(sampleRate);
-  // Grains smaller than the default scale the radius down in proportion
-  // (multiple of decim so the coarse pass lands on the nominal position).
+  // Grains smaller than the rate's default scale the radius down in
+  // proportion (multiple of decim so the coarse pass lands on the nominal
+  // position).
   const search =
-    Math.floor((searchRadius(sampleRate) * Math.min(1, grainSize / GRAIN_SIZE)) / decim) * decim;
+    Math.floor((searchRadius(sampleRate) * Math.min(1, grainSize / defaultGrainSize(sampleRate))) / decim) * decim;
   const outLength = Math.max(grainSize, Math.round(input.length / rate));
   const out = new Float32Array(outLength);
   const win = hannWindow(grainSize);
   const grain = new Float32Array(grainSize);
   const ref = new Float32Array(corrLen);
-  const region = new Float32Array(corrLen + 2 * search);
+  const region = new Float32Array(corrLen + 2 * (search + decim));
   const scratch = {
     refD: new Float32Array(corrLen / decim),
     regD: new Float32Array((corrLen + 2 * search) / decim),
@@ -239,7 +257,7 @@ export function stretchChannel(input, rate, pitchRatio = 1, grainSize = GRAIN_SI
             ? natural + Math.round(nominal - natural)
             : natural + Math.round((nominal - natural) / pitchRatio) * pitchRatio;
         readGrain(input, natural, corrLen, pitchRatio, ref);
-        readGrain(input, base - search * pitchRatio, region.length, pitchRatio, region);
+        readGrain(input, base - (search + decim) * pitchRatio, region.length, pitchRatio, region);
         actual = base + findBestLag(ref, region, corrLen, search, scratch, decim) * pitchRatio;
         searches++;
       } else {

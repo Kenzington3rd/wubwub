@@ -1146,18 +1146,20 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
     // passes and kills the same mutants with silence). It is quiet (±0.01) because the alignment is a NORMALIZED cross-correlation
     // — level-invariant — while the 1 kHz tone stays measurable above it.
     //
-    // The look-ahead `ahead = 2 × (GRAIN × max(1, rate, pitch) + SEARCH ×
-    // pitch)` is pinned by the configurations: at the first quantum whose
+    // The look-ahead `ahead = 2 × (GRAIN × max(1, rate, pitch) + (SEARCH +
+    // DECIM) × pitch)` has its GRAIN × max(…) term pinned by the
+    // configurations (all in a 44.1 kHz context, GRAIN 2048): at the first quantum whose
     // newest grain reads past the seam, the audible playhead is 1712 / 1909
     // source frames short of it at rates 1 / 1.5 (silence), 2207 at rate 2
     // with noise (so a flat `ahead = GRAIN` = 2048 fails), and 5505 for a
     // 96 kHz track with noise at deck speed 2 in a 44.1 kHz context (rate
     // 4.35, pitch 2.18 — so dropping the `max`, i.e. a flat 2 × GRAIN = 4096,
     // fails there). The noise seeds are ones whose crossing grain carries
-    // enough tone to hear when the re-anchor is skipped; across seeds and
-    // 44.1 / 48 / 96 kHz contexts the gap reaches up to 0.998 × GRAIN ×
-    // max(1, rate, pitch) (0.84× of the bound with the SEARCH term); the 2×
-    // factor and the SEARCH term are safety margin this test does not pin.
+    // enough tone to hear when the re-anchor is skipped; across seeds, rates
+    // 1–2 and 44.1 / 48 / 96 kHz contexts the gap reaches up to 1.19 × GRAIN
+    // × max(1, rate, pitch) (48 kHz, rate 1.25; 0.48× of `ahead`); the 2×
+    // factor and the (SEARCH + DECIM) term are safety margin this test does
+    // not pin (not falsifiable at the current margin — see disableLoop).
     for (const [srcRate, ctxRate, rate, noiseSeed] of [
       [SAMPLE_RATE, SAMPLE_RATE, 1, null],
       [SAMPLE_RATE, SAMPLE_RATE, 1.5, null],
@@ -1631,5 +1633,308 @@ describe("stretch worklet — coarse-search cost — US73", () => {
       expect(perGrain, `coarse candidates / grain @ ${sr}`).toBe(expected);
       expect(perGrain, `coarse candidates / grain @ ${sr}`).toBeLessThanOrEqual(MAX_COARSE);
     }
+  });
+});
+
+// ── Review pass 8: grain scaled with the context rate, fine pass past the
+// coarse edge, and worklet quality at 96 kHz ──
+// GRAIN / HOP were a fixed 2048 / 512 while SEARCH and DECIM scaled with the
+// rate: at 96 kHz the grain was 21 ms and the radius 2.3 hops, so grains
+// re-read transients (5–8 of ~100 short kicks doubled vs 0–3 at 44.1 / 48
+// kHz). They now scale in the same steps as DECIM (2048 / 4096 / 8192).
+function kickTrack(sr, bpm, seconds) {
+  const x = new Float32Array(sr * seconds);
+  for (let i = 0; i < x.length; i++) {
+    x[i] = 0.2 * Math.sin((2 * Math.PI * 110.3 * i) / sr) + 0.15 * Math.sin((2 * Math.PI * 220.9 * i) / sr);
+  }
+  const per = Math.round((sr * 60) / bpm / 2);
+  const marks = [];
+  for (let t = per; t < x.length - per; t += per) {
+    marks.push(t);
+    for (let j = 0; j < Math.round(sr * 0.0005); j++) x[t + j] += 0.9;
+  }
+  return { x, marks };
+}
+// Per-grain phase error (degrees) of the alignment on a pure sine: each
+// grain's start should sit a whole number of periods from its natural
+// continuation (prevActual + HOP × pitch).
+function sinePhaseErrors(sr, f, rate) {
+  const x = new Float32Array(sr * 3);
+  for (let i = 0; i < x.length; i++) x[i] = 0.5 * Math.sin((2 * Math.PI * f * i) / sr);
+  const { Processor: P } = loadProcessor({ sampleRate: sr });
+  const p = new P();
+  const hop = p.window.length / 4;
+  const errs = [];
+  const synth = p.synthesizeBlock.bind(p);
+  p.synthesizeBlock = (r, pi) => {
+    const prev = p.prevActual;
+    synth(r, pi);
+    if (prev === null) return;
+    const per = sr / f;
+    const ph = (((p.prevActual - (prev + hop * pi)) % per) + per) % per;
+    errs.push((Math.min(ph, per - ph) / per) * 360);
+  };
+  send(p, { type: "load", channels: [x], sampleRate: sr });
+  send(p, { type: "play", offset: 0.5 });
+  render(p, sr * 0.5, { rate, ctxRate: sr });
+  errs.length = 0;
+  const y = render(p, sr, { rate, ctxRate: sr });
+  return { errs, y };
+}
+// Energy left in `y` after a least-squares fit of one sine at f, in dB re y.
+function sineResidualDb(y, f, sr) {
+  let cc = 0;
+  let ss = 0;
+  let sc = 0;
+  let yc = 0;
+  let ys = 0;
+  let yy = 0;
+  for (let i = 0; i < y.length; i++) {
+    const a = (2 * Math.PI * f * i) / sr;
+    const c = Math.cos(a);
+    const s = Math.sin(a);
+    cc += c * c;
+    ss += s * s;
+    sc += s * c;
+    yc += y[i] * c;
+    ys += y[i] * s;
+    yy += y[i] * y[i];
+  }
+  const det = cc * ss - sc * sc;
+  const A = (yc * ss - ys * sc) / det;
+  const B = (ys * cc - yc * sc) / det;
+  let r2 = 0;
+  for (let i = 0; i < y.length; i++) {
+    const a = (2 * Math.PI * f * i) / sr;
+    r2 += (y[i] - A * Math.cos(a) - B * Math.sin(a)) ** 2;
+  }
+  return 10 * Math.log10(r2 / yy);
+}
+
+describe("stretch worklet — review pass 8 — US73", () => {
+  it("@us US73: grain / hop scale with the context rate — 2048 / 512 at 44.1 / 48 kHz, 4096 / 1024 at 88.2 / 96 kHz, 8192 / 2048 at 192 kHz", () => {
+    for (const [sr, grain] of [[22050, 2048], [44100, 2048], [48000, 2048], [88200, 4096], [96000, 4096], [192000, 8192]]) {
+      const { Processor: P } = loadProcessor({ sampleRate: sr });
+      const p = new P();
+      expect(p.window.length, `grain @ ${sr}`).toBe(grain);
+      expect(p.wsum.length, `wsum @ ${sr}`).toBe(grain);
+      expect(p.norm.length, `norm (hop) @ ${sr}`).toBe(grain / 4);
+      expect(p.ref.length, `CORR @ ${sr}`).toBe(grain - grain / 4);
+      // The pending accumulator (one grain per channel) follows it too.
+      send(p, { type: "load", channels: [tone(sr, 440, sr)], sampleRate: sr });
+      send(p, { type: "play", offset: 0 });
+      render(p, QUANTUM, { ctxRate: sr });
+      expect(p.pending[0].length, `pending @ ${sr}`).toBe(grain);
+    }
+  });
+
+  it("@us US73: the 384-sample search floor holds at a 22.05 kHz context (half of 40 Hz would be 276) — 193 coarse candidates per grain", () => {
+    const sr = 22050;
+    let seed = 17;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+    const src = new Float32Array(sr * 2).map(() => rnd());
+    const { Processor: P } = loadProcessor({ sampleRate: sr });
+    const p = new P();
+    send(p, { type: "load", channels: [src], sampleRate: sr });
+    send(p, { type: "play", offset: 0.1 });
+    render(p, sr * 0.5, { rate: 1.04, ctxRate: sr });
+    expect(p.searches).toBeGreaterThan(10);
+    expect(p.coarseEvals / p.searches).toBe((2 * 384) / 4 + 1);
+  });
+
+  it("@us US73: short kicks are not doubled at 96 kHz — ≤ 3 per 100 at 126 / 174 BPM, rates 0.92 / 1.08", () => {
+    // Measured: 2 of 103 with the rate-scaled 4096 grain, 9 of 103 with a
+    // fixed 2048. Over 120–174 BPM × rates 0.92–1.08 (416 kicks): 6 vs 29
+    // at 96 kHz; 8 / 5 at 44.1 / 48 kHz (unchanged grain there).
+    const sr = 96000;
+    let total = 0;
+    let doubled = 0;
+    for (const bpm of [126, 174]) {
+      const { x, marks } = kickTrack(sr, bpm, 6);
+      for (const rate of [0.92, 1.08]) {
+        const { Processor: P } = loadProcessor({ sampleRate: sr });
+        const p = new P();
+        send(p, { type: "load", channels: [x], sampleRate: sr });
+        send(p, { type: "play", offset: 0 });
+        const y = render(p, sr * 5.5, { rate, ctxRate: sr });
+        const win = Math.round(sr * 0.03);
+        const gap = Math.round(sr * 0.002);
+        for (const m of marks) {
+          const e = Math.round(m / rate);
+          if (e < sr * 0.3 || e + win > y.length) continue;
+          total++;
+          let clusters = 0;
+          let last = -Infinity;
+          for (let i = e - win; i < e + win; i++) {
+            if (y[i] > 0.45) {
+              if (i - last > gap) clusters++;
+              last = i;
+            }
+          }
+          if (clusters > 1) doubled++;
+        }
+      }
+    }
+    expect(total).toBeGreaterThanOrEqual(100);
+    expect((100 * doubled) / total, `${doubled} of ${total} kicks doubled`).toBeLessThanOrEqual(3);
+  });
+
+  it("@us US73: high frequencies survive at a 96 kHz context — white-noise tilt within 0.2 dB of rate 1, floor within 0.45 dB, a 12 kHz partial within 0.5 dB at rates 0.92 / 1.04 / 1.1", () => {
+    // Port of the core's 96 kHz HF test to the streaming path. Measured:
+    // |tilt| ≤ 0.005 dB, floor −0.13…−0.33 dB, 12 kHz −0.07…−0.09 dB. The
+    // floor bound is 0.45, not the core's 0.3: the streamed segment's WSOLA
+    // level loss reaches 0.33 dB at rate 1.1 (the 44.1 kHz worklet measures
+    // up to 0.44 there too — a property of uncorrelated noise, not of HF).
+    const sr = 96000;
+    let seed = 5;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+    const noise = new Float32Array(sr * 3).map(() => rnd());
+    const partial = new Float32Array(sr * 3);
+    for (let i = 0; i < partial.length; i++) {
+      // Off-grid frequencies (no common period with the 96 kHz sample grid or
+      // the play offset): a commensurate 12 kHz + 150 Hz pair repeats every 640
+      // samples, aligns exactly and makes the band check trivially 0 dB.
+      partial[i] = 0.3 * Math.sin((2 * Math.PI * 12007.3 * i) / sr) + 0.3 * Math.sin((2 * Math.PI * 150.7 * i) / sr);
+    }
+    const run = (src, rate) => {
+      const { Processor: P } = loadProcessor({ sampleRate: sr });
+      const p = new P();
+      send(p, { type: "load", channels: [src], sampleRate: sr });
+      send(p, { type: "play", offset: 0.2 });
+      render(p, sr * 0.3, { rate, ctxRate: sr });
+      return render(p, sr * 2, { rate, ctxRate: sr });
+    };
+    const rmsDb = (a) => 10 * Math.log10(a.reduce((e, v) => e + v * v, 0) / a.length);
+    const diffRmsDb = (a) => {
+      let e = 0;
+      for (let i = 1; i < a.length; i++) e += (a[i] - a[i - 1]) ** 2;
+      return 10 * Math.log10(e / (a.length - 1));
+    };
+    // Mean power in the 11.5–12.5 kHz band (Hann frames, Goertzel per bin).
+    const band = (a) => {
+      const N = 4096;
+      const k0 = Math.ceil((11500 * N) / sr);
+      const k1 = Math.floor((12500 * N) / sr);
+      let total = 0;
+      let frames = 0;
+      for (let s = 0; s + N <= a.length; s += N, frames++) {
+        for (let k = k0; k <= k1; k++) {
+          const c = 2 * Math.cos((2 * Math.PI * k) / N);
+          let s1 = 0;
+          let s2 = 0;
+          for (let i = 0; i < N; i++) {
+            const v = a[s + i] * 0.5 * (1 - Math.cos((2 * Math.PI * i) / N)) + c * s1 - s2;
+            s2 = s1;
+            s1 = v;
+          }
+          total += s1 * s1 + s2 * s2 - c * s1 * s2;
+        }
+      }
+      return 10 * Math.log10(total / frames);
+    };
+    const n1 = run(noise, 1);
+    const shape1 = diffRmsDb(n1) - rmsDb(n1);
+    const p1 = band(run(partial, 1));
+    for (const rate of [0.92, 1.04, 1.1]) {
+      const out = run(noise, rate);
+      const tilt = diffRmsDb(out) - rmsDb(out) - shape1;
+      const floor = rmsDb(out) - rmsDb(n1);
+      const hf = band(run(partial, rate)) - p1;
+      expect(Math.abs(tilt), `noise tilt @ ${rate}`).toBeLessThan(0.2);
+      expect(Math.abs(floor), `noise floor @ ${rate}`).toBeLessThan(0.45);
+      expect(Math.abs(hf), `12 kHz @ ${rate}`).toBeLessThan(0.5);
+    }
+  });
+
+  it("@us US73: exactly periodic tones align in phase every grain — 3 kHz @ 96 kHz and 1 kHz / 3 kHz @ 48 kHz, rate 0.94: per-grain phase error < 2°, residual < −40 dB", () => {
+    // The coarse scores of an exactly periodic tone tie; the first (lag
+    // −SEARCH) wins and the fine pass, clamped at the region edge, could not
+    // reach a peak just outside it. Clamped: 3 kHz @ 96 kHz had every grain
+    // 22.5–33.75° off (residual ≈ 0 dB); at 48 kHz 1 kHz / 3 kHz had 4 / 52
+    // of 94 grains off by up to 15° / 45° (residual −11 / −1 dB). Padded
+    // region: 0° and ≈ −149 dB everywhere. (A 1 kHz tone at 44.1 kHz has a
+    // non-integer period, so integer lags leave up to ±4.1° — not this bug.)
+    for (const [sr, f] of [[96000, 3000], [48000, 1000], [48000, 3000]]) {
+      const tag = `${f} Hz @ ${sr}`;
+      const { errs, y } = sinePhaseErrors(sr, f, 0.94);
+      expect(errs.length, tag).toBeGreaterThan(40);
+      expect(Math.max(...errs), `${tag}: worst grain phase error (deg)`).toBeLessThan(2);
+      expect(sineResidualDb(y, f, sr), `${tag}: residual`).toBeLessThan(-40);
+    }
+  });
+});
+
+// Coarse-pass anti-aliasing fixture (96 kHz, DECIM 8, CORR 3072, radius
+// 1200): bass (50–130 Hz + its 2.03× partial) under strong 10–20 kHz
+// content, the reference cut from the same material at a random shift plus
+// independent noise. The DECIM-sample box sum nulls ~12 kHz and keeps that
+// band out of the decimated coarse pass; a box over only 4 of the 8 samples
+// lets it alias into the coarse scores, which then pick lags the ±7 fine
+// pass cannot recover. Returns how often `lagOf(ref, region)` lands on the
+// exhaustive full-resolution optimum (the fine pass's own score).
+function coarseOptimumHits(lagOf, trials = 100) {
+  const sr = 96000;
+  const corr = 3072;
+  const search = 1200;
+  const pad = 8;
+  let seed = 1;
+  const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+  const n = corr + 2 * (search + pad) + 4000;
+  let hits = 0;
+  for (let t = 0; t < trials; t++) {
+    const s = new Float32Array(n);
+    for (let k = 0; k < 40; k++) {
+      const f = 10000 + 10000 * (rnd() + 0.5);
+      const ph = rnd() * 7;
+      const a = rnd() + 0.5;
+      for (let i = 0; i < n; i++) s[i] += (a * Math.sin((2 * Math.PI * f * i) / sr + ph)) / 6;
+    }
+    const f0 = 50 + 80 * (rnd() + 0.5);
+    for (let i = 0; i < n; i++) {
+      s[i] = s[i] * 2 + 0.6 * Math.sin((2 * Math.PI * f0 * i) / sr) + 0.3 * Math.sin((2 * Math.PI * 2.03 * f0 * i) / sr);
+    }
+    const region = s.subarray(2000, 2000 + corr + 2 * (search + pad));
+    const shift = Math.round(rnd() * 2 * search);
+    const at = 2000 + pad + search + shift;
+    const ref = Float32Array.from(s.subarray(at, at + corr), (v) => v + 0.3 * rnd());
+    const full = (off) => {
+      let c = 0;
+      let e = 0;
+      for (let j = 0; j < corr; j++) {
+        const v = region[pad + off + j];
+        c += ref[j] * v;
+        e += v * v;
+      }
+      return c / Math.sqrt(e + 1e-12);
+    };
+    let best = -Infinity;
+    let bestOff = 0;
+    for (let off = -(pad - 1); off <= 2 * search + pad - 1; off++) {
+      const sc = full(off);
+      if (sc > best) {
+        best = sc;
+        bestOff = off;
+      }
+    }
+    if (lagOf(ref, region) + search === bestOff) hits++;
+  }
+  return hits;
+}
+
+describe("stretch worklet — coarse-pass anti-aliasing at 96 kHz — US73", () => {
+  it("@us US73: the decimated coarse pass sums all DECIM samples per box — bestLag at a 96 kHz context lands on the exhaustive optimum for ≥ 80 of 100 bass + 10–20 kHz fixtures (a 4-of-8 box: 60)", () => {
+    // Same fixture as the core's test, driven through the worklet's own
+    // bestLag (its ref / region scratch at 96 kHz: CORR 3072, SEARCH 1200,
+    // DECIM 8). Measured: 88 / 100; a box over 4 of the 8 samples: 60.
+    const { Processor: P } = loadProcessor({ sampleRate: 96000 });
+    const p = new P();
+    expect(p.ref.length).toBe(3072);
+    expect(p.region.length).toBe(3072 + 2 * (1200 + 8));
+    const hits = coarseOptimumHits((ref, region) => {
+      p.ref.set(ref);
+      p.region.set(region);
+      return p.bestLag();
+    });
+    expect(hits).toBeGreaterThanOrEqual(80);
   });
 });
