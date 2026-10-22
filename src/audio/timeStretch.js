@@ -16,7 +16,7 @@
 //     each grain at an arbitrary phase relative to the one it overlaps, so
 //     the overlap comb-filters at the grain rate (measured ~11–16 dB of AM on
 //     a 440 Hz sine, and every transient printed twice ~2.8 ms apart). Before
-//     overlap-adding, the grain's start is nudged within ±SEARCH samples of
+//     overlap-adding, the grain's start is nudged within ±searchRadius() of
 //     its nominal position to the offset whose opening CORR_LEN samples best
 //     match the natural continuation of the previous grain (normalized
 //     cross-correlation, coarse-to-fine). Candidates lie on the natural
@@ -34,14 +34,24 @@ export const GRAIN_SIZE = 2048; // 46 ms @ 44.1 kHz
 export const HOP_OUT = GRAIN_SIZE / 4; // 75% overlap
 // Four periodic-Hann windows at hop N/4 sum to 2 → scale each by ½.
 export const OLA_GAIN = (2 * HOP_OUT) / GRAIN_SIZE;
-// Alignment search radius in output samples (±8.7 ms @ 44.1 kHz). Wide
-// enough to phase-align anything down to ~57 Hz (half a period), narrow
-// enough that the timing jitter it introduces stays below audibility.
+// Alignment search radius. It must reach half a period of the lowest
+// frequency that should stay keylocked: below that, no candidate one period
+// away lies inside ±search, the lag sticks at the search edge every grain and
+// the tone comes out at f0 × rate (a 55 Hz sub at +4% played 68 cents sharp
+// when the radius was a fixed 384 samples, whose cutoff moved with the sample
+// rate: ~57 Hz at 44.1 kHz, ~62 Hz at 48 kHz, ~125 Hz at 96 kHz). So the
+// radius is defined in TIME — half the period of 40 Hz (12.5 ms) — giving
+// 552 / 600 / 1200 samples at 44.1 / 48 / 96 kHz: keylocked down to ~40 Hz
+// at any rate. SEARCH (384) is the floor (low-rate contexts) and the old
+// fixed value. Multiple of DECIM so the coarse pass lands on lag 0.
 export const SEARCH = 384;
+export function searchRadius(sampleRate = 44100) {
+  return Math.max(SEARCH, DECIM * Math.ceil(sampleRate / 80 / DECIM));
+}
 // Correlate the candidate grain's first half against the continuation.
 export const CORR_LEN = GRAIN_SIZE - HOP_OUT;
-// Coarse pass decimation (box-summed blocks). SEARCH and CORR_LEN must be
-// multiples of it.
+// Coarse pass decimation (box-summed blocks). The search radius and CORR_LEN
+// must be multiples of it.
 const DECIM = 4;
 
 // Periodic Hann (denominator n, not n − 1) — the form whose shifted copies
@@ -151,15 +161,19 @@ export function findBestLag(ref, region, corrLen = CORR_LEN, search = SEARCH, sc
 
 // Offline stretch of a whole channel. Returns a new Float32Array of length
 // ≈ input.length / rate. `rate` > 0 (1 = original tempo); `pitchRatio` > 0
-// (1 = original pitch). The 75% periodic-Hann overlap-add (× OLA_GAIN) sums
-// to exactly unity gain, so no makeup normalization is needed.
-export function stretchChannel(input, rate, pitchRatio = 1, grainSize = GRAIN_SIZE) {
+// (1 = original pitch). `sampleRate` is the rate of `input` (and of the
+// output — the core never resamples) and only sets the alignment search
+// radius (searchRadius); it defaults to 44.1 kHz so existing callers keep
+// working. The 75% periodic-Hann overlap-add (× OLA_GAIN) sums to exactly
+// unity gain, so no makeup normalization is needed.
+export function stretchChannel(input, rate, pitchRatio = 1, grainSize = GRAIN_SIZE, sampleRate = 44100) {
   const hopOut = grainSize / 4;
   const gain = (2 * hopOut) / grainSize;
   const corrLen = grainSize - hopOut;
-  // SEARCH is ¾ of the default hop; smaller grains scale it down (multiple
-  // of DECIM so the coarse pass lands on the nominal position).
-  const search = Math.floor(Math.min(SEARCH, (3 * hopOut) / 4) / DECIM) * DECIM;
+  // Grains smaller than the default scale the radius down in proportion
+  // (multiple of DECIM so the coarse pass lands on the nominal position).
+  const search =
+    Math.floor((searchRadius(sampleRate) * Math.min(1, grainSize / GRAIN_SIZE)) / DECIM) * DECIM;
   const outLength = Math.max(grainSize, Math.round(input.length / rate));
   const out = new Float32Array(outLength);
   const win = hannWindow(grainSize);
