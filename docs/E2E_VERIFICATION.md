@@ -245,7 +245,7 @@ is loaded.
 |---|---|---|
 | Slot bars `<select>` (4 / 8 / 16) | `setSlot({bars})` | `Looper.test.jsx > @us US28: each slot's bar selector offers 4 / 8 / 16 bars` |
 | Capture button | posts `{type:"capture", slot, seconds}` to worklet; seconds clamped to ≤ 60. While the capture is in flight the button stays **enabled** and reports `aria-disabled` (a repeat press is ignored by `capture()`), so keyboard focus is not dropped to `<body>` for the capture window | `Looper.test.jsx > @us US28` (capture-button cases: disabled-until-ready, enabled, clamp ≤ 60, exactly-60 hard-clamp, busy-keeps-focus + repeat-press inert); `interaction-census.test.jsx > keyboard focus never strands` |
-| Play/Stop button | toggles a buffer source per slot; ensures gain wired to master + record tap; stop fades the slot gain over ~5 ms and schedules `src.stop(now+0.006)` | `Looper.test.jsx > @us US61` (tap fan-out + A6 deferred-attach race) |
+| Play/Stop button | toggles a buffer source per slot; ensures gain wired to master + record tap; stop cancel-and-holds then ramps the source's own fade node to 0 (tau 1 ms, ~5 ms to silence) and schedules `src.stop(now+0.016)` (fade + scheduling margin); the shared slot gain is untouched | `Looper.test.jsx > @us US61` (tap fan-out + A6 deferred-attach race) |
 | Clear button (conditional) | drops the captured buffer + tears down the source | structural — covered by the play-then-stop ensure-no-throw path |
 | Slot volume slider | `setVolume(slot, v)` ramps the slot gain via `setTargetAtTime` | structural (component test would just re-prove `Slider` behavior already covered by `Slider.test.jsx`) |
 
@@ -422,7 +422,7 @@ twists a knob:
 
 **Code path that implements it.**
 - `src/App.jsx:201-234` configures threshold −2, knee 0, ratio 20, attack 0.003, release 0.1 — safety-net limiter parameters.
-- `src/App.jsx:229-231` wires comp → trim (0.65) → masterGain → destination.
+- `src/App.jsx:230-232` wires comp → trim (0.65) → masterGain → destination.
 - `src/audio/chain.js#buildDeckChain` per-deck topology terminates at an AnalyserNode that is connected to the master compressor (asserted in `chain.test.js`).
 - `test/limiter.test.jsx > a hot signal scheduled into the chain is delivered to the configured limiter via the deck analyser tap` confirms the path.
 

@@ -285,6 +285,66 @@ describe("Looper — US28", () => {
     expect(fade.connections).toHaveLength(0);
   });
 
+  it("@us US61: stop-fade bounds — tau <= 1.25 ms, stop >= 4 tau out, delay inside the documented window", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const src = ctx._lastStartedSource;
+    const fade = src.connections[0];
+    const stops = [];
+    src.stop = (when) => stops.push(when);
+    ctx._currentTime = 3.0;
+    const before = fade.gain.scheduledValues.length;
+    act(() => fireEvent.click(playBtn));
+    const ramp = fade.gain.scheduledValues.slice(before).find((e) => e.type === "setTarget" && e.target === 0);
+    expect(ramp.time).toBe(3.0);
+    expect(ramp.tau).toBeGreaterThan(0);
+    expect(ramp.tau).toBeLessThanOrEqual(0.00125 + 1e-12);
+    const delay = stops[0] - 3.0;
+    expect(delay).toBeGreaterThanOrEqual(4 * ramp.tau - 1e-9);
+    // Documented window: >= 10 ms scheduling margin, <= 20 ms so a re-play stays tight.
+    expect(delay).toBeGreaterThanOrEqual(0.010);
+    expect(delay).toBeLessThanOrEqual(0.020);
+  });
+
+  it("@us US61: fade-in reaches >= 95% within 5 ms", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const fade = ctx._lastStartedSource.connections[0];
+    const up = fade.gain.scheduledValues.find((e) => e.type === "setTarget" && e.target === 1);
+    expect(up.tau).toBeGreaterThan(0);
+    expect(1 - Math.exp(-0.005 / up.tau)).toBeGreaterThanOrEqual(0.95);
+  });
+
+  it("@us US61: stop re-anchors with cancelAndHoldAtTime when available, never from the stale .value", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const fade = ctx._lastStartedSource.connections[0];
+    ctx._currentTime = 2.0;
+    const before = fade.gain.scheduledValues.length;
+    act(() => fireEvent.click(playBtn));
+    const ev = fade.gain.scheduledValues.slice(before);
+    expect(ev[0]).toEqual({ type: "cancelAndHold", time: 2.0 });
+    expect(ev.some((e) => e.type === "setValue")).toBe(false);
+    expect(ev.some((e) => e.type === "cancel")).toBe(false);
+    expect(ev.at(-1)).toMatchObject({ type: "setTarget", target: 0, time: 2.0 });
+  });
+
+  it("@us US61: stop falls back to cancelScheduledValues (no stale .value re-anchor) without cancelAndHoldAtTime", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const fade = ctx._lastStartedSource.connections[0];
+    fade.gain.cancelAndHoldAtTime = undefined;
+    ctx._currentTime = 2.0;
+    const before = fade.gain.scheduledValues.length;
+    act(() => fireEvent.click(playBtn));
+    const ev = fade.gain.scheduledValues.slice(before);
+    expect(ev[0].type).toBe("cancel");
+    expect(ev[0].time).toBeGreaterThanOrEqual(2.0);
+    expect(ev[0].time).toBeLessThan(2.001);
+    expect(ev.some((e) => e.type === "setValue")).toBe(false);
+    expect(ev.at(-1)).toMatchObject({ type: "setTarget", target: 0, time: 2.0 });
+  });
+
   it("@us US61: volume set before stop survives stop and re-play (slot gain stays at the user's value)", () => {
     const { ctx, playBtn } = setupLoadedSlot();
     act(() => fireEvent.click(playBtn));
