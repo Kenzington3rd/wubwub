@@ -1,6 +1,6 @@
-// Master-bus brickwall-limiter behavioral trace — Phase B4.
+// Master-bus safety-net limiter behavioral trace — Phase B4.
 //
-// SCOPE: this test verifies the master compressor (the "safety-net brickwall
+// SCOPE: this test verifies the master compressor (the "safety-net
 // limiter") is *configured* with limiter-class AudioParam values when the
 // audio engine boots. It also feeds a synthetic hot buffer through the
 // configured chain and walks the recorded scheduled-values on each AudioParam
@@ -60,7 +60,7 @@ function trackContexts() {
 // single deck at default fader peaks around -5 dBFS, so the former -9 dB
 // threshold kept it permanently over threshold and audibly pumped. The fixed
 // 0.65 post-compressor trim is what guarantees headroom; DynamicsCompressorNode
-// has no lookahead, so this is not a true brickwall.
+// has no lookahead, so it is a safety net, not a hard ceiling.
 const LIMITER_SPEC = {
   threshold: -2, // dB — only engage on genuine summed overs
   knee: 0, // abrupt onset = a true limiter (not a soft comp)
@@ -133,7 +133,7 @@ describe("Master safety-net limiter — Phase B4 — configuration trace", () =>
       // Walk forward from the compressor: every hop must be a GainNode (the
       // make-up trim and the master gain), and the last hop must terminate
       // at ctx.destination. No other DynamicsCompressor in the chain — i.e.
-      // the brickwall is the only limiter on the master bus.
+      // the safety-net limiter is the only limiter on the master bus.
       const visited = new Set();
       const path = [];
       let cursor = comp;
@@ -156,8 +156,8 @@ describe("Master safety-net limiter — Phase B4 — configuration trace", () =>
           cursor === ctx.destination,
         `limiter path did not reach destination; observed=${path.join("→")}`
       ).toBeTruthy();
-      // Brickwall is the SOLE limiter on the master bus — no chained second
-      // DynamicsCompressor downstream.
+      // The safety-net limiter is the SOLE limiter on the master bus — no
+      // chained second DynamicsCompressor downstream.
       const compressorCount = path.filter(
         (t) => t === "DynamicsCompressorNode"
       ).length;

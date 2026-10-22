@@ -118,6 +118,8 @@ The **MODE** row on each deck picks how the speed slider works:
   even mid-play). NUDGE in keylock bends tempo, not pitch — which is what
   you want for beatmatching. LOOP and ROLL work in keylock too, and keep the
   track's pitch. Quality is best near 1.0x and depends on the material.
+  Content below about 40 Hz (some 808 tails) still shifts with tempo; everything
+  above holds pitch.
 
 ## Roll
 
@@ -166,15 +168,14 @@ The dropdown under the fader picks the curve:
 ## Looper
 
 Four slots. Pick a bar count (4 / 8 / 16); **Capture** grabs a fixed-length
-window of whatever is playing (the mix before the master limiter), sized from bars × BPM at the
-moment you press it. Because it's a BPM snapshot, the captured loop won't be
-exactly N bars if the tempo drifts afterward. Click **Capture**, then **Play**
-to loop it. While a capture is running that slot's button shows "…" and
-ignores further presses; the rest of the looper stays usable. The volume
-slider sets the loop's level. Loops are captured before the master limiter,
-so they are not limited twice. Starting and stopping a slot fades in and out
-over a few milliseconds, so there is no click. Stop and play leave the volume
-slider's setting unchanged.
+window of whatever is playing, sized from bars × BPM at the moment you press
+it. Because it's a BPM snapshot, the captured loop won't be exactly N bars if
+the tempo drifts afterward. Click **Capture**, then **Play** to loop it. While
+a capture is running that slot's button shows "…" and ignores further presses;
+the rest of the looper stays usable. The volume slider sets the loop's level.
+Loops are captured before the master limiter, so they are not limited twice.
+Starting and stopping a slot fades in and out over a few milliseconds, so there
+is no click. Stop and play leave the volume slider's setting unchanged.
 
 ## Sample pad
 

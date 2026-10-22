@@ -63,7 +63,7 @@ Persona: bedroom DJ who mixes local files in the browser. Sometimes streams, som
 
 | ID | Story | Coverage | Test file |
 |---|---|---|---|
-| US28 | Capture 4/8/16-bar loops from master bus | E | manual (worklet runs in audio thread) |
+| US28 | Capture 4/8/16-bar loops from the pre-limiter record tap (the mix before the master limiter) | E | manual (worklet runs in audio thread) |
 | US29 | Looper slot plays looped | E | manual |
 | US30 | Looper slot volume per slot | E | manual |
 | US31 | Load samples into 8 sample pads | E | manual |

@@ -44,7 +44,7 @@ free, private, install-free.**
 - Master volume.
 
 ### Creative tools
-- Looper: 4 slots, capture 4/8/16 bars from the master bus, play looped.
+- Looper: 4 slots, capture 4/8/16 bars from the pre-limiter record tap (the mix before the master limiter), play looped.
 - Sample pad: 8 pads, drag-drop or click to load, trigger with `Q W E R / A S D F`.
 - Per-deck color themes.
 
