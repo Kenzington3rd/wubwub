@@ -6,10 +6,13 @@ import { LOOPER_BAR_OPTIONS } from "../data.js";
 const SLOT_COUNT = 4;
 const SLOT_COLORS = ["#00f5d4", "#a78bfa", "#f0c040", "#f472b6"];
 const DEFAULT_BPM = 128;
-// Edge fades (per-source GainNode). tau = fade/4 settles ~98% in the fade time.
-const LOOP_FADE_IN_TAU = 0.001; // ~4 ms
-const LOOP_FADE_OUT_TAU = 0.001; // ~5 ms
-const LOOP_STOP_DELAY = 0.006; // src.stop() after the fade-out has run
+// Edge fades (per-source GainNode), setTargetAtTime with tau = 1 ms:
+// 95% settled at 3*tau (3 ms), 98% at 4*tau (4 ms), 99.3% at 5*tau (5 ms).
+const LOOP_FADE_IN_TAU = 0.001; // fade-in ~95% in 3 ms
+const LOOP_FADE_OUT_TAU = 0.001; // fade-out ~99.3% in 5 ms
+// src.stop() fires 16 ms out: the fade is done by ~5 ms, and the rest is margin
+// so a late-scheduled automation (busy main thread) can't clip the tail.
+const LOOP_STOP_DELAY = 0.016;
 
 // Build an AudioBuffer from two Float32Array channels (raw PCM from the worklet).
 function pcmToAudioBuffer(ctx, left, right, sampleRate) {
@@ -156,8 +159,13 @@ export default function Looper({
     };
     if (ctx && fade && fade.gain && typeof fade.gain.setTargetAtTime === "function") {
       const now = ctx.currentTime;
-      fade.gain.cancelScheduledValues(now);
-      fade.gain.setValueAtTime(fade.gain.value, now);
+      // Freeze the live (possibly mid-fade-in) value, as rampGain does; never
+      // re-anchor from the stale `.value` getter.
+      if (typeof fade.gain.cancelAndHoldAtTime === "function") {
+        fade.gain.cancelAndHoldAtTime(now);
+      } else {
+        fade.gain.cancelScheduledValues(now + 1e-6);
+      }
       fade.gain.setTargetAtTime(0, now, LOOP_FADE_OUT_TAU);
       src.onended = release;
       try {

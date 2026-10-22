@@ -73,7 +73,9 @@ export function buildDistortionCurve(drive = 40, samples = 4096) {
   const a = 1 + k / 20;
   const makeup = (a * DISTORTION_X_REF) / Math.tanh(a * DISTORTION_X_REF);
   for (let i = 0; i < samples; i++) {
-    const x = (i * 2) / samples - 1;
+    // WaveShaper reads index (N-1)(x+1)/2, so x must span [-1, 1] over N-1
+    // steps; the integer numerator keeps curve[i] === -curve[N-1-i] exactly.
+    const x = (2 * i - (samples - 1)) / (samples - 1);
     curve[i] = (Math.tanh(a * x) / a) * makeup;
   }
   return curve;

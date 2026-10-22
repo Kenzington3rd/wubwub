@@ -87,15 +87,29 @@ describe("buildDistortionCurve — US20", () => {
   it("@us US20: curve is odd-symmetric about zero (input -x maps to -y)", () => {
     const samples = 1024;
     const curve = buildDistortionCurve(50, samples);
-    // Sample at indices equidistant from center.
-    const center = samples / 2;
-    expect(curve[center + 100] + curve[center - 100]).toBeCloseTo(0, 2);
+    // Mirror pairs are (i, N-1-i): the WaveShaper maps x to index (N-1)(x+1)/2.
+    expect(curve[412] + curve[samples - 1 - 412]).toBeCloseTo(0, 6);
+  });
+
+  it("@us US20: exact odd symmetry — odd N has a zero centre, curve[i] === -curve[N-1-i]", () => {
+    for (const n of [1025, 4095, 1024, 4096]) {
+      for (const drive of [0, 40, 100]) {
+        const c = buildDistortionCurve(drive, n);
+        if (n % 2 === 1) expect(c[(n - 1) / 2]).toBe(0);
+        for (let i = 0; i < n; i++) {
+          expect(Math.abs(c[i] + c[n - 1 - i])).toBeLessThanOrEqual(1e-12);
+        }
+        expect(c[0]).toBeLessThan(0);
+        expect(c[n - 1]).toBeGreaterThan(0);
+      }
+    }
   });
 
   it("@us US20: drive=0 is monotonic and near-linear (low gain)", () => {
     const curve = buildDistortionCurve(0, 1024);
-    // Center should be 0, midway up should be positive
-    expect(curve[512]).toBeCloseTo(0, 3);
+    // Centre (between samples 511 and 512) is 0, midway up should be positive
+    expect(curve[511] + curve[512]).toBeCloseTo(0, 6);
+    expect(Math.abs(curve[512])).toBeLessThan(0.002);
     expect(curve[768]).toBeGreaterThan(0);
     expect(curve[256]).toBeLessThan(0);
   });
@@ -163,7 +177,7 @@ describe("buildDistortionCurve — US20", () => {
         if (i > 0) expect(c[i]).toBeGreaterThanOrEqual(c[i - 1]);
       }
       for (let d = 1; d < 1000; d += 97) {
-        expect(c[n / 2 + d] + c[n / 2 - d]).toBeCloseTo(0, 6);
+        expect(c[n / 2 + d] + c[n / 2 - 1 - d]).toBeCloseTo(0, 6);
       }
     }
   });
