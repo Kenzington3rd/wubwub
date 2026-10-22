@@ -2954,6 +2954,18 @@ describe("Deck KEYLOCK — worklet state follows every transport path — US73",
     expect(node.state.loop.enabled).toBe(false); // disabling is never degenerate
   });
 
+  it("@us US73: (mock parity) the degenerate-region hop scales with the context rate — 700 frames ignored at 96 kHz, accepted at 48 kHz", async () => {
+    const { api, node } = await keylockDeck({ loop: true });
+    const ctx = api.audioCtxRef.current;
+    node.port.postMessage({ type: "setLoop", enabled: true, start: 1, end: 2 });
+    for (const [sr, accepted] of [[96000, false], [48000, true]]) {
+      ctx.sampleRate = sr;
+      node.state.sampleRate = sr;
+      node.port.postMessage({ type: "setLoop", enabled: true, start: 3, end: 3 + 700 / sr });
+      expect(node.state.loop.start, `700 frames @ ${sr}`).toBe(accepted ? 3 : 1);
+    }
+  });
+
   it("@us US73 / US72: pausing mid-roll in KEYLOCK restores the whole-track loop state before pausing", async () => {
     const { api, node } = await keylockDeck({ loop: false });
     await act(async () => { api.deckRef.current.seekTo(4); await tick(); });

@@ -52,7 +52,7 @@ function trackContexts() {
   };
 }
 
-// Brickwall limiter spec — every value here is the documented contract from
+// Safety-net limiter spec — every value here is the documented contract from
 // App.jsx ("A1 — safety-net limiter"). Drift between this table and the
 // runtime configuration is the bug this test catches.
 //
@@ -101,7 +101,7 @@ describe("Master safety-net limiter — Phase B4 — configuration trace", () =>
       );
       expect(comp, "App should have built a DynamicsCompressor as the limiter").toBeTruthy();
 
-      // Brickwall settings — every assertion uses the LIMITER_SPEC table so a
+      // Safety-net settings — every assertion uses the LIMITER_SPEC table so a
       // future tightening only has to update one place.
       expect(comp.threshold.value).toBe(LIMITER_SPEC.threshold);
       expect(comp.knee.value).toBe(LIMITER_SPEC.knee);
@@ -173,7 +173,7 @@ describe("Master safety-net limiter — Phase B4 — configuration trace", () =>
     // "tap point"). So load files onto BOTH decks first, then verify the
     // limiter receives at least two analyser taps (one per deck). That is
     // the path any hot signal would traverse to reach the configured
-    // brickwall, complementing the parameter assertions above.
+    // safety-net limiter, complementing the parameter assertions above.
     const { contexts, restore } = trackContexts();
     try {
       render(<App />);

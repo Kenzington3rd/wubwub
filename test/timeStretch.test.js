@@ -366,6 +366,16 @@ describe("timeStretch coarse-search cost — US71", () => {
     expect(coarseCandidates(96000)).toBe(301);
   });
 
+  it("@us US71: an explicit 2048 grain at 96 kHz scales the radius against defaultGrainSize(sr) — ±600, not ±1200 (151 vs 301 coarse candidates)", () => {
+    let seed = 5;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+    const src = new Float32Array(96000).map(() => rnd());
+    const stats = {};
+    stretchChannel(src, 1.04, 1, 2048, 96000, stats);
+    expect(stats.searches).toBeGreaterThan(10);
+    expect(stats.coarse / stats.searches).toBe((2 * 600) / 8 + 1);
+  });
+
   it("@us US71: the fine pass stays exact at the 96 kHz decimation — findBestLag(decim 8) finds the same known shifts", () => {
     const corr = GRAIN_SIZE - HOP_OUT;
     const search = searchRadius(96000);

@@ -7,9 +7,9 @@
 //
 // Model:
 //   - Output is synthesized in grains of defaultGrainSize(sampleRate)
-//     samples (2048 at 44.1 / 48 kHz, 4096 at 88.2 / 96 kHz — ~45 ms at
-//     every rate) at 75% overlap (hop OUT = grain/4), each windowed by a
-//     periodic Hann window scaled by OLA_GAIN so the four overlapping
+//     samples (2048 at 44.1 / 48 kHz, 4096 at 88.2 / 96 kHz — ~43–46 ms at
+//     ≥ 44.1 kHz; below that the 2048 floor gives 85–93 ms) at 75% overlap
+//     (hop OUT = grain/4), each windowed by a periodic Hann window scaled by OLA_GAIN so the four overlapping
 //     windows sum to exactly 1.
 //   - Grain N is NOMINALLY read from the input at N × hopOut × rate — so
 //     rate > 1 plays faster (grains sample the input further apart) and

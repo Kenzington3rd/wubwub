@@ -377,8 +377,8 @@ reject KEYLOCK without touching VARI:
 
 ### W3.1 status (2026-08-09)
 
-Landed: `src/audio/timeStretch.js` (WSOLA core, revised in W4.4 — 2048-sample
-periodic-Hann grains, 75% overlap, each aligned within ±SEARCH samples (±552 / 600 / 1200 samples at 44.1 / 48 / 96 kHz (floor 384), scaled with the context rate to cover ~40 Hz) by normalized
+Landed: `src/audio/timeStretch.js` (WSOLA core, revised in W4.4 — 2048 / 4096 / 8192-sample
+periodic-Hann grains at 44.1–48 / 88.2–96 / 192 kHz, 75% overlap, each aligned within ±SEARCH samples (±552 / 600 / 1200 samples at 44.1 / 48 / 96 kHz (floor 384), scaled with the context rate to cover ~40 Hz) by normalized
 cross-correlation, independent rate/pitchRatio via linear-
 interp grain reads; unit-tested incl. unity-OLA, alignment and length/pitch behavior)
 and `src/worklets/stretch-worklet.js` (streaming AudioWorklet mirror,

@@ -65,7 +65,7 @@ src/
 │   ├── recorder.js           # MediaRecorder wrapper + downloadBlob
 │   ├── wavEncode.js          # 16-bit WAV encoder + sliceBuffer (W3.6 bite export)
 │   ├── isolationRender.js    # offline re-render of a slice through the isolation path (W3.7)
-│   └── timeStretch.js        # WSOLA time-stretch DSP core, 2048-sample grains (W3.1 KEYLOCK)
+│   └── timeStretch.js        # WSOLA time-stretch DSP core, grain scales with the context rate (2048 at 44.1/48 k, 4096 at 96 k) (W3.1 KEYLOCK)
 ├── midi/
 │   └── midiMap.js            # MIDI access + CC mapping
 ├── fonts/

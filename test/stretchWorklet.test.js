@@ -1640,8 +1640,9 @@ describe("stretch worklet — coarse-search cost — US73", () => {
 // coarse edge, and worklet quality at 96 kHz ──
 // GRAIN / HOP were a fixed 2048 / 512 while SEARCH and DECIM scaled with the
 // rate: at 96 kHz the grain was 21 ms and the radius 2.3 hops, so grains
-// re-read transients (5–8 of ~100 short kicks doubled vs 0–3 at 44.1 / 48
-// kHz). They now scale in the same steps as DECIM (2048 / 4096 / 8192).
+// re-read transients (5–8 of ~100 short kicks doubled vs 8 / 5 per ~400 at
+// 44.1 / 48 kHz, i.e. ~2 / 1.3 per 100; the bound is 3 per 100). They now
+// scale in the same steps as DECIM (2048 / 4096 / 8192).
 function kickTrack(sr, bpm, seconds) {
   const x = new Float32Array(sr * seconds);
   for (let i = 0; i < x.length; i++) {
