@@ -278,7 +278,7 @@ export default function Looper({
         </h3>
         <span style={{ fontSize: 10, color: "#8892b0" }}>
           {workletReady
-            ? "Captures from master bus — a fixed window sized from bars × BPM at capture time"
+            ? "Captures the mix before the limiter — a fixed window sized from bars × BPM at capture time"
             : "Initializing audio worklet…"}
         </span>
       </div>

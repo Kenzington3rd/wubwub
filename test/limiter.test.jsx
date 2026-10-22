@@ -69,7 +69,7 @@ const LIMITER_SPEC = {
   release: 0.1, // quick recovery without audible pumping
 };
 
-describe("Master brickwall limiter — Phase B4 — configuration trace", () => {
+describe("Master safety-net limiter — Phase B4 — configuration trace", () => {
   it("App.jsx source declares the documented limiter-class parameters", () => {
     // First defence: read the source. If a maintainer accidentally moves the
     // threshold or relaxes the ratio, the source-grep catches it even if the
@@ -82,7 +82,7 @@ describe("Master brickwall limiter — Phase B4 — configuration trace", () => 
     expect(src).toMatch(/comp\.release\.value\s*=\s*0\.1\b/);
   });
 
-  it("the live AudioContext compressor matches the brickwall limiter spec at boot", async () => {
+  it("the live AudioContext compressor matches the safety-net limiter spec at boot", async () => {
     const { contexts, restore } = trackContexts();
     try {
       render(<App />);

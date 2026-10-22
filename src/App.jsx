@@ -103,7 +103,7 @@ export default function App() {
   const audioCtxRef = useRef(null);
   const masterCompressorRef = useRef(null);
   // A1 — fixed trim GainNode between the limiter and the master gain; gives
-  // the brickwall limiter extra headroom so the destination never clips.
+  // the safety-net limiter extra headroom so the destination never clips.
   const masterTrimRef = useRef(null);
   const masterGainRef = useRef(null);
   // W1.7 — parallel pre-limiter sum node. Every deck's analyser fans out into
@@ -219,7 +219,7 @@ export default function App() {
       comp.attack.value = 0.003;
       comp.release.value = 0.1;
       // A1 — fixed make-up trim *down* between the limiter and the master
-      // gain. Even a brickwall limiter passes a peak slightly above threshold
+      // gain. Even a safety-net limiter passes a peak slightly above threshold
       // during its short attack window; a 0.65 trim leaves ~3.7 dB of
       // margin below full scale (no lookahead, so a safety net, not a
       // guarantee, under worst-case simultaneous playback). The user's master volume is applied after this.

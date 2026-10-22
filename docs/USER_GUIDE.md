@@ -166,7 +166,7 @@ The dropdown under the fader picks the curve:
 ## Looper
 
 Four slots. Pick a bar count (4 / 8 / 16); **Capture** grabs a fixed-length
-window of whatever is playing on the master bus, sized from bars × BPM at the
+window of whatever is playing (the mix before the master limiter), sized from bars × BPM at the
 moment you press it. Because it's a BPM snapshot, the captured loop won't be
 exactly N bars if the tempo drifts afterward. Click **Capture**, then **Play**
 to loop it. While a capture is running that slot's button shows "…" and

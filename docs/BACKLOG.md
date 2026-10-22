@@ -654,7 +654,7 @@ checks wherever it's reasonable from a headless test environment.
   `base-uri 'self'`, `form-action 'none'`, no `'unsafe-eval'` in
   `script-src`, `worker-src` includes `blob:` (the looper worklet).
 - `test/limiter.test.jsx` — Phase B4. Asserts the App.jsx-built master
-  compressor is configured with brickwall limiter-class params
+  compressor is configured with safety-net limiter params
   (threshold −9 at Phase B4, −2 since W4.4; ratio 20, knee 0, attack 0.003, release 0.1), confirms
   the topology delivers every deck's analyser tap to the compressor, and
   walks the path comp → trim → masterGain → destination to confirm there

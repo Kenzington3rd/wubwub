@@ -21,6 +21,27 @@ function bundleText(dir) {
     .join("\n");
 }
 
+// The `?raw` worklet source is embedded as a template literal containing
+// registerProcessor("<name>", …). esbuild strips non-legal comments even with
+// minify off, so the comment check alone cannot detect minification being
+// disabled; indentation and size can.
+//
+// Measured from the real minified output (identical in dist/ and dist-single/):
+//   looper-processor   source 2662 B  -> minified 1111 B  (bound 1400, ~26% headroom)
+//   stretch-processor  source 30117 B -> minified 9666 B  (bound 11600, ~20% headroom)
+const MAX_MINIFIED_BYTES = {
+  "looper-processor": 1400,
+  "stretch-processor": 11600,
+};
+
+function embeddedSource(all, name) {
+  const at = all.indexOf(`registerProcessor("${name}"`);
+  if (at < 0) return null;
+  const start = all.lastIndexOf("`", at);
+  const end = all.indexOf("`", at);
+  return start < 0 || end < 0 ? null : all.slice(start + 1, end);
+}
+
 // Distinctive comment phrases from each worklet source.
 const COMMENTS = [
   "Continuously writes incoming audio into a circular buffer", // looper
@@ -45,6 +66,15 @@ for (const [dir, marker] of [
     run("does not ship worklet comments", () => {
       const all = bundleText(dir);
       for (const phrase of COMMENTS) expect(all).not.toContain(phrase);
+    });
+    run("embeds minified worklet sources (no indentation, size bounded)", () => {
+      const all = bundleText(dir);
+      for (const [name, max] of Object.entries(MAX_MINIFIED_BYTES)) {
+        const src = embeddedSource(all, name);
+        expect(src, `${name} embedded source not found`).not.toBeNull();
+        expect(src).not.toMatch(/\n {2,}/);
+        expect(src.length).toBeLessThan(max);
+      }
     });
   });
 }

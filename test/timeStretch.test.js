@@ -10,7 +10,7 @@ import {
   OLA_GAIN,
 } from "../src/audio/timeStretch.js";
 
-// W3.1 — granular time-stretch DSP core (US71). The worklet mirrors this
+// W3.1 — WSOLA time-stretch DSP core (US71). The worklet mirrors this
 // algorithm; these tests pin the math the keylock feature will ship on.
 
 describe("timeStretch core — US71", () => {

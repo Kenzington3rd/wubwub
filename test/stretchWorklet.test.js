@@ -5,7 +5,7 @@ import { stretchChannel, GRAIN_SIZE } from "../src/audio/timeStretch.js";
 // W3.1 — the KEYLOCK stretch worklet (US73).
 //
 // `src/worklets/stretch-worklet.js` is a SECOND implementation of the
-// granular OLA in `src/audio/timeStretch.js`: the offline core synthesizes a
+// WSOLA in `src/audio/timeStretch.js`: the offline core synthesizes a
 // whole channel, the worklet streams it in 128-sample render quanta. Only the
 // offline core was covered — the worklet's streaming path is what actually
 // produces audio in KEYLOCK, and nothing executed it.
