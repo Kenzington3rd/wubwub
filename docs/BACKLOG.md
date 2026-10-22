@@ -684,3 +684,5 @@ checks wherever it's reasonable from a headless test environment.
 - Stamp worklet messages with the worklet's `currentTime` so main-thread jank cannot shift the KEYLOCK timeline.
 - Stagger the three KEYLOCK decks' alignment searches on mobile.
 - A real-browser listening pass of the KEYLOCK WSOLA core is still owed (human): check rates 1.02 / 1.12 / 2.0 on vocals and on transient-heavy material.
+- Real-browser check for comb filtering at partial DISTORTION MIX with `oversample = "2x"` (Chromium's oversampled WaveShaper may delay the wet path by tens of samples; measure MIX 0.5, drive 0, sine sweep in Playwright).
+- If mobile glitches appear with three KEYLOCK decks, spread the WSOLA alignment search across render quanta instead of doing it all in every fourth quantum.

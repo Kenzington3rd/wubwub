@@ -112,12 +112,12 @@ The **MODE** row on each deck picks how the speed slider works:
   This is the polished, battle-tested mode.
 - **KEYLOCK** — the speed slider changes *tempo only*; the track keeps its
   original pitch. Perfect for running a vocal at 128 BPM without the
-  chipmunk effect. It's waveform-aligned (WSOLA-style) time-stretching done live in your browser
-  — marked *experimental* because texture quality depends on the material:
-  if it smears, flip back to VARI any time (switching is seamless,
+  chipmunk effect. It's waveform-aligned time-stretching done live in your
+  browser — marked *experimental* because texture quality depends on the
+  material: if it smears, flip back to VARI any time (switching is seamless,
   even mid-play). NUDGE in keylock bends tempo, not pitch — which is what
   you want for beatmatching. LOOP and ROLL work in keylock too, and keep the
-  track's pitch. At tempos away from 1.0x it no longer warbles the way early builds did.
+  track's pitch. Quality is best near 1.0x and depends on the material.
 
 ## Roll
 
@@ -171,7 +171,10 @@ moment you press it. Because it's a BPM snapshot, the captured loop won't be
 exactly N bars if the tempo drifts afterward. Click **Capture**, then **Play**
 to loop it. While a capture is running that slot's button shows "…" and
 ignores further presses; the rest of the looper stays usable. The volume
-slider sets the loop's level. Loops are captured before the master limiter, so they are not limited twice, and starting and stopping a slot fade in and out in a few milliseconds with no click, and the volume slider is unaffected by stop and play.
+slider sets the loop's level. Loops are captured before the master limiter,
+so they are not limited twice. Starting and stopping a slot fades in and out
+over a few milliseconds, so there is no click. Stop and play leave the volume
+slider's setting unchanged.
 
 ## Sample pad
 
