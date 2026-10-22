@@ -21,19 +21,23 @@
 // Worklet → host:
 //   { type: "position", seconds, at }  ~every 100 ms: the source position of
 //        the sample about to leave the node (the AUDIBLE playhead), and `at`,
-//        the AudioWorkletGlobalScope currentTime (context seconds) of the
-//        render quantum it was measured in — anchor to `at`, not to message
-//        arrival, which lags by an unknown thread hop. That sample is
+//        the context time (seconds) that sample is heard at — the end of the
+//        render quantum it was measured after (currentTime + frames /
+//        sampleRate) — anchor to `at`, not to message arrival, which lags by
+//        an unknown thread hop. That sample is
 //        an overlap-add of up to four grains, each reading the source at its
 //        own aligned start + offset × pitch; the playhead is their window-
 //        weighted mean read position (exact for a linear ramp). This includes
 //        the overlap-add group delay ≈ (GRAIN/2)·(pitch − rate) plus the mean
 //        WSOLA nudge, which a write-head estimate (nominal + emitted × rate)
 //        misses by up to ~27 ms at rate 2.
-//   { type: "looped", seconds, at }  once per wrap, when the audible position
-//        crosses the seam (or at once when play / seek / a region change
-//        lands past the region end); `seconds` is the loop start (0 for a
-//        whole-track loop). Never posted by a fading tail.
+//   { type: "looped", seconds, regionStart, at }  once per wrap, when the
+//        audible position crosses the seam (or at once when play / seek / a
+//        region change lands past the region end); `seconds` / `at` are the
+//        exact audible position and its context time, as for `position`
+//        (just past the region start, not the start itself); `regionStart`
+//        is the loop start (0 for a whole-track loop). Never posted by a
+//        fading tail.
 //   { type: "ended" }              no loop enabled and the audible position
 //        reached the end of the track. Playback stops with the ~4 ms fade
 //        (the grains still hold signal at that point).
@@ -120,6 +124,8 @@ class StretchProcessor extends AudioWorkletProcessor {
     // Loop request: null (off) or { start, end } in seconds (null = track
     // edge). Resolved against the loaded track per block.
     this.loop = null;
+    // loopBounds()'s reused result.
+    this.bounds = { start: 0, end: 0, len: 0 };
     this.window = new Float32Array(GRAIN);
     for (let i = 0; i < GRAIN; i++) {
       this.window[i] = OLA_GAIN * 0.5 * (1 - Math.cos((2 * Math.PI * i) / GRAIN));
@@ -319,6 +325,9 @@ class StretchProcessor extends AudioWorkletProcessor {
   }
 
   // Loop region in source frames, or null when no (valid) loop is active.
+  // Called every quantum, every grain and on each wrap, so it fills one
+  // preallocated object instead of returning a fresh one: the result is only
+  // valid until the next call (no caller holds it across one).
   loopBounds() {
     if (!this.loop || !this.channels || this.channels.length === 0) return null;
     const len = this.channels[0].length;
@@ -326,7 +335,11 @@ class StretchProcessor extends AudioWorkletProcessor {
     const start = this.loop.start === null ? 0 : Math.min(len, Math.max(0, Math.round(this.loop.start * sr)));
     const end = this.loop.end === null ? len : Math.min(len, Math.max(0, Math.round(this.loop.end * sr)));
     if (end - start < HOP) return null;
-    return { start, end, len: end - start };
+    const b = this.bounds;
+    b.start = start;
+    b.end = end;
+    b.len = end - start;
+    return b;
   }
 
   // Wrap a position into the loop region. Positions at/after the end always
@@ -638,21 +651,30 @@ class StretchProcessor extends AudioWorkletProcessor {
       this.seamCount--;
       wrapped = true;
     }
+    const audible = Math.max(0, u - this.audLap);
+    // `u` / `audible` describe the sample about to leave the node — the first
+    // one of the NEXT quantum — which is heard at this quantum's end, not at
+    // currentTime (its start). Stamping currentTime anchored the host one
+    // render quantum early (128 × rate × source/context-rate source frames).
+    const at = currentTime + frames / sampleRate;
     if (wrapped) {
       const b = this.loopBounds();
-      this.port.postMessage({ type: "looped", seconds: b ? b.start / this.sourceSampleRate : 0, at: currentTime });
+      this.port.postMessage({
+        type: "looped",
+        seconds: audible / this.sourceSampleRate,
+        regionStart: b ? b.start / this.sourceSampleRate : 0,
+        at,
+      });
     }
-    const audible = Math.max(0, u - this.audLap);
     // Position report (~10 Hz) in source-track seconds, stamped with the
-    // render quantum's context time so the host can anchor to worklet time
-    // rather than to whenever the message happens to arrive.
-    const nowSec = currentTime;
-    if (nowSec - this.lastReport > 0.1) {
-      this.lastReport = nowSec;
+    // context time that sample is heard at so the host can anchor to worklet
+    // time rather than to whenever the message happens to arrive.
+    if (currentTime - this.lastReport > 0.1) {
+      this.lastReport = currentTime;
       this.port.postMessage({
         type: "position",
         seconds: audible / this.sourceSampleRate,
-        at: nowSec,
+        at,
       });
     }
     // End of track (no loop) → report and fade out: the grains still hold

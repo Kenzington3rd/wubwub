@@ -2714,6 +2714,32 @@ describe("Deck KEYLOCK — worklet state follows every transport path — US73",
     }
   });
 
+  // A report already in flight when the host re-anchors (seek, cue jump,
+  // speed change…) describes the OLD playhead. Its `at` predates the anchor,
+  // so it must be dropped — applying it would drag the timeline back.
+  it("@us US73: position / looped reports measured before the last host re-anchor (seek) are dropped; later ones apply", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      act(() => { ctx.advance(1); });
+      await act(async () => { api.deckRef.current.seekTo(6); await tick(); });
+      const seekAt = ctx.currentTime;
+      // Stale: heard 0.5 s before the seek landed.
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: seekAt - 0.5 }); });
+      await act(async () => { node.emit({ type: "looped", seconds: 0.01, regionStart: 0, at: seekAt - 0.2 }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(6); // 6.1, not 3.6 / 0.31
+      // Fresh: heard after the seek → re-anchors.
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: ctx.currentTime }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3); // 3.1
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("@us US73: a position report without `at` falls back to the arrival-time anchor", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {

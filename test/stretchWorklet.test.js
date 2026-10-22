@@ -368,6 +368,83 @@ describe("stretch worklet — position report is the audible playhead — US73",
       }
     }
   });
+
+  // Review pass 3: `at` must be the context time at which the REPORTED sample
+  // is heard. `seconds` is measured after the quantum is rendered (the next
+  // sample out — this quantum's end), so stamping the quantum START put every
+  // anchor one render quantum early: 128 × rate source frames (× the
+  // source/context rate ratio for foreign-rate buffers).
+  //
+  // Each output sample i is heard at t0 + i / ctxRate; channel 1 is a ramp
+  // marker whose value is its own source index. So "report − marker heard at
+  // `at`" is the anchor error in source frames.
+  const T0 = 5;
+  const anchorErrors = ({ srcRate, ctxRate, rate, loopRegion = null, quanta = 600 }) => {
+    const K = 1e-7;
+    const len = srcRate * 10;
+    let seed = 1;
+    const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+    const music = new Float32Array(len);
+    const marker = new Float32Array(len);
+    for (let i = 0; i < len; i++) {
+      music[i] = 0.4 * Math.sin((2 * Math.PI * 220 * i) / srcRate) + 0.3 * Math.sin((2 * Math.PI * 331 * i) / srcRate) + 0.05 * rnd();
+      marker[i] = K * i;
+    }
+    const { Processor: P, posted, clock } = loadProcessor({ sampleRate: ctxRate, currentTime: T0 });
+    const p = new P();
+    send(p, { type: "load", channels: [music, marker], sampleRate: srcRate });
+    if (loopRegion) send(p, { type: "setLoop", enabled: true, ...loopRegion });
+    send(p, { type: "play", offset: loopRegion ? loopRegion.start : 2 });
+    const heard = new Float64Array(quanta * QUANTUM);
+    for (let k = 0; k < quanta; k++) {
+      const [, m] = render(p, QUANTUM, { rate, clock, channels: 2, ctxRate });
+      for (let i = 0; i < QUANTUM; i++) heard[k * QUANTUM + i] = m[i] / K;
+    }
+    const markerAt = (at) => heard[Math.round((at - T0) * ctxRate)];
+    return { posted, markerAt, heard };
+  };
+
+  it("@us US73: `at` is the context time the reported sample is heard — report − marker heard at `at` is 0 ± 0.05 frames at rates 0.5 / 1 / 2, same-rate and foreign-rate", () => {
+    for (const [srcRate, ctxRate] of [[SAMPLE_RATE, SAMPLE_RATE], [48000, 44100]]) {
+      for (const rate of [0.5, 1, 2]) {
+        const tag = `${srcRate} in ${ctxRate} @ rate ${rate}`;
+        const { posted, markerAt } = anchorErrors({ srcRate, ctxRate, rate });
+        let worst = 0;
+        let checked = 0;
+        for (const m of ofType(posted, "position")) {
+          if ((m.at - T0) * ctxRate < GRAIN_SIZE * 2) continue; // past the fade-in
+          const idx = (m.at - T0) * ctxRate;
+          expect(Math.abs(idx - Math.round(idx)), tag).toBeLessThan(1e-6); // on a sample boundary
+          worst = Math.max(worst, Math.abs(m.seconds * srcRate - markerAt(m.at)));
+          checked++;
+        }
+        expect(checked, tag).toBeGreaterThan(10);
+        expect(worst, tag).toBeLessThan(0.05);
+      }
+    }
+  });
+
+  it("@us US73: `looped` posts the exact audible position at `at` (not the region start) — extrapolates onto the marker after the seam", () => {
+    // Around the seam the marker channel is a mix of pre- and post-seam reads,
+    // so the check runs from the looped anchor forward: seconds + (t − at) ×
+    // rate must land on the marker heard at t, once the seam has cleared the
+    // overlap-add (≥ 2 grains later, before the next wrap).
+    for (const [srcRate, ctxRate] of [[SAMPLE_RATE, SAMPLE_RATE], [48000, 44100]]) {
+      const tag = `${srcRate} in ${ctxRate}`;
+      const region = { start: 1, end: 1.25 };
+      const { posted, markerAt } = anchorErrors({ srcRate, ctxRate, rate: 1, loopRegion: region, quanta: 900 });
+      const looped = ofType(posted, "looped");
+      expect(looped.length, tag).toBeGreaterThan(2);
+      for (const m of looped) {
+        expect(m.regionStart, tag).toBeCloseTo(region.start, 9);
+        expect(m.seconds, tag).toBeGreaterThanOrEqual(region.start);
+        const t = m.at + (GRAIN_SIZE * 2) / ctxRate;
+        if ((t - T0) * ctxRate >= 900 * QUANTUM) continue;
+        const predicted = (m.seconds + (t - m.at)) * srcRate;
+        expect(Math.abs(predicted - markerAt(t)), tag).toBeLessThan(0.05);
+      }
+    }
+  });
 });
 
 describe("stretch worklet — in-worklet looping — US73", () => {
@@ -385,7 +462,10 @@ describe("stretch worklet — in-worklet looping — US73", () => {
     expect(ofType(posted, "ended")).toHaveLength(0);
     const looped = ofType(posted, "looped");
     expect(looped).toHaveLength(4);
-    expect(looped.every((m) => m.seconds === 0)).toBe(true);
+    expect(looped.every((m) => m.regionStart === 0)).toBe(true);
+    // `seconds` is the audible position at `at`: just past the seam, at most
+    // one quantum into the new lap.
+    expect(looped.every((m) => m.seconds >= 0 && m.seconds <= QUANTUM / SAMPLE_RATE)).toBe(true);
     expect(p.playing).toBe(true);
     // Across every seam, output is the continuous sine (rate 1 is exact).
     let worst = 0;
@@ -412,7 +492,7 @@ describe("stretch worklet — in-worklet looping — US73", () => {
     expect(emitted - len).toBeLessThanOrEqual(QUANTUM);
   });
 
-  it("@us US73: a region loop wraps inside [start, end) and reports the region start", () => {
+  it("@us US73: a region loop wraps inside [start, end) and reports the region start (and the audible position just past it)", () => {
     const len = SAMPLE_RATE * 2;
     const { Processor: P, posted, clock } = loadProcessor();
     const p = new P();
@@ -423,7 +503,8 @@ describe("stretch worklet — in-worklet looping — US73", () => {
     const looped = ofType(posted, "looped");
     // 0.4 → 1.0, then 0.5 s laps, over 2.5 s of track time.
     expect(looped.length).toBeGreaterThanOrEqual(3);
-    expect(looped.every((m) => m.seconds === 0.5)).toBe(true);
+    expect(looped.every((m) => m.regionStart === 0.5)).toBe(true);
+    expect(looped.every((m) => m.seconds >= 0.5 && m.seconds <= 0.5 + (QUANTUM * 1.25) / SAMPLE_RATE)).toBe(true);
     expect(ofType(posted, "ended")).toHaveLength(0);
     const positions = ofType(posted, "position").map((m) => m.seconds);
     expect(positions.length).toBeGreaterThan(5);
@@ -442,7 +523,10 @@ describe("stretch worklet — in-worklet looping — US73", () => {
     render(p, QUANTUM * 2);
     send(p, { type: "seek", offset: 1.5 });
     render(p, QUANTUM * 2);
-    expect(ofType(posted, "looped").map((m) => m.seconds)).toEqual([0.5]);
+    const looped = ofType(posted, "looped");
+    expect(looped.map((m) => m.regionStart)).toEqual([0.5]);
+    expect(looped[0].seconds).toBeGreaterThanOrEqual(0.5);
+    expect(looped[0].seconds).toBeLessThanOrEqual(0.5 + QUANTUM / SAMPLE_RATE);
     expect(p.sourcePos / SAMPLE_RATE).toBeGreaterThanOrEqual(0.5);
     expect(p.sourcePos / SAMPLE_RATE).toBeLessThan(1.0);
   });
@@ -779,14 +863,20 @@ describe("stretch worklet — review pass 1 fixes — US73", () => {
     return 10 * Math.log10(total / frames);
   };
 
-  it("@us US73: alignment searches the natural continuation's sub-sample grid — white-noise HF and a 12 kHz partial within 0.5 dB at rates 0.92 / 1.04 / 1.1", () => {
-    // Searching on the nominal grid instead lost 3.3 / 3.9 / 3.8 dB of noise
-    // first-difference (HF proxy) at 0.92 / 1.04 / 1.1 (2–4 dB in general at
-    // non-integer HOP × rate). On the natural grid real white noise (a full-
-    // period LCG — the old `seed * 1103515245` fixture overflowed 2^53 and
-    // repeated every 419 samples, which WSOLA aligns perfectly) measures
-    // −0.2…−0.5 dB across seeds at these rates; this seed −0.3. That residue
-    // is the WSOLA floor, not an alignment error.
+  it("@us US73: alignment searches the natural continuation's sub-sample grid — white-noise spectral tilt within 0.2 dB of rate 1 and a 12 kHz partial within 0.5 dB at rates 0.92 / 1.04 / 1.1", () => {
+    // Metric (review pass 3): the old bound compared the noise's first-
+    // difference level against the source's — but WSOLA lowers the BROADBAND
+    // level of uncorrelated noise by itself (partially-correlated grains
+    // overlap-add below unity power), so that "HF" bound was really the
+    // broadband floor and had ~0.17 dB of margin at rate 1.1. A grid error
+    // is a spectral TILT (HF lost relative to LF), so measure
+    //   tilt = (diffRmsDb − rmsDb)(output) − (diffRmsDb − rmsDb)(rate-1 output)
+    // which cancels the broadband level. Natural grid: |tilt| ≤ 0.011 dB.
+    // Nominal-grid mutant (candidates on the nominal sub-sample grid):
+    // −1.29 / −1.62 / −1.43 dB at 0.92 / 1.04 / 1.1. The broadband floor is
+    // bounded separately (0.75 dB; measured −0.26…−0.31 dB). Real white
+    // noise: a full-period LCG — the old `seed * 1103515245` fixture overflowed 2^53 and
+    // repeated every 419 samples, which WSOLA aligns perfectly.
     let seed = 3;
     const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
     const noise = new Float32Array(SAMPLE_RATE * 4).map(() => 0.5 * rnd());
@@ -800,14 +890,21 @@ describe("stretch worklet — review pass 1 fixes — US73", () => {
       return render(p, SAMPLE_RATE * 1.5, { rate });
     };
     const ref = (src) => src.subarray(SAMPLE_RATE, SAMPLE_RATE * 2.5);
+    const rmsDb = (a) => 10 * Math.log10(a.reduce((e, v) => e + v * v, 0) / a.length);
+    const noise1 = run(noise, 1);
+    const shape1 = diffRmsDb(noise1) - rmsDb(noise1);
     for (const rate of [0.92, 1.04, 1.1]) {
-      expect(Math.abs(diffRmsDb(run(noise, rate)) - diffRmsDb(ref(noise))), `noise HF @ ${rate}`).toBeLessThan(0.5);
+      const out = run(noise, rate);
+      const tilt = diffRmsDb(out) - rmsDb(out) - shape1;
+      const floor = rmsDb(out) - rmsDb(noise1);
+      expect(Math.abs(tilt), `noise tilt @ ${rate}`).toBeLessThan(0.2);
+      expect(Math.abs(floor), `noise broadband floor @ ${rate}`).toBeLessThan(0.75);
       expect(Math.abs(bandPowerDb(run(partial, rate)) - bandPowerDb(ref(partial))), `12 kHz @ ${rate}`).toBeLessThan(0.5);
     }
     // Extreme rates sit on the WSOLA floor: real noise is 1–3 dB down
-    // (−1.0 at 0.75, −1.8 at 1.5, −2.8 at 2.0). Guard against regressions
+    // (−1.9 at 0.5, −1.0 at 0.75, −1.7 at 1.5, −2.8 at 2.0). Guard against regressions
     // past that floor; do not read this as "clean".
-    for (const rate of [0.75, 1.5, 2.0]) {
+    for (const rate of [0.5, 0.75, 1.5, 2.0]) {
       expect(Math.abs(diffRmsDb(run(noise, rate)) - diffRmsDb(ref(noise))), `noise HF @ ${rate}`).toBeLessThan(3.5);
     }
   });
@@ -1039,26 +1136,45 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
     // into that tone before the write head itself wraps. Dropping the loop
     // without re-anchoring would play those grains out (and the end fade
     // would replay them).
-    const len = SAMPLE_RATE * 2;
-    const src = new Float32Array(len);
-    for (let i = 0; i < SAMPLE_RATE * 0.2; i++) src[i] = Math.sin((2 * Math.PI * 1000 * i) / SAMPLE_RATE);
-    for (const rate of [1, 1.5]) {
-      const { Processor: P, posted } = loadProcessor();
+    //
+    // The look-ahead margin `ahead = 2 × GRAIN × max(1, rate, pitch)` is
+    // pinned by the configurations: at the first quantum whose newest grain
+    // reads past the seam, the audible playhead is 1712 / 1909 / 2107 source
+    // frames short of it at rates 1 / 1.5 / 2 (so `ahead = GRAIN` fails at
+    // rate 2), and 4945 frames short for a 96 kHz track at deck speed 2 in a
+    // 44.1 kHz context (rate 4.35, pitch 2.18 — so dropping the `max`, i.e.
+    // a flat 2 × GRAIN = 4096, fails there).
+    for (const [srcRate, ctxRate, rate] of [
+      [SAMPLE_RATE, SAMPLE_RATE, 1],
+      [SAMPLE_RATE, SAMPLE_RATE, 1.5],
+      [SAMPLE_RATE, SAMPLE_RATE, 2],
+      [96000, SAMPLE_RATE, 2],
+    ]) {
+      const tag = `${srcRate} in ${ctxRate} @ rate ${rate}`;
+      const len = srcRate * 2;
+      const src = new Float32Array(len);
+      for (let i = 0; i < srcRate * 0.2; i++) src[i] = Math.sin((2 * Math.PI * 1000 * i) / srcRate);
+      const { Processor: P, posted } = loadProcessor({ sampleRate: ctxRate });
       const p = new P();
-      send(p, { type: "load", channels: [src], sampleRate: SAMPLE_RATE, loop: true });
-      send(p, { type: "play", offset: (len - 20000) / SAMPLE_RATE });
+      send(p, { type: "load", channels: [src], sampleRate: srcRate, loop: true });
+      send(p, { type: "play", offset: (len - 30000) / srcRate });
+      const newestEnd = () => p.gPos[p.grainCount & 3] + GRAIN_SIZE * p.gPitch[p.grainCount & 3];
       let guard = 0;
-      while (p.gPos[p.grainCount & 3] + GRAIN_SIZE <= len && guard++ < 400) render(p, QUANTUM, { rate });
-      expect(p.seamCount, `rate ${rate}`).toBe(0);
-      expect(p.gPos[p.grainCount & 3] + GRAIN_SIZE, `rate ${rate}`).toBeGreaterThan(len);
+      while (newestEnd() <= len && guard++ < 400) render(p, QUANTUM, { rate, ctxRate });
+      expect(p.seamCount, tag).toBe(0);
+      expect(newestEnd(), tag).toBeGreaterThan(len);
+      if (srcRate !== ctxRate) {
+        // Precondition: only the max(1, rate, pitch) factor reaches the seam.
+        expect(len - p.audibleFrame(), tag).toBeGreaterThan(2 * GRAIN_SIZE);
+      }
       send(p, { type: "setLoop", enabled: false });
-      expect(p.tail, `rate ${rate}`).not.toBe(null);
-      const out = render(p, QUANTUM * 40, { rate });
-      expect(ofType(posted, "looped"), `rate ${rate}`).toHaveLength(0);
-      expect(ofType(posted, "ended"), `rate ${rate}`).toHaveLength(1);
+      expect(p.tail, tag).not.toBe(null);
+      const out = render(p, QUANTUM * 40, { rate, ctxRate });
+      expect(ofType(posted, "looped"), tag).toHaveLength(0);
+      expect(ofType(posted, "ended"), tag).toHaveLength(1);
       // Only the crossfade tail may carry the first window-weighted sliver.
-      expect(rms(out.subarray(FADE)), `rate ${rate}`).toBeLessThan(1e-3);
-      expect(rms(out), `rate ${rate}`).toBeLessThan(0.01);
+      expect(rms(out.subarray(FADE)), tag).toBeLessThan(1e-3);
+      expect(rms(out), tag).toBeLessThan(0.01);
     }
   });
 
@@ -1221,7 +1337,7 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
   });
 
   // ── timestamped reports ──
-  it("@us US73: position and looped reports carry `at` = the worklet's currentTime when posted", () => {
+  it("@us US73: position and looped reports carry `at` = the END of the quantum they were measured after (currentTime + frames / sampleRate)", () => {
     const { Processor: P, posted, clock } = loadProcessor({ currentTime: 3 });
     const p = new P();
     send(p, { type: "load", channels: [tone(SAMPLE_RATE)], sampleRate: SAMPLE_RATE });
@@ -1234,7 +1350,8 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
       render(p, QUANTUM, { clock });
       for (const m of posted.slice(before)) {
         if (m.type !== "position" && m.type !== "looped") continue;
-        expect(m.at, m.type).toBe(t);
+        // The reported sample is the next one out, heard one quantum after t.
+        expect(m.at, m.type).toBe(t + QUANTUM / SAMPLE_RATE);
         seen[m.type]++;
       }
     }
@@ -1243,12 +1360,16 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
   });
 
   // ── zero allocation on the audio thread ──
-  it("@us US73: the render path creates no closures or iterators per grain / quantum", () => {
+  it("@us US73: the render path creates no closures, iterators or object literals per grain / quantum", () => {
     // Pass 1 claimed zero per-event allocation, but bestLag() built a
     // fullScore closure per grain, loopBounds() a clamp closure per call, and
     // process() / captureTail() / synthesizeBlock() iterated with for…of.
-    // Only the channel-layout reallocation branches (Array.from with a
-    // Float32Array factory) may allocate.
+    // Pass 3: loopBounds() still returned a fresh { start, end, len } per
+    // call (every quantum, every grain, each wrap) — it now fills one
+    // preallocated object. Only the channel-layout reallocation branches
+    // (Array.from with a Float32Array factory) may allocate, plus the
+    // postMessage payloads (structured-cloned by the port regardless, ≤ ~10
+    // per second).
     const body = (name) => {
       const m = new RegExp(`\\n  ${name}\\([^)]*\\) \\{`).exec(SRC);
       expect(m, name).not.toBe(null);
@@ -1265,12 +1386,32 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
       "process", "produce", "synthesizeBlock", "bestLag", "fullScore", "read", "readMono", "sampleAt",
       "audibleStream", "audibleFrame", "loopBounds", "wrap", "queueSeam", "captureTail",
     ];
+    // Drop every `this.port.postMessage(…)` call (balanced parentheses).
+    const withoutPosts = (code) => {
+      let out = "";
+      let i = 0;
+      for (;;) {
+        const k = code.indexOf("this.port.postMessage(", i);
+        if (k < 0) return out + code.slice(i);
+        out += code.slice(i, k);
+        let depth = 0;
+        let j = k + "this.port.postMessage".length;
+        for (; j < code.length; j++) {
+          if (code[j] === "(") depth++;
+          else if (code[j] === ")" && --depth === 0) break;
+        }
+        i = j + 1;
+      }
+    };
     for (const name of hot) {
-      const code = body(name)
+      const code = withoutPosts(body(name))
         .split("\n")
         .filter((l) => !/Array\.from\(\{ length: n \}, \(\) => new Float32Array\(/.test(l))
         .join("\n");
       expect(code, `${name}: closure`).not.toMatch(/=>/);
+      // `{` after `=`, `(`, `,`, `:`, `?`, `[` or `return` opens an object literal.
+      expect(code, `${name}: object literal`).not.toMatch(/(?:[=(,:?[]|\breturn)\s*\{/);
+      expect(code, `${name}: array literal`).not.toMatch(/(?:[=(,:?]|\breturn)\s*\[/);
       expect(code, `${name}: for…of`).not.toMatch(/for \((const|let|var) [^;)]+ of /);
       expect(code, `${name}: array callback`).not.toMatch(/\.(map|forEach|filter|reduce)\(/);
     }

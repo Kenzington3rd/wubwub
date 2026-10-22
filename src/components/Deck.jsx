@@ -238,6 +238,11 @@ const Deck = forwardRef(function Deck(
   const sourceRef = useRef(null);
   const chainRef = useRef(null); // The full graph from buildDeckChain
   const startTimeRef = useRef(0);
+  // Context time of the last HOST re-anchor of startTimeRef (play / seek /
+  // cue jump / mode hop, speed change, bend, roll release). KEYLOCK position
+  // and looped reports measured before it describe the pre-anchor playhead
+  // (e.g. the old position before a seek) and are dropped.
+  const lastAnchorAtRef = useRef(-Infinity);
   const offsetRef = useRef(0);
   const speedRef = useRef(speed);
   // The base speed the CURRENT wall-clock anchor (startTimeRef) was laid down
@@ -866,14 +871,19 @@ const Deck = forwardRef(function Deck(
           // the deck's timeline deliberately keeps running underneath — its
           // reports must not drag the timeline back into the roll window.
           if (rollRef.current) return;
+          // A report whose sample was heard before the host's last re-anchor
+          // is stale (still in flight when the seek / speed change landed):
+          // applying it would drag the timeline back to the old playhead.
+          if (Number.isFinite(m.at) && m.at < lastAnchorAtRef.current) return;
           const seconds = Number(m.seconds);
           if (!Number.isFinite(seconds)) return;
           const c = audioCtxRef.current;
           const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
           currentTimeRef.current = seconds;
           setCurrentTime(seconds);
-          // `at` is the worklet's own currentTime when it took the reading;
-          // anchoring to it removes the port-message latency from the anchor.
+          // `at` is the context time the reported sample is heard at (the
+          // end of the worklet's render quantum); anchoring to it removes
+          // the port-message latency from the anchor.
           // Older workers omit it — fall back to the arrival time.
           const anchorAt = Number.isFinite(m.at) ? m.at : c?.currentTime;
           if (Number.isFinite(anchorAt)) startTimeRef.current = anchorAt - seconds / effRate;
@@ -969,6 +979,7 @@ const Deck = forwardRef(function Deck(
           node.port.postMessage({ type: "play", offset: target });
           const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
           startTimeRef.current = ctx.currentTime - target / effRate;
+          lastAnchorAtRef.current = ctx.currentTime;
           isPlayingRef.current = true;
           setIsPlaying(true);
           clearInterval(timeIntervalRef.current);
@@ -1007,6 +1018,7 @@ const Deck = forwardRef(function Deck(
       // same divisor or the displayed time drifts by ±4% relative to the
       // audible playback whenever the user seeks mid-nudge.
       startTimeRef.current = ctx.currentTime - target / effRate;
+      lastAnchorAtRef.current = ctx.currentTime;
       isPlayingRef.current = true;
       setIsPlaying(true);
 
@@ -1281,6 +1293,7 @@ const Deck = forwardRef(function Deck(
         currentTimeRef.current = pos;
         setCurrentTime(pos);
         startTimeRef.current = ctx.currentTime - pos / effRate;
+        lastAnchorAtRef.current = ctx.currentTime;
       }
       try {
         node?.port?.postMessage({ type: "setLoop", enabled: isLoopingRef.current });
@@ -1385,6 +1398,7 @@ const Deck = forwardRef(function Deck(
       currentTimeRef.current = live;
       setCurrentTime(live);
       startTimeRef.current = c.currentTime - live / effRate;
+      lastAnchorAtRef.current = c.currentTime;
     };
     // W3.1 — KEYLOCK: the stretch worklet's rate param carries tempo; the
     // wall-clock anchor uses the same effective rate as the interval.
@@ -1446,6 +1460,7 @@ const Deck = forwardRef(function Deck(
           isLoopingRef.current && d > 0 ? ((pos % d) + d) % d : Math.max(0, pos);
         currentTimeRef.current = known;
         startTimeRef.current = ctx.currentTime - known / newEff;
+        lastAnchorAtRef.current = ctx.currentTime;
       }
       bendRef.current = offset;
       updateStretchRate();
@@ -1463,6 +1478,7 @@ const Deck = forwardRef(function Deck(
       currentTimeRef.current = live;
       setCurrentTime(live);
       startTimeRef.current = ctx.currentTime - live / newEff;
+      lastAnchorAtRef.current = ctx.currentTime;
       bendRef.current = offset;
       rollRef.current.source.playbackRate.setTargetAtTime(newEff, ctx.currentTime, 0.015);
       return;
@@ -1488,6 +1504,7 @@ const Deck = forwardRef(function Deck(
         isLoopingRef.current && d > 0 ? ((pos % d) + d) % d : Math.max(0, pos);
       currentTimeRef.current = known;
       startTimeRef.current = ctx.currentTime - known / newEff;
+      lastAnchorAtRef.current = ctx.currentTime;
     }
     bendRef.current = offset;
     const target = newEff;

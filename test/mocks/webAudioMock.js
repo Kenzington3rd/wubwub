@@ -241,7 +241,10 @@ class MockAudioWorkletNode extends MockAudioNode {
     //   host → worklet  { type: "setLoop", enabled, start?, end? }  seconds of
     //                   source time; omitted start/end = whole track.
     //                   `load` may carry `loop: boolean` (whole-track).
-    //   worklet → host  { type: "looped", seconds } once per wrap;
+    //   worklet → host  { type: "looped", seconds, regionStart, at } once per
+    //                   wrap — `seconds` is the audible position just past the
+    //                   seam, heard at context time `at`; `regionStart` the
+    //                   loop start; { type: "position", seconds, at } ~10 Hz;
     //                   { type: "ended" } only with no loop enabled.
     this.state = {
       channels: null,     // transferred copies the worklet keeps resident
@@ -315,8 +318,9 @@ class MockAudioWorkletNode extends MockAudioNode {
       // `state.playing` after an ended report is not vacuous.
       if (data?.type === "ended") this.state.playing = false;
       // A wrap moves the read head back to the region start; the processor
-      // keeps playing (no host round-trip).
-      if (data?.type === "looped") this.state.offset = data.seconds;
+      // keeps playing (no host round-trip). Older payloads carry only
+      // `seconds` (then the region start).
+      if (data?.type === "looped") this.state.offset = data.regionStart ?? data.seconds;
       const ev = { data };
       if (typeof this.port.onmessage === "function") this.port.onmessage(ev);
       for (const fn of this.port._listeners) fn(ev);

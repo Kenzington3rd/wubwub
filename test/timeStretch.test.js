@@ -219,13 +219,17 @@ describe("timeStretch WSOLA quality — US71", () => {
     expect(worst).toBeLessThan(1e-6);
   });
 
-  it("@us US71: high frequencies survive the alignment — white noise HF and a 12 kHz partial within 0.5 dB at rates 1.04 / 0.92", () => {
+  it("@us US71: high frequencies survive the alignment — white-noise spectral tilt within 0.2 dB of rate 1 and a 12 kHz partial within 0.5 dB at rates 0.92 / 1.04 / 1.1", () => {
     // Candidates searched on the NOMINAL grid sat at a different sub-sample
     // fraction than the grain they overlap whenever hopOut × rate is
-    // non-integer, so HF never lined up: 2–4 dB of first-difference (HF
-    // proxy) lost at rates 0.92–1.3. On the natural grid this full-period
-    // LCG noise measures −0.34 / −0.20 dB at 0.92 / 1.04 — the WSOLA floor,
-    // which grows to 1–3 dB at extreme rates (−1.0 at 0.75, −2.7 at 2.0).
+    // non-integer, so HF never lined up. A grid error is a spectral TILT, not
+    // a level change — WSOLA lowers the broadband level of uncorrelated noise
+    // on its own (the old first-difference-vs-source bound was really that
+    // floor) — so measure
+    //   tilt = (diffRmsDb − rmsDb)(output) − (diffRmsDb − rmsDb)(rate-1 output)
+    // Natural grid: |tilt| ≤ 0.017 dB; nominal-grid mutant −1.31 / −1.62 /
+    // −1.37 dB at 0.92 / 1.04 / 1.1. The broadband floor is bounded
+    // separately (0.75 dB; measured −0.18…−0.46 dB).
     let seed = 5;
     const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
     const noise = new Float32Array(SR * 3).map(() => rnd());
@@ -233,10 +237,16 @@ describe("timeStretch WSOLA quality — US71", () => {
     for (let i = 0; i < partial.length; i++) {
       partial[i] = 0.3 * Math.sin((2 * Math.PI * 12000 * i) / SR) + 0.3 * Math.sin((2 * Math.PI * 150 * i) / SR);
     }
-    for (const rate of [1.04, 0.92]) {
-      const out = stretchChannel(noise, rate);
-      const mid = (a) => a.subarray(GRAIN_SIZE * 2, a.length - GRAIN_SIZE * 2);
-      expect(Math.abs(diffRmsDb(mid(out)) - diffRmsDb(mid(noise))), `noise HF @ ${rate}`).toBeLessThan(0.5);
+    const mid = (a) => a.subarray(GRAIN_SIZE * 2, a.length - GRAIN_SIZE * 2);
+    const rmsDb = (a) => 10 * Math.log10(a.reduce((e, v) => e + v * v, 0) / a.length);
+    const noise1 = mid(stretchChannel(noise, 1));
+    const shape1 = diffRmsDb(noise1) - rmsDb(noise1);
+    for (const rate of [0.92, 1.04, 1.1]) {
+      const out = mid(stretchChannel(noise, rate));
+      const tilt = diffRmsDb(out) - rmsDb(out) - shape1;
+      const floor = rmsDb(out) - rmsDb(noise1);
+      expect(Math.abs(tilt), `noise tilt @ ${rate}`).toBeLessThan(0.2);
+      expect(Math.abs(floor), `noise broadband floor @ ${rate}`).toBeLessThan(0.75);
       const p = stretchChannel(partial, rate);
       expect(Math.abs(bandPowerDb(mid(p)) - bandPowerDb(mid(partial))), `12 kHz @ ${rate}`).toBeLessThan(0.5);
     }
