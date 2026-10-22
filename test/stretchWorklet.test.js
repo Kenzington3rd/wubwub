@@ -903,8 +903,8 @@ describe("stretch worklet — review pass 1 fixes — US73", () => {
     }
     // Extreme rates sit on the WSOLA floor: real noise is 1–3 dB down
     // (−1.9 at 0.5, −1.0 at 0.75, −1.7 at 1.5, −2.8 at 2.0). Rate 2 varies
-    // with the noise seed — review pass 4 measured −2.94…−3.40 dB across
-    // seeds — so the bound is 4 dB (3.5 left ~0.1 dB on a bad seed). Guard
+    // with the noise seed — review pass 4 measured ≈ −2.9…−3.5 dB across
+    // seeds (a 48-seed sweep reaches −3.51) — so the bound is 4 dB (~0.5 dB margin). Guard
     // against regressions past that floor; do not read this as "clean".
     for (const rate of [0.5, 0.75, 1.5, 2.0]) {
       expect(Math.abs(diffRmsDb(run(noise, rate)) - diffRmsDb(ref(noise))), `noise HF @ ${rate}`).toBeLessThan(4);
@@ -1141,9 +1141,9 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
     //
     // What precedes the seam matters: WSOLA aligns each grain on the
     // material there, and that alignment sets how far the audible playhead
-    // trails the newest grain. Silence (nothing to align on) understates the
-    // gap, so the rate-2 and 96 kHz cases put real noise at the seam. It is
-    // quiet (±0.01) because the alignment is a NORMALIZED cross-correlation
+    // trails the newest grain. The rate-2 and 96 kHz cases put real noise at
+    // the seam to make the fixture representative of real material (the test
+    // passes and kills the same mutants with silence). It is quiet (±0.01) because the alignment is a NORMALIZED cross-correlation
     // — level-invariant — while the 1 kHz tone stays measurable above it.
     //
     // The look-ahead `ahead = 2 × GRAIN × max(1, rate, pitch)` is pinned by
@@ -1155,7 +1155,8 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
     // dropping the `max`, i.e. a flat 2 × GRAIN = 4096, fails there). The
     // noise seeds are ones whose crossing grain carries enough tone to hear
     // when the re-anchor is skipped; across seeds the gap reaches up to
-    // 0.87–0.93 × GRAIN × max(1, rate, pitch) — hence the 2× safety factor.
+    // 0.87–0.93 × GRAIN × max(1, rate, pitch); the 2× factor is a safety margin
+    // this test does not pin (1× survives by design).
     for (const [srcRate, ctxRate, rate, noiseSeed] of [
       [SAMPLE_RATE, SAMPLE_RATE, 1, null],
       [SAMPLE_RATE, SAMPLE_RATE, 1.5, null],
@@ -1455,7 +1456,7 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
 // tags every transport move with an epoch and the worklet echoes the last
 // one it received in every report.
 describe("stretch worklet — transport epoch — US73", () => {
-  it("@us US73: position and looped echo the epoch of the last load / play / seek / setLoop that carried one (null before any)", () => {
+  it("@us US73: position and looped echo the epoch of the last load / play / seek that carried one (null before any)", () => {
     const len = SAMPLE_RATE * 2;
     const { Processor: P, posted, clock } = loadProcessor();
     const p = new P();
@@ -1488,21 +1489,34 @@ describe("stretch worklet — transport epoch — US73", () => {
     expect(reports(n).length).toBeGreaterThan(0);
     expect(epochsSince(n)).toEqual([3]);
 
-    // A region ahead of the playhead (~0.45 s): the wraps report it too.
+    // setLoop{epoch 4} does NOT store its epoch: the roll-release pair is
+    // setLoop → seek, and a quantum rendered between the two still describes
+    // the old position, so it must report the previous epoch (3). Region
+    // ahead of the playhead (~0.45 s), so the wraps report too.
     n = posted.length;
     send(p, { type: "setLoop", enabled: true, start: 0.6, end: 0.7, epoch: 4 });
     render(p, SAMPLE_RATE * 0.5, { clock });
     expect(ofType(posted.slice(n), "looped").length).toBeGreaterThan(1);
     expect(ofType(posted.slice(n), "position").length).toBeGreaterThan(0);
+    expect(epochsSince(n)).toEqual([3]);
+
+    // The pair's seek lands the epoch; everything after carries it.
+    n = posted.length;
+    send(p, { type: "seek", offset: 0.5, epoch: 4 });
+    render(p, SAMPLE_RATE * 0.5, { clock });
+    expect(reports(n).length).toBeGreaterThan(0);
     expect(epochsSince(n)).toEqual([4]);
 
-    // Even a setLoop the worklet otherwise ignores (degenerate region) moves
-    // the epoch: the host has bumped it, and reports must follow.
+    // A degenerate setLoop (ignored region) is no different: still not stored.
     n = posted.length;
     send(p, { type: "setLoop", enabled: true, start: 0.65, end: 0.65, epoch: 5 });
     render(p, SAMPLE_RATE * 0.25, { clock });
     expect(p.loop).toEqual({ start: 0.6, end: 0.7 }); // region unchanged
     expect(reports(n).length).toBeGreaterThan(0);
+    expect(epochsSince(n)).toEqual([4]);
+    send(p, { type: "seek", offset: 0.5, epoch: 5 });
+    n = posted.length;
+    render(p, SAMPLE_RATE * 0.25, { clock });
     expect(epochsSince(n)).toEqual([5]);
 
     // pause carries no transport epoch; the next play's does.

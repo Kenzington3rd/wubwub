@@ -19,10 +19,12 @@
 //        shorter than one hop, or end ≤ start, is ignored — the previous loop
 //        state stands); enabled: false → no loop, play to the end.
 //   `epoch` (optional integer): the host's transport epoch. load / play /
-//   seek / setLoop store it when present (even a setLoop that is otherwise
-//   ignored), and every `position` / `looped` echoes the last one stored
-//   (null before any), so the host can drop reports measured before its
-//   latest transport move — `at` alone cannot separate them.
+//   seek store it when present — NOT setLoop: a roll release is the pair
+//   setLoop{epoch N} → seek{epoch N}, and a quantum rendered between the two
+//   describes the OLD position, so it must still report N−1 (the pair's epoch
+//   is stored once its seek lands). Every `position` / `looped` echoes the
+//   last one stored (null before any), so the host can drop reports measured
+//   before its latest transport move — `at` alone cannot separate them.
 // Worklet → host:
 //   { type: "position", seconds, at, epoch }  ~every 100 ms: the source position of
 //        the sample about to leave the node (the AUDIBLE playhead), and `at`,
@@ -192,7 +194,7 @@ class StretchProcessor extends AudioWorkletProcessor {
 
   onMessage(m) {
     if (
-      (m.type === "load" || m.type === "play" || m.type === "seek" || m.type === "setLoop") &&
+      (m.type === "load" || m.type === "play" || m.type === "seek") &&
       Number.isFinite(m.epoch)
     ) {
       this.epoch = m.epoch;

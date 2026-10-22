@@ -247,7 +247,8 @@ class MockAudioWorkletNode extends MockAudioNode {
     //                   `regionStart` the loop start; { type: "position",
     //                   seconds, at, epoch } ~10 Hz; { type: "ended" } only
     //                   with no loop enabled.
-    // Transport epoch: load / play / seek / setLoop store `epoch` when they
+    // Transport epoch: load / play / seek (NOT setLoop — a quantum between a
+    // roll-release pair must still report the old epoch) store `epoch` when they
     // carry one (state.epoch, null before any) and emit() stamps it on every
     // position / looped report that does not set its own `epoch` key — a test
     // simulates a stale report by passing an old epoch, or an epoch-less
@@ -278,7 +279,7 @@ class MockAudioWorkletNode extends MockAudioNode {
         const m = msg || {};
         const st = node.state;
         if (
-          (m.type === "load" || m.type === "play" || m.type === "seek" || m.type === "setLoop") &&
+          (m.type === "load" || m.type === "play" || m.type === "seek") &&
           Number.isFinite(m.epoch)
         ) {
           st.epoch = m.epoch;

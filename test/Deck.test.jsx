@@ -2717,6 +2717,55 @@ describe("Deck KEYLOCK — worklet state follows every transport path — US73",
     }
   });
 
+  // Review pass 5 — every host move that re-bases the worklet's read position
+  // must take a NEW epoch (strictly above the previous outgoing message's),
+  // or a report from before the move is accepted as current.
+  const prevEpoch = (msgs, idx) => {
+    for (let i = idx - 1; i >= 0; i--) if (Number.isFinite(msgs[i].epoch)) return msgs[i].epoch;
+    return null;
+  };
+
+  it("@us US73: the KEYLOCK load posted for a new buffer takes a new transport epoch (strictly above the previous outgoing message's)", async () => {
+    const { api, node } = await keylockDeck();
+    await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+    const next = new MockAudioBuffer(1, 22050 * 3, 22050);
+    await act(async () => { await api.deckRef.current.loadBuffer(next, "next.wav"); });
+    await act(async () => { await api.deckRef.current.play(); await tick(); });
+    const msgs = node.port.postedMessages;
+    const i = msgs.map((m) => m.type).lastIndexOf("load");
+    expect(msgs[i].channels).not.toBeNull();
+    expect(Number.isFinite(msgs[i].epoch)).toBe(true);
+    expect(prevEpoch(msgs, i)).not.toBeNull();
+    expect(msgs[i].epoch).toBeGreaterThan(prevEpoch(msgs, i));
+  });
+
+  it("@us US73: EJECT's load {channels:null} takes a new transport epoch (strictly above the previous outgoing message's)", async () => {
+    const { api, node } = await keylockDeck();
+    await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Eject the track from deck A/i })); });
+    const msgs = node.port.postedMessages;
+    const i = msgs.map((m) => m.type).lastIndexOf("load");
+    expect(msgs[i].channels).toBeNull();
+    expect(Number.isFinite(msgs[i].epoch)).toBe(true);
+    expect(prevEpoch(msgs, i)).not.toBeNull();
+    expect(msgs[i].epoch).toBeGreaterThan(prevEpoch(msgs, i));
+  });
+
+  it("@us US73 / US72: a KEYLOCK roll start's setLoop + seek pair takes one new transport epoch (strictly above the previous outgoing message's)", async () => {
+    const { api, node } = await keylockDeck({ loop: true });
+    await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+    const n = node.port.postedMessages.length;
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    const msgs = node.port.postedMessages;
+    expect(msgs[n].type).toBe("setLoop");
+    expect(msgs[n + 1].type).toBe("seek");
+    expect(msgs[n + 1].epoch).toBe(msgs[n].epoch);
+    expect(prevEpoch(msgs, n)).not.toBeNull();
+    expect(msgs[n].epoch).toBeGreaterThan(prevEpoch(msgs, n));
+    await act(async () => { fireEvent.pointerUp(rollBtn); await tick(); });
+  });
+
   // Review pass 4 — transport epoch. A report already in flight when the host
   // moves the read position (load / play / seek / roll release) describes the
   // OLD playhead. Its `at` cannot say so: in real Chromium stale reports carry
