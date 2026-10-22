@@ -53,10 +53,12 @@
 //   pitchRatio — resample ratio (2^(semitones/12)); 1 = keylock
 //
 // The synthesis mirrors src/audio/timeStretch.js: GRAIN-sample periodic-Hann
-// grains (2048 at 44.1 / 48 kHz, 4096 at 88.2 / 96 kHz — ~45 ms, see below)
-// at 75% overlap (× ½ so the overlap sums to exactly 1), each grain's
-// start nudged within ±(SEARCH + DECIM − 1) samples (12.5 ms, see below) of its nominal
-// position to the offset that best matches the natural continuation of the
+// grains (2048 at 44.1 / 48 kHz, 4096 at 88.2 / 96 kHz — ~43–46 ms at 44.1 /
+// 48 / 88.2 / 96 / 176.4 / 192 kHz; the power-of-two step gives 64 ms at 32 or
+// 64 kHz and 85–93 ms at 22.05 / 24 kHz, see below) at 75% overlap (× ½ so the
+// overlap sums to exactly 1), each grain's start nudged within
+// ±(SEARCH + DECIM − 1) samples (~12.6 ms, see below) of its nominal position
+// to the offset that best matches the natural continuation of the
 // previous grain (WSOLA, normalized cross-correlation on the channel sum,
 // coarse-to-fine), then read
 // through a linear-interp resampler at pitchRatio. At rate 1 / pitch 1 the
@@ -121,7 +123,9 @@
 const DECIM = 4 * 2 ** Math.max(0, Math.round(Math.log2(sampleRate / 44100)));
 // Grain and hop scale with the context rate in the same steps as DECIM:
 // 2048 / 512 at 44.1 / 48 kHz, 4096 / 1024 at 88.2 / 96 kHz, 8192 / 2048 at
-// 192 kHz — so a grain spans ~43–46 ms at ≥ 44.1 kHz (below that the 2048 floor gives 85–93 ms). With a fixed 2048 the
+// 192 kHz — so a grain spans ~43–46 ms at 44.1 / 48 / 88.2 / 96 / 176.4 /
+// 192 kHz (the power-of-two step gives 64 ms at 32 or 64 kHz and 85–93 ms at
+// 22.05 / 24 kHz). With a fixed 2048 the
 // grain was 21 ms at 96 kHz while the radius (fixed in time) spanned 2.3 hops
 // instead of ~1.1: grains re-read transients and short kicks played twice
 // (29 of 416 at 96 kHz vs 8 / 5 at 44.1 / 48 kHz; now 6 of 416). Everything
@@ -321,16 +325,17 @@ class StretchProcessor extends AudioWorkletProcessor {
       // How far past the audible playhead grains in flight can already read:
       // about one grain span at the current read rate plus the widest WSOLA
       // nudge (SEARCH + DECIM − 1 output samples, read at `pitch` source
-      // frames each). The 2× is a SAFETY FACTOR, not part of the bound. The
-      // worst measured gap (audible playhead → first grain reading past the
-      // seam, noise at the seam, 44.1 / 48 / 96 kHz contexts with the
-      // rate-scaled grain, rates 1–2, 12 seeds) is up to ~1.24× the GRAIN
-      // term (96 kHz, rate 1.25, offset sweep) / ~1.0× the bracket / 0.5× of
-      // `ahead`; the 2× is the margin.
-      // NOT FALSIFIABLE at the current margin: either the (SEARCH + DECIM)
-      // term or the 2× alone covers every measured gap, so dropping one of
-      // them passes every test (the loop-off seam test pins only the GRAIN ×
-      // max(…) term). Both are kept by design, as margin.
+      // frames each). The 2× is not merely margin. The worst measured gap
+      // (audible playhead → first grain reading past the seam, noise at the
+      // seam; 44.1 / 48 / 96 kHz contexts with the rate-scaled grain, rates
+      // 1–2, 20 seeds × 40 play offsets) is ~1.34× the GRAIN × max(1, rate)
+      // term (48 kHz, rate 1.10), ~1.06× the bracket GRAIN × rate +
+      // (SEARCH + DECIM) × pitch, and ~0.53× of `ahead`. The bracket alone
+      // falls short just above rate 1, so the 2× is what keeps it safe there.
+      // NOT FALSIFIABLE by the current tests: the loop-off seam test pins only
+      // the GRAIN × max(…) term, so no test fails if the (SEARCH + DECIM) term
+      // is dropped. The sweep above says the 2× is needed; the term is kept as
+      // margin.
       const ahead =
         2 * (GRAIN * Math.max(1, this.lastRate, this.lastPitch) + (SEARCH + DECIM) * this.lastPitch);
       if (this.seamCount > 0 || p + ahead >= b.end) {

@@ -8,9 +8,10 @@
 // Model:
 //   - Output is synthesized in grains of defaultGrainSize(sampleRate)
 //     samples (2048 at 44.1 / 48 kHz, 4096 at 88.2 / 96 kHz — ~43–46 ms at
-//     ≥ 44.1 kHz; below that the 2048 floor gives 85–93 ms) at 75% overlap
-//     (hop OUT = grain/4), each windowed by a periodic Hann window scaled by OLA_GAIN so the four overlapping
-//     windows sum to exactly 1.
+//     44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz; the power-of-two step gives
+//     64 ms at 32 or 64 kHz and 85–93 ms at 22.05 / 24 kHz) at 75% overlap
+//     (hop OUT = grain/4), each windowed by a periodic Hann window scaled by
+//     OLA_GAIN so the four overlapping windows sum to exactly 1.
 //   - Grain N is NOMINALLY read from the input at N × hopOut × rate — so
 //     rate > 1 plays faster (grains sample the input further apart) and
 //     rate < 1 slower, while each grain itself plays at its natural pitch.
@@ -73,9 +74,11 @@ export function coarseDecimation(sampleRate = 44100) {
 }
 // Grain size at a context rate: scales with the decimation (2048 at 44.1 /
 // 48 kHz, 4096 at 88.2 / 96 kHz, 8192 at 192 kHz) so a grain spans ~43–46 ms
-// at every rate. A fixed 2048 was 21 ms at 96 kHz while the radius (fixed in
-// time) spanned 2.3 hops instead of ~1.1, so grains re-read transients and
-// short kicks played twice (39 of 556 at 96 kHz; now 9 of 556).
+// at 44.1 / 48 / 88.2 / 96 / 176.4 / 192 kHz (the power-of-two step gives 64 ms
+// at 32 or 64 kHz and 85–93 ms at 22.05 / 24 kHz). A fixed 2048 was 21 ms at
+// 96 kHz while the radius (fixed in time) spanned 2.3 hops instead of ~1.1, so
+// grains re-read transients and short kicks played twice (39 of 556 at 96 kHz;
+// now 9 of 556).
 export function defaultGrainSize(sampleRate = 44100) {
   return (GRAIN_SIZE * coarseDecimation(sampleRate)) / DECIM;
 }

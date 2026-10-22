@@ -1155,11 +1155,12 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
     // 96 kHz track with noise at deck speed 2 in a 44.1 kHz context (rate
     // 4.35, pitch 2.18 — so dropping the `max`, i.e. a flat 2 × GRAIN = 4096,
     // fails there). The noise seeds are ones whose crossing grain carries
-    // enough tone to hear when the re-anchor is skipped; across seeds, rates
-    // 1–2 and 44.1 / 48 / 96 kHz contexts the gap reaches up to 1.19 × GRAIN
-    // × max(1, rate, pitch) (48 kHz, rate 1.25; 0.48× of `ahead`); the 2×
-    // factor and the (SEARCH + DECIM) term are safety margin this test does
-    // not pin (not falsifiable at the current margin — see disableLoop).
+    // enough tone to hear when the re-anchor is skipped. Across 20 seeds ×
+    // 40 play offsets, rates 1–2 and 44.1 / 48 / 96 kHz contexts, the gap
+    // reaches ~1.34 × GRAIN × max(1, rate) (48 kHz, rate 1.10), ~1.06 × the
+    // bracket, and ~0.53 × `ahead`. The 2× factor is what keeps the bracket
+    // safe for rates just above 1, so it is not merely margin. This test pins
+    // the GRAIN × max(…) term only (see disableLoop).
     for (const [srcRate, ctxRate, rate, noiseSeed] of [
       [SAMPLE_RATE, SAMPLE_RATE, 1, null],
       [SAMPLE_RATE, SAMPLE_RATE, 1.5, null],

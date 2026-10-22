@@ -28,7 +28,7 @@ function bundleText(dir) {
 //
 // Measured from the real minified output (identical in dist/ and dist-single/):
 //   looper-processor   source 2662 B  -> minified 1111 B  (bound 1400, ~26% headroom)
-//   stretch-processor  source 33931 B -> minified 10053 B  (bound 11600, ~15% headroom)
+//   stretch-processor  source 34015 B -> minified 10053 B  (bound 11600, ~15% headroom)
 // Bump the bound when a worklet legitimately grows; it exists to catch
 // minification being switched off, not to cap size.
 const MAX_MINIFIED_BYTES = {

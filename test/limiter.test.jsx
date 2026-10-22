@@ -63,8 +63,9 @@ function trackContexts() {
 // has no lookahead, so it is a safety net, not a hard ceiling.
 const LIMITER_SPEC = {
   threshold: -2, // dB — only engage on genuine summed overs
-  knee: 0, // abrupt onset = a true limiter (not a soft comp)
-  ratio: 20, // near-infinite ratio = hard ceiling
+  knee: 0, // abrupt onset, limiter-like (not a soft comp)
+  // ratio 20 ≈ limiting; no lookahead, so a safety net rather than a hard ceiling
+  ratio: 20,
   attack: 0.003, // fast enough to catch transients
   release: 0.1, // quick recovery without audible pumping
 };
