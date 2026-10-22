@@ -1146,17 +1146,18 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
     // passes and kills the same mutants with silence). It is quiet (±0.01) because the alignment is a NORMALIZED cross-correlation
     // — level-invariant — while the 1 kHz tone stays measurable above it.
     //
-    // The look-ahead `ahead = 2 × GRAIN × max(1, rate, pitch)` is pinned by
-    // the configurations: at the first quantum whose newest grain reads past
-    // the seam, the audible playhead is 1712 / 1909 source frames short of it
-    // at rates 1 / 1.5 (silence), 2114 at rate 2 with noise (so a flat
-    // `ahead = GRAIN` = 2048 fails), and 5139 for a 96 kHz track with noise
-    // at deck speed 2 in a 44.1 kHz context (rate 4.35, pitch 2.18 — so
-    // dropping the `max`, i.e. a flat 2 × GRAIN = 4096, fails there). The
-    // noise seeds are ones whose crossing grain carries enough tone to hear
-    // when the re-anchor is skipped; across seeds the gap reaches up to
-    // 0.87–0.93 × GRAIN × max(1, rate, pitch); the 2× factor is a safety margin
-    // this test does not pin (1× survives by design).
+    // The look-ahead `ahead = 2 × (GRAIN × max(1, rate, pitch) + SEARCH ×
+    // pitch)` is pinned by the configurations: at the first quantum whose
+    // newest grain reads past the seam, the audible playhead is 1712 / 1909
+    // source frames short of it at rates 1 / 1.5 (silence), 2207 at rate 2
+    // with noise (so a flat `ahead = GRAIN` = 2048 fails), and 5505 for a
+    // 96 kHz track with noise at deck speed 2 in a 44.1 kHz context (rate
+    // 4.35, pitch 2.18 — so dropping the `max`, i.e. a flat 2 × GRAIN = 4096,
+    // fails there). The noise seeds are ones whose crossing grain carries
+    // enough tone to hear when the re-anchor is skipped; across seeds and
+    // 44.1 / 48 / 96 kHz contexts the gap reaches up to 0.998 × GRAIN ×
+    // max(1, rate, pitch) (0.84× of the bound with the SEARCH term); the 2×
+    // factor and the SEARCH term are safety margin this test does not pin.
     for (const [srcRate, ctxRate, rate, noiseSeed] of [
       [SAMPLE_RATE, SAMPLE_RATE, 1, null],
       [SAMPLE_RATE, SAMPLE_RATE, 1.5, null],
@@ -1525,5 +1526,76 @@ describe("stretch worklet — transport epoch — US73", () => {
     send(p, { type: "play", offset: 0.1 });
     render(p, SAMPLE_RATE * 0.25, { clock });
     expect(epochsSince(n)).toEqual([5]);
+  });
+});
+
+// ── Review pass 7: sub-bass keylock at any context rate; cold-start fade ──
+// The alignment search radius was a fixed 384 samples, so the lowest pitch
+// it could hold (half a period inside ±SEARCH) moved with the context rate:
+// ~57 Hz at 44.1 kHz, ~62 Hz at 48 kHz, ~125 Hz at 96 kHz. Below it the lag
+// pinned to the search edge every grain and the bass came out at f0 × rate.
+// The radius is now half the period of 40 Hz in TIME (552 / 600 / 1200
+// samples). Measured (rates 0.92–1.5): every tone ≥ 41 Hz holds within
+// 0.1 dB at f0 at 44.1 / 48 / 96 kHz; with SEARCH = 384 the same probe read
+// −41 / −34 dB at f0 for 41 / 49 Hz at 44.1 kHz, −41 / −34 / −27 dB for
+// 41 / 49 / 55 Hz at 48 kHz and −38…−58 dB for 41–110 Hz at 96 kHz.
+// Hann-windowed single-bin amplitude (2 s: f0 and f0 × rate sit ≥ 3 bins
+// apart, where Hann leakage is far below −20 dB).
+function hannAmp(y, f, sr) {
+  let re = 0;
+  let im = 0;
+  let ws = 0;
+  for (let i = 0; i < y.length; i++) {
+    const w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / y.length));
+    const a = (2 * Math.PI * f * i) / sr;
+    re += y[i] * w * Math.cos(a);
+    im += y[i] * w * Math.sin(a);
+    ws += w;
+  }
+  return (2 * Math.hypot(re, im)) / ws;
+}
+const dB = (x) => 20 * Math.log10(x);
+
+describe("stretch worklet — review pass 7 — US73", () => {
+  it("@us US73: sub-bass stays keylocked at every context rate — 41 Hz @ 44.1 kHz, 49 Hz @ 48 kHz, 90 / 49 Hz @ 96 kHz hold f0 within 0.5 dB with < −20 dB at f0 × rate (rates 1.04 / 0.92)", () => {
+    for (const [sr, f0] of [
+      [44100, 41],
+      [48000, 49],
+      [96000, 90],
+      [96000, 49], // below the 44.1 kHz radius's cutoff: a fixed 552 fails here
+    ]) {
+      const A = 0.6;
+      const src = new Float32Array(sr * 4);
+      for (let i = 0; i < src.length; i++) src[i] = A * Math.sin((2 * Math.PI * f0 * i) / sr);
+      for (const rate of [1.04, 0.92]) {
+        const tag = `${f0} Hz @ ${sr} Hz, rate ${rate}`;
+        const { Processor: P } = loadProcessor({ sampleRate: sr });
+        const p = new P();
+        send(p, { type: "load", channels: [src], sampleRate: sr });
+        send(p, { type: "play", offset: 0.2 });
+        render(p, sr * 0.5, { rate, ctxRate: sr });
+        const y = render(p, sr * 2, { rate, ctxRate: sr });
+        expect(Math.abs(dB(hannAmp(y, f0, sr) / A)), `${tag}: level at f0`).toBeLessThan(0.5);
+        expect(dB(hannAmp(y, f0 * rate, sr) / A), `${tag}: level at f0 × rate`).toBeLessThan(-20);
+      }
+    }
+  });
+
+  it("@us US73: a cold play rises no faster than the explicit 4 ms linear fade-in (|out[k]| ≤ k / FADE on a full-scale DC track)", () => {
+    // Kept deliberately (review pass 7): the start-of-stream normalisation
+    // floor (NORM_FLOOR) already ramps a fresh stream, but only as a side
+    // effect of the window shape; the explicit fade is what guarantees the
+    // 4 ms edge regardless of that tuning. This bound fails without it.
+    const FADE = Math.round(SAMPLE_RATE * 0.004);
+    const { Processor: P } = loadProcessor();
+    const p = new P();
+    send(p, { type: "load", channels: [new Float32Array(SAMPLE_RATE).fill(1)], sampleRate: SAMPLE_RATE });
+    send(p, { type: "play", offset: 0.3 });
+    const out = render(p, QUANTUM * 4);
+    for (let k = 0; k < FADE; k++) {
+      expect(Math.abs(out[k]), `sample ${k}`).toBeLessThanOrEqual(k / FADE + 1e-6);
+    }
+    // ...and it does arrive: full level once fade and floor are both done.
+    for (let k = FADE + 64; k < out.length; k++) expect(out[k], `sample ${k}`).toBeCloseTo(1, 4);
   });
 });

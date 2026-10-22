@@ -54,9 +54,10 @@
 //
 // The synthesis mirrors src/audio/timeStretch.js: 2048-sample periodic-Hann
 // grains at 75% overlap (× ½ so the overlap sums to exactly 1), each grain's
-// start nudged within ±SEARCH samples of its nominal position to the offset
-// that best matches the natural continuation of the previous grain (WSOLA,
-// normalized cross-correlation on the channel sum, coarse-to-fine), then read
+// start nudged within ±SEARCH samples (12.5 ms, see below) of its nominal
+// position to the offset that best matches the natural continuation of the
+// previous grain (WSOLA, normalized cross-correlation on the channel sum,
+// coarse-to-fine), then read
 // through a linear-interp resampler at pitchRatio. At rate 1 / pitch 1 the
 // search is skipped and output equals input after the 3-hop fade-in.
 //
@@ -101,7 +102,16 @@
 const GRAIN = 2048;
 const HOP = GRAIN / 4;
 const OLA_GAIN = (2 * HOP) / GRAIN;
-const SEARCH = 384;
+// Alignment search radius, defined in TIME: half the period of 40 Hz
+// (552 / 600 / 1200 samples at 44.1 / 48 / 96 kHz; `sampleRate` is the
+// AudioWorkletGlobalScope's context rate), so bass stays keylocked down to
+// ~40 Hz at any context rate. A fixed 384 samples put the cutoff at ~57 Hz
+// at 44.1 kHz, ~62 Hz at 48 kHz and ~125 Hz at 96 kHz — below it no
+// candidate one period away lies inside the search, the lag sticks at the
+// edge every grain and the bass plays at f0 × rate. Multiple of DECIM.
+// Mirrors timeStretch.js#searchRadius. The WSOLA scratch buffers below are
+// sized from it in the constructor, after it is known.
+const SEARCH = Math.max(384, 4 * Math.ceil(sampleRate / 80 / 4));
 const CORR = GRAIN - HOP;
 const DECIM = 4;
 const EPS = 1e-12;
@@ -282,12 +292,16 @@ class StretchProcessor extends AudioWorkletProcessor {
     if (b && this.playing && this.streaming) {
       const p = this.audibleFrame();
       // How far past the audible playhead grains in flight can already read:
-      // at most about one grain span at the current read rate. The 2× is a
-      // SAFETY FACTOR, not part of the bound — the worst measured gap
-      // (audible playhead → first grain reading past the seam) is 0.93 ×
-      // GRAIN × max(1, rate, pitch) with noise at the seam, so 1× would leave
-      // only 7% headroom.
-      const ahead = 2 * GRAIN * Math.max(1, this.lastRate, this.lastPitch);
+      // about one grain span at the current read rate plus the widest WSOLA
+      // nudge (SEARCH output samples, read at `pitch` source frames each).
+      // The 2× is a SAFETY FACTOR, not part of the bound. With the search
+      // radius in time (up to 1200 samples at 96 kHz) the worst measured gap
+      // (audible playhead → first grain reading past the seam, noise at the
+      // seam, 44.1 / 48 / 96 kHz contexts, rates 1–2) reaches 0.97–0.998× the
+      // old GRAIN × max(1, rate, pitch) term alone — no margin left there —
+      // and 0.84× of the bracketed bound (with the SEARCH term).
+      const ahead =
+        2 * (GRAIN * Math.max(1, this.lastRate, this.lastPitch) + SEARCH * this.lastPitch);
       if (this.seamCount > 0 || p + ahead >= b.end) {
         this.captureTail();
         this.loop = null;
@@ -308,7 +322,11 @@ class StretchProcessor extends AudioWorkletProcessor {
     this.audLap = 0;
     this.startWrapped = false;
     this.pendingRead = 0;
-    this.inPos = 0; // new stream fades in over FADE samples
+    // New stream fades in over FADE samples. Kept on purpose (review pass 7):
+    // the NORM_FLOOR start normalisation also ramps a cold start, but only as
+    // a side effect of the window shape and floor; this is the explicit 4 ms
+    // edge. Pinned by the cold-play fade-in test.
+    this.inPos = 0;
     this.grainCount = 0;
     this.normOn = false;
     this.wsum.fill(0);

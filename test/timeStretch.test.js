@@ -5,6 +5,8 @@ import {
   readGrain,
   stretchChannel,
   findBestLag,
+  searchRadius,
+  SEARCH,
   GRAIN_SIZE,
   HOP_OUT,
   OLA_GAIN,
@@ -265,6 +267,55 @@ describe("timeStretch WSOLA quality — US71", () => {
     expect(findBestLag(ref, region, corr, search)).toBe(37);
     const refBack = region.slice(search - 201, search - 201 + corr);
     expect(findBestLag(refBack, region, corr, search)).toBe(-201);
+  });
+});
+
+describe("timeStretch sub-bass keylock — US71", () => {
+  // Review pass 7: the search radius is half the period of 40 Hz in TIME,
+  // not a fixed 384 samples, so the bass cutoff no longer moves with the
+  // sample rate (fixed 384: ~57 / ~62 / ~125 Hz at 44.1 / 48 / 96 kHz).
+  // Hann-windowed single-bin amplitude over the steady state.
+  const hannAmp = (y, f, sr) => {
+    let re = 0;
+    let im = 0;
+    let ws = 0;
+    for (let i = 0; i < y.length; i++) {
+      const w = 0.5 * (1 - Math.cos((2 * Math.PI * i) / y.length));
+      const a = (2 * Math.PI * f * i) / sr;
+      re += y[i] * w * Math.cos(a);
+      im += y[i] * w * Math.sin(a);
+      ws += w;
+    }
+    return (2 * Math.hypot(re, im)) / ws;
+  };
+
+  it("@us US71: searchRadius is half the period of 40 Hz in samples (multiple of 4), floored at the old 384", () => {
+    expect(SEARCH).toBe(384);
+    expect(searchRadius(44100)).toBe(552);
+    expect(searchRadius(48000)).toBe(600);
+    expect(searchRadius(96000)).toBe(1200);
+    expect(searchRadius(22050)).toBe(384);
+    expect(searchRadius()).toBe(552); // default 44.1 kHz
+  });
+
+  it("@us US71: 41 Hz @ 44.1 kHz, 49 Hz @ 48 kHz, 90 / 49 Hz @ 96 kHz hold f0 within 0.5 dB with < −20 dB at f0 × rate (rates 1.04 / 0.92)", () => {
+    for (const [sr, f0] of [
+      [44100, 41],
+      [48000, 49],
+      [96000, 90],
+      [96000, 49], // below the 44.1 kHz radius's cutoff: a fixed 552 fails here
+    ]) {
+      const A = 0.6;
+      const src = new Float32Array(sr * 3);
+      for (let i = 0; i < src.length; i++) src[i] = A * Math.sin((2 * Math.PI * f0 * i) / sr);
+      for (const rate of [1.04, 0.92]) {
+        const tag = `${f0} Hz @ ${sr} Hz, rate ${rate}`;
+        const out = stretchChannel(src, rate, 1, GRAIN_SIZE, sr);
+        const y = out.subarray(Math.round(sr * 0.25), Math.round(sr * 2.25));
+        expect(Math.abs(20 * Math.log10(hannAmp(y, f0, sr) / A)), `${tag}: level at f0`).toBeLessThan(0.5);
+        expect(20 * Math.log10(hannAmp(y, f0 * rate, sr) / A), `${tag}: level at f0 × rate`).toBeLessThan(-20);
+      }
+    }
   });
 });
 
