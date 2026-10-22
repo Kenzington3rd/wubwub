@@ -91,10 +91,15 @@ const EDGE_FADE_S = 0.004;
 // EDGE_FADE_S. (τ = S/4 left ~1.8%, −35 dB — a larger step than a full-scale
 // 100 Hz sine's own per-sample step, i.e. still a faint click.)
 const EDGE_FADE_TAU = EDGE_FADE_S / 6;
+// BufferSource → its per-source GainNode
 const sourceFades = new WeakMap();
+// Extra slack on the scheduled stop. The fade itself completes in ~EDGE_FADE_S;
+// the margin only protects against a late-scheduled automation event
+// shrinking the fade before the source is cut.
+const EDGE_STOP_MARGIN_S = 0.01;
 // W3.1 × W3.4 — shortest KEYLOCK roll region: comfortably above the stretch
 // worklet's one-HOP (512-frame) minimum at any sample rate ≥ 32 kHz.
-const KEYLOCK_MIN_ROLL_S = 0.02; // BufferSource → its per-source GainNode
+const KEYLOCK_MIN_ROLL_S = 0.02;
 
 // Wire src → fade → dest with a short fade-in. Returns the fade node.
 function connectWithEdgeFade(ctx, src, dest) {
@@ -124,7 +129,7 @@ function stopWithEdgeFade(ctx, src) {
     try { fade.gain.setTargetAtTime(0, now, EDGE_FADE_TAU); } catch {}
   }
   try {
-    src.stop(fade ? now + EDGE_FADE_S : now);
+    src.stop(fade ? now + EDGE_FADE_S + EDGE_STOP_MARGIN_S : now);
   } catch {
     // Never started / already stopped — nothing will fire onended; release now.
     try { src.disconnect(); } catch {}
@@ -867,7 +872,11 @@ const Deck = forwardRef(function Deck(
           const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
           currentTimeRef.current = seconds;
           setCurrentTime(seconds);
-          if (c) startTimeRef.current = c.currentTime - seconds / effRate;
+          // `at` is the worklet's own currentTime when it took the reading;
+          // anchoring to it removes the port-message latency from the anchor.
+          // Older workers omit it — fall back to the arrival time.
+          const anchorAt = Number.isFinite(m.at) ? m.at : c?.currentTime;
+          if (Number.isFinite(anchorAt)) startTimeRef.current = anchorAt - seconds / effRate;
         } else if (m.type === "ended") {
           // The worklet only reports `ended` when no loop is enabled and the
           // audible output reached the end — it has already stopped itself.

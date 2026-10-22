@@ -283,6 +283,14 @@ class MockAudioWorkletNode extends MockAudioNode {
             end: null,
           };
         } else if (m.type === "setLoop") {
+          // Parity with the processor: a degenerate region (end <= start, or
+          // shorter than one 512-frame hop) is ignored and the previous loop
+          // state is kept.
+          if (m.enabled && Number.isFinite(m.end)) {
+            const s0 = Number.isFinite(m.start) ? m.start : 0;
+            const minLen = st.sampleRate ? 512 / st.sampleRate : 0.012;
+            if (m.end <= s0 || m.end - s0 < minLen) return;
+          }
           st.loop = {
             enabled: !!m.enabled,
             start: Number.isFinite(m.start) ? m.start : null,
