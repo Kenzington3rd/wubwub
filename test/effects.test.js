@@ -129,6 +129,20 @@ describe("buildDistortionCurve — US20", () => {
     expect(two[1]).toBeGreaterThan(0);
   });
 
+  // `new Float32Array(4.5)` throws RangeError — the Math.floor is load-bearing.
+  it("@us US20: a fractional sample count floors to an integer length (no RangeError) and stays odd-symmetric", () => {
+    for (const [n, len] of [[4.5, 4], [2.9, 2], [1.5, 2], [1024.999, 1024]]) {
+      let c;
+      expect(() => { c = buildDistortionCurve(40, n); }, `samples ${n}`).not.toThrow();
+      expect(c.length, `samples ${n}`).toBe(len);
+      for (let i = 0; i < len; i++) {
+        expect(Number.isFinite(c[i])).toBe(true);
+        expect(c[i]).toBe(-c[len - 1 - i]);
+      }
+      expect(c[len - 1]).toBeGreaterThan(0);
+    }
+  });
+
   it("@us US20: drive=0 is monotonic and near-linear (low gain)", () => {
     const curve = buildDistortionCurve(0, 1024);
     // Centre (between samples 511 and 512) is 0, midway up should be positive

@@ -5,21 +5,26 @@
 // PWA-subpath builds depend on this).
 //
 // Protocol (port messages, host → worklet):
-//   { type: "load", channels: [Float32Array…], sampleRate, loop? }
+//   { type: "load", channels: [Float32Array…], sampleRate, loop?, epoch? }
 //        adopt a track; resets to not-playing at 0. `loop: true` loops the
 //        whole track; anything else clears any loop (a region belongs to the
 //        track it was set on).
-//   { type: "play", offset }   — start synthesis from `offset` seconds
+//   { type: "play", offset, epoch? } — start synthesis from `offset` seconds
 //   { type: "pause" }          — stop producing; the output ramps to zero over
 //        ~4 ms (state reads playing=false at once, audio tails for the fade)
-//   { type: "seek", offset }   — jump the read position
-//   { type: "setLoop", enabled, start?, end? }
+//   { type: "seek", offset, epoch? } — jump the read position
+//   { type: "setLoop", enabled, start?, end?, epoch? }
 //        seconds in source time. enabled + no start/end → whole track;
 //        enabled + start/end → that region (clamped to the track; a region
 //        shorter than one hop, or end ≤ start, is ignored — the previous loop
 //        state stands); enabled: false → no loop, play to the end.
+//   `epoch` (optional integer): the host's transport epoch. load / play /
+//   seek / setLoop store it when present (even a setLoop that is otherwise
+//   ignored), and every `position` / `looped` echoes the last one stored
+//   (null before any), so the host can drop reports measured before its
+//   latest transport move — `at` alone cannot separate them.
 // Worklet → host:
-//   { type: "position", seconds, at }  ~every 100 ms: the source position of
+//   { type: "position", seconds, at, epoch }  ~every 100 ms: the source position of
 //        the sample about to leave the node (the AUDIBLE playhead), and `at`,
 //        the context time (seconds) that sample is heard at — the end of the
 //        render quantum it was measured after (currentTime + frames /
@@ -31,7 +36,7 @@
 //        the overlap-add group delay ≈ (GRAIN/2)·(pitch − rate) plus the mean
 //        WSOLA nudge, which a write-head estimate (nominal + emitted × rate)
 //        misses by up to ~27 ms at rate 2.
-//   { type: "looped", seconds, regionStart, at }  once per wrap, when the
+//   { type: "looped", seconds, regionStart, at, epoch }  once per wrap, when the
 //        audible position crosses the seam (or at once when play / seek / a
 //        region change lands past the region end); `seconds` / `at` are the
 //        exact audible position and its context time, as for `position`
@@ -154,6 +159,8 @@ class StretchProcessor extends AudioWorkletProcessor {
     // A stream that started past the region end wrapped at once.
     this.startWrapped = false;
     this.lastReport = 0;
+    // Host transport epoch echoed in reports (see protocol header).
+    this.epoch = null;
     // Edge-fade state. release: samples of pause fade-out left. inPos: how
     // far the current stream's fade-in has progressed. tail: the previous
     // stream's fading remainder after a seek / re-play / loop jump.
@@ -184,6 +191,12 @@ class StretchProcessor extends AudioWorkletProcessor {
   }
 
   onMessage(m) {
+    if (
+      (m.type === "load" || m.type === "play" || m.type === "seek" || m.type === "setLoop") &&
+      Number.isFinite(m.epoch)
+    ) {
+      this.epoch = m.epoch;
+    }
     if (m.type === "load") {
       // A load (eject included) over a sounding stream fades the OLD
       // channels out — the tail is rendered before they are dropped.
@@ -266,6 +279,12 @@ class StretchProcessor extends AudioWorkletProcessor {
     const b = this.loopBounds();
     if (b && this.playing && this.streaming) {
       const p = this.audibleFrame();
+      // How far past the audible playhead grains in flight can already read:
+      // at most about one grain span at the current read rate. The 2× is a
+      // SAFETY FACTOR, not part of the bound — the worst measured gap
+      // (audible playhead → first grain reading past the seam) is 0.93 ×
+      // GRAIN × max(1, rate, pitch) with noise at the seam, so 1× would leave
+      // only 7% headroom.
       const ahead = 2 * GRAIN * Math.max(1, this.lastRate, this.lastPitch);
       if (this.seamCount > 0 || p + ahead >= b.end) {
         this.captureTail();
@@ -664,6 +683,7 @@ class StretchProcessor extends AudioWorkletProcessor {
         seconds: audible / this.sourceSampleRate,
         regionStart: b ? b.start / this.sourceSampleRate : 0,
         at,
+        epoch: this.epoch,
       });
     }
     // Position report (~10 Hz) in source-track seconds, stamped with the
@@ -675,6 +695,7 @@ class StretchProcessor extends AudioWorkletProcessor {
         type: "position",
         seconds: audible / this.sourceSampleRate,
         at,
+        epoch: this.epoch,
       });
     }
     // End of track (no loop) → report and fade out: the grains still hold

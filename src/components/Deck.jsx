@@ -238,10 +238,19 @@ const Deck = forwardRef(function Deck(
   const sourceRef = useRef(null);
   const chainRef = useRef(null); // The full graph from buildDeckChain
   const startTimeRef = useRef(0);
+  // KEYLOCK transport epoch. Bumped on every message that moves the
+  // worklet's read position — `load`, `play`, `seek`, and the roll start /
+  // release `setLoop` + `seek` pairs — and sent with it; the worklet echoes
+  // the epoch it last received in every `position` / `looped`. A report from
+  // a previous epoch was measured before that move (still in flight when it
+  // landed) and is dropped: applying it would drag the timeline back to the
+  // old playhead. `at` alone cannot tell: in real Chromium stale reports
+  // carry `at` from anchor+0 to anchor+512 frames, fresh ones from
+  // anchor+128 — the ranges overlap.
+  const transportEpochRef = useRef(0);
   // Context time of the last HOST re-anchor of startTimeRef (play / seek /
-  // cue jump / mode hop, speed change, bend, roll release). KEYLOCK position
-  // and looped reports measured before it describe the pre-anchor playhead
-  // (e.g. the old position before a seek) and are dropped.
+  // cue jump / mode hop, speed change, bend, roll release). Fallback only,
+  // for reports WITHOUT an epoch: one heard at or before it is dropped.
   const lastAnchorAtRef = useRef(-Infinity);
   const offsetRef = useRef(0);
   const speedRef = useRef(speed);
@@ -871,10 +880,13 @@ const Deck = forwardRef(function Deck(
           // the deck's timeline deliberately keeps running underneath — its
           // reports must not drag the timeline back into the roll window.
           if (rollRef.current) return;
-          // A report whose sample was heard before the host's last re-anchor
-          // is stale (still in flight when the seek / speed change landed):
-          // applying it would drag the timeline back to the old playhead.
-          if (Number.isFinite(m.at) && m.at < lastAnchorAtRef.current) return;
+          // A report from a previous transport epoch is stale (measured
+          // before the last load / play / seek / roll release landed).
+          // Reports without an epoch fall back to `at`: one heard at or
+          // before the host's last re-anchor is dropped.
+          if (Number.isFinite(m.epoch)) {
+            if (m.epoch !== transportEpochRef.current) return;
+          } else if (Number.isFinite(m.at) && m.at <= lastAnchorAtRef.current) return;
           const seconds = Number(m.seconds);
           if (!Number.isFinite(seconds)) return;
           const c = audioCtxRef.current;
@@ -917,7 +929,7 @@ const Deck = forwardRef(function Deck(
       channels.push(buf.getChannelData(c).slice());
     }
     node.port.postMessage(
-      { type: "load", channels, sampleRate: buf.sampleRate, loop: isLoopingRef.current },
+      { type: "load", channels, sampleRate: buf.sampleRate, loop: isLoopingRef.current, epoch: ++transportEpochRef.current },
       channels.map((ch) => ch.buffer)
     );
     stretchLoadedBufferRef.current = buf;
@@ -975,8 +987,9 @@ const Deck = forwardRef(function Deck(
           // state on every (re-)entry — `load` above only carries it when a
           // new track's channels were posted, and a mode hop or a play after
           // a loop toggle in VARI must not inherit a stale state.
-          node.port.postMessage({ type: "setLoop", enabled: isLoopingRef.current });
-          node.port.postMessage({ type: "play", offset: target });
+          const epoch = ++transportEpochRef.current;
+          node.port.postMessage({ type: "setLoop", enabled: isLoopingRef.current, epoch });
+          node.port.postMessage({ type: "play", offset: target, epoch });
           const effRate = clamp(speedRef.current + (bendRef?.current || 0), 0.5, 2.0);
           startTimeRef.current = ctx.currentTime - target / effRate;
           lastAnchorAtRef.current = ctx.currentTime;
@@ -1120,7 +1133,7 @@ const Deck = forwardRef(function Deck(
     // doesn't touch it; tell the worklet to drop it too, or it stays resident
     // until the next track is posted.
     try {
-      stretchNodeRef.current?.port?.postMessage({ type: "load", channels: null });
+      stretchNodeRef.current?.port?.postMessage({ type: "load", channels: null, epoch: ++transportEpochRef.current });
     } catch {}
     // This button disables itself as a result of its own click. Hand focus to
     // the load button first, or the browser drops it to <body> and a keyboard
@@ -1295,9 +1308,12 @@ const Deck = forwardRef(function Deck(
         startTimeRef.current = ctx.currentTime - pos / effRate;
         lastAnchorAtRef.current = ctx.currentTime;
       }
+      // One epoch for the pair: reports from inside the roll (or in flight
+      // across the release) describe the roll region, not this position.
+      const epoch = ++transportEpochRef.current;
       try {
-        node?.port?.postMessage({ type: "setLoop", enabled: isLoopingRef.current });
-        if (isPlayingRef.current) node?.port?.postMessage({ type: "seek", offset: pos });
+        node?.port?.postMessage({ type: "setLoop", enabled: isLoopingRef.current, epoch });
+        if (isPlayingRef.current) node?.port?.postMessage({ type: "seek", offset: pos, epoch });
       } catch {}
       return;
     }
@@ -1348,9 +1364,10 @@ const Deck = forwardRef(function Deck(
         const loopEnd = Math.max(loopStart + KEYLOCK_MIN_ROLL_S, pos);
         rollRef.current = { keylock: true };
         setRollActive(beats);
+        const epoch = ++transportEpochRef.current;
         try {
-          node.port.postMessage({ type: "setLoop", enabled: true, start: loopStart, end: loopEnd });
-          node.port.postMessage({ type: "seek", offset: loopStart });
+          node.port.postMessage({ type: "setLoop", enabled: true, start: loopStart, end: loopEnd, epoch });
+          node.port.postMessage({ type: "seek", offset: loopStart, epoch });
         } catch {}
         return;
       }

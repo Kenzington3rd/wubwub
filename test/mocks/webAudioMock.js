@@ -241,17 +241,24 @@ class MockAudioWorkletNode extends MockAudioNode {
     //   host → worklet  { type: "setLoop", enabled, start?, end? }  seconds of
     //                   source time; omitted start/end = whole track.
     //                   `load` may carry `loop: boolean` (whole-track).
-    //   worklet → host  { type: "looped", seconds, regionStart, at } once per
-    //                   wrap — `seconds` is the audible position just past the
-    //                   seam, heard at context time `at`; `regionStart` the
-    //                   loop start; { type: "position", seconds, at } ~10 Hz;
-    //                   { type: "ended" } only with no loop enabled.
+    //   worklet → host  { type: "looped", seconds, regionStart, at, epoch }
+    //                   once per wrap — `seconds` is the audible position just
+    //                   past the seam, heard at context time `at`;
+    //                   `regionStart` the loop start; { type: "position",
+    //                   seconds, at, epoch } ~10 Hz; { type: "ended" } only
+    //                   with no loop enabled.
+    // Transport epoch: load / play / seek / setLoop store `epoch` when they
+    // carry one (state.epoch, null before any) and emit() stamps it on every
+    // position / looped report that does not set its own `epoch` key — a test
+    // simulates a stale report by passing an old epoch, or an epoch-less
+    // (older-worker) report with `epoch: undefined`.
     this.state = {
       channels: null,     // transferred copies the worklet keeps resident
       sampleRate: null,
       playing: false,
       offset: 0,          // seconds, last play/seek target (or wrap point)
       loop: { enabled: false, start: null, end: null }, // null = track edge
+      epoch: null,        // last transport epoch received (echoed in reports)
     };
     const node = this;
     this.port = {
@@ -270,6 +277,12 @@ class MockAudioWorkletNode extends MockAudioNode {
         this.postedMessages.push(msg);
         const m = msg || {};
         const st = node.state;
+        if (
+          (m.type === "load" || m.type === "play" || m.type === "seek" || m.type === "setLoop") &&
+          Number.isFinite(m.epoch)
+        ) {
+          st.epoch = m.epoch;
+        }
         if (m.type === "load") {
           st.channels = m.channels || null;
           // Processor falls back to the context rate when none is sent.
@@ -321,6 +334,9 @@ class MockAudioWorkletNode extends MockAudioNode {
       // keeps playing (no host round-trip). Older payloads carry only
       // `seconds` (then the region start).
       if (data?.type === "looped") this.state.offset = data.regionStart ?? data.seconds;
+      if ((data?.type === "position" || data?.type === "looped") && !("epoch" in data)) {
+        data = { ...data, epoch: this.state.epoch };
+      }
       const ev = { data };
       if (typeof this.port.onmessage === "function") this.port.onmessage(ev);
       for (const fn of this.port._listeners) fn(ev);

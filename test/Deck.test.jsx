@@ -2623,7 +2623,8 @@ describe("Deck KEYLOCK — worklet state follows every transport path — US73",
     await act(async () => { await api.deckRef.current.play(); await tick(); });
     const msgs = node.port.postedMessages;
     const lastPlay = msgs.map((m) => m.type).lastIndexOf("play");
-    expect(msgs[lastPlay - 1]).toEqual({ type: "setLoop", enabled: false });
+    // One transport epoch for the setLoop + play pair.
+    expect(msgs[lastPlay - 1]).toEqual({ type: "setLoop", enabled: false, epoch: msgs[lastPlay].epoch });
     expect(node.state.loop.enabled).toBe(false);
     expect(node.state.playing).toBe(true);
     assertNeverPlaysEmpty(node);
@@ -2645,7 +2646,7 @@ describe("Deck KEYLOCK — worklet state follows every transport path — US73",
     // Default 128 BPM → 1 beat = 60/128 s of SOURCE time ending at the playhead.
     expect(sent[0].end).toBeCloseTo(4, 2);
     expect(sent[0].end - sent[0].start).toBeCloseTo(60 / 128, 3);
-    expect(sent[1]).toEqual({ type: "seek", offset: sent[0].start });
+    expect(sent[1]).toEqual({ type: "seek", offset: sent[0].start, epoch: sent[0].epoch });
     expect(sent.some((m) => m.type === "pause")).toBe(false);
     expect(node.state.playing).toBe(true);
     expect(node.state.loop.start).toBeCloseTo(sent[0].start, 6);
@@ -2662,7 +2663,9 @@ describe("Deck KEYLOCK — worklet state follows every transport path — US73",
     await act(async () => { fireEvent.pointerUp(rollBtn); await tick(); });
     expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
     const released = node.port.postedMessages.slice(before);
-    expect(released[0]).toEqual({ type: "setLoop", enabled: true });
+    // The release pair moves the read head: a new transport epoch for both.
+    expect(released[0]).toEqual({ type: "setLoop", enabled: true, epoch: released[1].epoch });
+    expect(released[1].epoch).toBe(sent[0].epoch + 1);
     expect(released[1].type).toBe("seek");
     expect(released[1].offset).toBeCloseTo(4 + 2 * 1.25, 3);
     expect(released.some((m) => m.type === "play")).toBe(false);
@@ -2714,10 +2717,97 @@ describe("Deck KEYLOCK — worklet state follows every transport path — US73",
     }
   });
 
-  // A report already in flight when the host re-anchors (seek, cue jump,
-  // speed change…) describes the OLD playhead. Its `at` predates the anchor,
-  // so it must be dropped — applying it would drag the timeline back.
-  it("@us US73: position / looped reports measured before the last host re-anchor (seek) are dropped; later ones apply", async () => {
+  // Review pass 4 — transport epoch. A report already in flight when the host
+  // moves the read position (load / play / seek / roll release) describes the
+  // OLD playhead. Its `at` cannot say so: in real Chromium stale reports carry
+  // `at` from anchor+0 to anchor+512 frames and fresh ones from anchor+128,
+  // so each stale report below is stamped AFTER the anchor — only its epoch
+  // gives it away. Applying it would drag the timeline back.
+  it("@us US73: after a seek, position / looped reports from the previous transport epoch are dropped; the current epoch applies", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      act(() => { ctx.advance(1); });
+      const old = node.state.epoch;
+      await act(async () => { api.deckRef.current.seekTo(6); await tick(); });
+      const cur = node.state.epoch;
+      expect(cur).toBeGreaterThan(old);
+      const seekAt = ctx.currentTime;
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: seekAt + 0.002, epoch: old }); });
+      await act(async () => { node.emit({ type: "looped", seconds: 0.01, regionStart: 0, at: seekAt, epoch: old }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(6); // 6.1, not 3.1 / 0.11
+      // Current epoch → re-anchors, whatever its `at`.
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: ctx.currentTime, epoch: cur }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3); // 3.1
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("@us US73: after a play, a report from the previous transport epoch is dropped; the current epoch applies", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      await act(async () => { api.deckRef.current.pause(); });
+      await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+      const old = node.state.epoch;
+      await act(async () => { await api.deckRef.current.play(); await tick(); });
+      const cur = node.state.epoch;
+      expect(cur).toBeGreaterThan(old);
+      expect(node.port.postedMessages.filter((m) => m.type === "play").at(-1).epoch).toBe(cur);
+      await act(async () => { node.emit({ type: "position", seconds: 8, at: ctx.currentTime + 0.002, epoch: old }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(4); // 4.1, not 8.1
+      await act(async () => { node.emit({ type: "position", seconds: 8, at: ctx.currentTime, epoch: cur }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(8); // 8.1
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The roll release is the anchor path that posts no play: setLoop + seek.
+  // A report from inside the roll (its region) still in flight across the
+  // release must not drag the timeline back into the roll window.
+  it("@us US73 / US72: after a KEYLOCK roll release, a report from the roll's epoch is dropped; the release epoch applies", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+      const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+      await act(async () => { fireEvent.pointerDown(rollBtn); });
+      const rollEpoch = node.state.epoch;
+      act(() => { ctx.advance(1); });
+      await act(async () => { fireEvent.pointerUp(rollBtn); await tick(); });
+      const cur = node.state.epoch;
+      expect(cur).toBe(rollEpoch + 1);
+      const released = node.port.postedMessages.slice(-2);
+      expect(released.map((m) => [m.type, m.epoch])).toEqual([["setLoop", cur], ["seek", cur]]);
+      // Roll-region report measured before the release, stamped after it.
+      await act(async () => { node.emit({ type: "position", seconds: 3.7, at: ctx.currentTime + 0.002, epoch: rollEpoch }); });
+      await act(async () => { node.emit({ type: "looped", seconds: 3.6, regionStart: 3.53, at: ctx.currentTime, epoch: rollEpoch }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(5); // 5.1, not 3.8 / 3.7
+      await act(async () => { node.emit({ type: "position", seconds: 7, at: ctx.currentTime, epoch: cur }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(7); // 7.1
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Older workers send no epoch: the `at` fallback drops a report heard AT or
+  // before the host's last re-anchor (`<=` — the commonest stale case has
+  // `at` exactly equal to the anchor time).
+  it("@us US73: a report without an epoch heard at the last re-anchor (seek) is dropped (<=); a later one applies", async () => {
     vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
     try {
       const { api, node } = await keylockDeck({ loop: true });
@@ -2726,15 +2816,40 @@ describe("Deck KEYLOCK — worklet state follows every transport path — US73",
       act(() => { ctx.advance(1); });
       await act(async () => { api.deckRef.current.seekTo(6); await tick(); });
       const seekAt = ctx.currentTime;
-      // Stale: heard 0.5 s before the seek landed.
-      await act(async () => { node.emit({ type: "position", seconds: 3, at: seekAt - 0.5 }); });
-      await act(async () => { node.emit({ type: "looped", seconds: 0.01, regionStart: 0, at: seekAt - 0.2 }); });
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: seekAt - 0.5, epoch: undefined }); });
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: seekAt, epoch: undefined }); });
+      await act(async () => { node.emit({ type: "looped", seconds: 0.01, regionStart: 0, at: seekAt, epoch: undefined }); });
       act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
-      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(6); // 6.1, not 3.6 / 0.31
-      // Fresh: heard after the seek → re-anchors.
-      await act(async () => { node.emit({ type: "position", seconds: 3, at: ctx.currentTime }); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(6); // 6.1, not 3.1 / 0.11
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: ctx.currentTime, epoch: undefined }); });
       act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
       expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3); // 3.1
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Speed changes (and bends) do not move the read position, so they bump no
+  // epoch; they still re-anchor the `at` fallback for epoch-less reports.
+  it("@us US73: a speed change re-anchors the `at` fallback — an epoch-less report heard at it is dropped; an epoch report is not", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      act(() => { ctx.advance(1); });
+      await act(async () => { api.deckRef.current.seekTo(6); await tick(); });
+      act(() => { ctx.advance(1); });
+      const epoch = node.state.epoch;
+      await act(async () => { api.deckRef.current.setSpeed(1.2); });
+      expect(node.state.epoch).toBe(epoch); // not a transport move
+      const speedAt = ctx.currentTime;
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: speedAt, epoch: undefined }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(7); // 7.12, not 3.12
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: speedAt, epoch }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3); // 3.24
     } finally {
       vi.useRealTimers();
     }

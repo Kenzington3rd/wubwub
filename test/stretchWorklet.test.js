@@ -902,10 +902,12 @@ describe("stretch worklet — review pass 1 fixes — US73", () => {
       expect(Math.abs(bandPowerDb(run(partial, rate)) - bandPowerDb(ref(partial))), `12 kHz @ ${rate}`).toBeLessThan(0.5);
     }
     // Extreme rates sit on the WSOLA floor: real noise is 1–3 dB down
-    // (−1.9 at 0.5, −1.0 at 0.75, −1.7 at 1.5, −2.8 at 2.0). Guard against regressions
-    // past that floor; do not read this as "clean".
+    // (−1.9 at 0.5, −1.0 at 0.75, −1.7 at 1.5, −2.8 at 2.0). Rate 2 varies
+    // with the noise seed — review pass 4 measured −2.94…−3.40 dB across
+    // seeds — so the bound is 4 dB (3.5 left ~0.1 dB on a bad seed). Guard
+    // against regressions past that floor; do not read this as "clean".
     for (const rate of [0.5, 0.75, 1.5, 2.0]) {
-      expect(Math.abs(diffRmsDb(run(noise, rate)) - diffRmsDb(ref(noise))), `noise HF @ ${rate}`).toBeLessThan(3.5);
+      expect(Math.abs(diffRmsDb(run(noise, rate)) - diffRmsDb(ref(noise))), `noise HF @ ${rate}`).toBeLessThan(4);
     }
   });
 
@@ -1131,29 +1133,44 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
   });
 
   it("@us US73: loop off with no seam queued but grains already reading past it re-anchors too — no wrapped material is heard", () => {
-    // The track's head (first 0.2 s) is a loud tone, the rest silence. Near
-    // the end of a whole-track loop the newest grain reads across the seam
-    // into that tone before the write head itself wraps. Dropping the loop
-    // without re-anchoring would play those grains out (and the end fade
-    // would replay them).
+    // The track's head (first 0.2 s) is a loud 1 kHz tone. Near the end of a
+    // whole-track loop the newest grain reads across the seam into that tone
+    // before the write head itself wraps. Dropping the loop without
+    // re-anchoring would play those grains out (and the end fade would
+    // replay them).
     //
-    // The look-ahead margin `ahead = 2 × GRAIN × max(1, rate, pitch)` is
-    // pinned by the configurations: at the first quantum whose newest grain
-    // reads past the seam, the audible playhead is 1712 / 1909 / 2107 source
-    // frames short of it at rates 1 / 1.5 / 2 (so `ahead = GRAIN` fails at
-    // rate 2), and 4945 frames short for a 96 kHz track at deck speed 2 in a
-    // 44.1 kHz context (rate 4.35, pitch 2.18 — so dropping the `max`, i.e.
-    // a flat 2 × GRAIN = 4096, fails there).
-    for (const [srcRate, ctxRate, rate] of [
-      [SAMPLE_RATE, SAMPLE_RATE, 1],
-      [SAMPLE_RATE, SAMPLE_RATE, 1.5],
-      [SAMPLE_RATE, SAMPLE_RATE, 2],
-      [96000, SAMPLE_RATE, 2],
+    // What precedes the seam matters: WSOLA aligns each grain on the
+    // material there, and that alignment sets how far the audible playhead
+    // trails the newest grain. Silence (nothing to align on) understates the
+    // gap, so the rate-2 and 96 kHz cases put real noise at the seam. It is
+    // quiet (±0.01) because the alignment is a NORMALIZED cross-correlation
+    // — level-invariant — while the 1 kHz tone stays measurable above it.
+    //
+    // The look-ahead `ahead = 2 × GRAIN × max(1, rate, pitch)` is pinned by
+    // the configurations: at the first quantum whose newest grain reads past
+    // the seam, the audible playhead is 1712 / 1909 source frames short of it
+    // at rates 1 / 1.5 (silence), 2114 at rate 2 with noise (so a flat
+    // `ahead = GRAIN` = 2048 fails), and 5139 for a 96 kHz track with noise
+    // at deck speed 2 in a 44.1 kHz context (rate 4.35, pitch 2.18 — so
+    // dropping the `max`, i.e. a flat 2 × GRAIN = 4096, fails there). The
+    // noise seeds are ones whose crossing grain carries enough tone to hear
+    // when the re-anchor is skipped; across seeds the gap reaches up to
+    // 0.87–0.93 × GRAIN × max(1, rate, pitch) — hence the 2× safety factor.
+    for (const [srcRate, ctxRate, rate, noiseSeed] of [
+      [SAMPLE_RATE, SAMPLE_RATE, 1, null],
+      [SAMPLE_RATE, SAMPLE_RATE, 1.5, null],
+      [SAMPLE_RATE, SAMPLE_RATE, 2, 9],
+      [96000, SAMPLE_RATE, 2, 5],
     ]) {
       const tag = `${srcRate} in ${ctxRate} @ rate ${rate}`;
       const len = srcRate * 2;
       const src = new Float32Array(len);
       for (let i = 0; i < srcRate * 0.2; i++) src[i] = Math.sin((2 * Math.PI * 1000 * i) / srcRate);
+      if (noiseSeed !== null) {
+        let seed = noiseSeed;
+        const rnd = () => ((seed = (seed * 1664525 + 1013904223) >>> 0) / 2 ** 32) - 0.5;
+        for (let i = len - 40000; i < len; i++) src[i] = 0.02 * rnd();
+      }
       const { Processor: P, posted } = loadProcessor({ sampleRate: ctxRate });
       const p = new P();
       send(p, { type: "load", channels: [src], sampleRate: srcRate, loop: true });
@@ -1163,9 +1180,9 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
       while (newestEnd() <= len && guard++ < 400) render(p, QUANTUM, { rate, ctxRate });
       expect(p.seamCount, tag).toBe(0);
       expect(newestEnd(), tag).toBeGreaterThan(len);
-      if (srcRate !== ctxRate) {
-        // Precondition: only the max(1, rate, pitch) factor reaches the seam.
-        expect(len - p.audibleFrame(), tag).toBeGreaterThan(2 * GRAIN_SIZE);
+      if (noiseSeed !== null) {
+        // Precondition: a flat GRAIN (rate 2) / 2 × GRAIN (96 kHz) misses it.
+        expect(len - p.audibleFrame(), tag).toBeGreaterThan((srcRate !== ctxRate ? 2 : 1) * GRAIN_SIZE);
       }
       send(p, { type: "setLoop", enabled: false });
       expect(p.tail, tag).not.toBe(null);
@@ -1173,8 +1190,22 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
       expect(ofType(posted, "looped"), tag).toHaveLength(0);
       expect(ofType(posted, "ended"), tag).toHaveLength(1);
       // Only the crossfade tail may carry the first window-weighted sliver.
-      expect(rms(out.subarray(FADE)), tag).toBeLessThan(1e-3);
-      expect(rms(out), tag).toBeLessThan(0.01);
+      const after = out.subarray(FADE);
+      if (noiseSeed === null) {
+        expect(rms(after), tag).toBeLessThan(1e-3);
+        expect(rms(out), tag).toBeLessThan(0.01);
+      } else {
+        // 1 kHz amplitude past the tail: measured <= 2e-4 (the noise's own
+        // share); a wrapped tone sliver measures 0.01–0.03.
+        let re = 0;
+        let im = 0;
+        for (let i = 0; i < after.length; i++) {
+          const w = (2 * Math.PI * 1000 * i) / ctxRate;
+          re += after[i] * Math.cos(w);
+          im += after[i] * Math.sin(w);
+        }
+        expect((2 * Math.hypot(re, im)) / after.length, tag).toBeLessThan(2e-3);
+      }
     }
   });
 
@@ -1415,5 +1446,70 @@ describe("stretch worklet — review pass 2 fixes — US73", () => {
       expect(code, `${name}: for…of`).not.toMatch(/for \((const|let|var) [^;)]+ of /);
       expect(code, `${name}: array callback`).not.toMatch(/\.(map|forEach|filter|reduce)\(/);
     }
+  });
+});
+
+// ── Review pass 4: transport epoch ──
+// `at` alone cannot separate a stale report from a fresh one (in real
+// Chromium their `at` ranges overlap around a host re-anchor), so the host
+// tags every transport move with an epoch and the worklet echoes the last
+// one it received in every report.
+describe("stretch worklet — transport epoch — US73", () => {
+  it("@us US73: position and looped echo the epoch of the last load / play / seek / setLoop that carried one (null before any)", () => {
+    const len = SAMPLE_RATE * 2;
+    const { Processor: P, posted, clock } = loadProcessor();
+    const p = new P();
+    const reports = (from) => posted.slice(from).filter((m) => m.type === "position" || m.type === "looped");
+    const epochsSince = (from) => [...new Set(reports(from).map((m) => m.epoch))];
+
+    send(p, { type: "load", channels: [tone(len)], sampleRate: SAMPLE_RATE });
+    send(p, { type: "play", offset: 0 });
+    render(p, SAMPLE_RATE * 0.25, { clock });
+    expect(reports(0).length).toBeGreaterThan(0);
+    expect(epochsSince(0)).toEqual([null]);
+
+    // load stores it; a later play WITHOUT one keeps it.
+    let n = posted.length;
+    send(p, { type: "load", channels: [tone(len)], sampleRate: SAMPLE_RATE, epoch: 1 });
+    send(p, { type: "play", offset: 0 });
+    render(p, SAMPLE_RATE * 0.25, { clock });
+    expect(reports(n).length).toBeGreaterThan(0);
+    expect(epochsSince(n)).toEqual([1]);
+
+    n = posted.length;
+    send(p, { type: "play", offset: 0.5, epoch: 2 });
+    render(p, SAMPLE_RATE * 0.25, { clock });
+    expect(reports(n).length).toBeGreaterThan(0);
+    expect(epochsSince(n)).toEqual([2]);
+
+    n = posted.length;
+    send(p, { type: "seek", offset: 0.2, epoch: 3 });
+    render(p, SAMPLE_RATE * 0.25, { clock });
+    expect(reports(n).length).toBeGreaterThan(0);
+    expect(epochsSince(n)).toEqual([3]);
+
+    // A region ahead of the playhead (~0.45 s): the wraps report it too.
+    n = posted.length;
+    send(p, { type: "setLoop", enabled: true, start: 0.6, end: 0.7, epoch: 4 });
+    render(p, SAMPLE_RATE * 0.5, { clock });
+    expect(ofType(posted.slice(n), "looped").length).toBeGreaterThan(1);
+    expect(ofType(posted.slice(n), "position").length).toBeGreaterThan(0);
+    expect(epochsSince(n)).toEqual([4]);
+
+    // Even a setLoop the worklet otherwise ignores (degenerate region) moves
+    // the epoch: the host has bumped it, and reports must follow.
+    n = posted.length;
+    send(p, { type: "setLoop", enabled: true, start: 0.65, end: 0.65, epoch: 5 });
+    render(p, SAMPLE_RATE * 0.25, { clock });
+    expect(p.loop).toEqual({ start: 0.6, end: 0.7 }); // region unchanged
+    expect(reports(n).length).toBeGreaterThan(0);
+    expect(epochsSince(n)).toEqual([5]);
+
+    // pause carries no transport epoch; the next play's does.
+    send(p, { type: "pause", epoch: 99 });
+    n = posted.length;
+    send(p, { type: "play", offset: 0.1 });
+    render(p, SAMPLE_RATE * 0.25, { clock });
+    expect(epochsSince(n)).toEqual([5]);
   });
 });
