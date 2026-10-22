@@ -67,7 +67,11 @@ export function buildReverbIR(
 // 0.5 dB of unity. Loud material (peaks at or above X_REF) stays near its
 // original level instead of collapsing.
 const DISTORTION_X_REF = 0.4;
+// `samples` is clamped to >= 2: the x grid divides by (N-1), so N = 1 (and 0 /
+// negative / NaN) would yield NaN. Two points is the smallest curve that still
+// spans [-1, 1]. Non-finite input falls back to the 4096 default.
 export function buildDistortionCurve(drive = 40, samples = 4096) {
+  samples = Number.isFinite(samples) ? Math.max(2, Math.floor(samples)) : 4096;
   const curve = new Float32Array(samples);
   const k = Math.max(0, drive);
   const a = 1 + k / 20;

@@ -10,7 +10,7 @@ const DEFAULT_BPM = 128;
 // 95% settled at 3*tau (3 ms), 98% at 4*tau (4 ms), 99.3% at 5*tau (5 ms).
 const LOOP_FADE_IN_TAU = 0.001; // fade-in ~95% in 3 ms
 const LOOP_FADE_OUT_TAU = 0.001; // fade-out ~99.3% in 5 ms
-// src.stop() fires 16 ms out: the fade is done by ~5 ms, and the rest is margin
+// src.stop() fires 16 ms out: the fade is ≈ -43 dB at 5 ms and below -130 dB by 16 ms, and the rest is margin
 // so a late-scheduled automation (busy main thread) can't clip the tail.
 const LOOP_STOP_DELAY = 0.016;
 

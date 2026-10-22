@@ -105,6 +105,30 @@ describe("buildDistortionCurve — US20", () => {
     }
   });
 
+  it("@us US20: endpoints pin the (N-1) denominator — curve[N-1] is the closed form at x = 1", () => {
+    for (const n of [1024, 1025, 4096]) {
+      for (const drive of [0, 40, 100]) {
+        const c = buildDistortionCurve(drive, n);
+        const a = 1 + drive / 20;
+        const makeup = (a * 0.4) / Math.tanh(a * 0.4);
+        const expected = (Math.tanh(a) / a) * makeup;
+        expect(c[0]).toBe(-c[n - 1]);
+        expect(Math.abs(c[n - 1] - expected)).toBeLessThan(1e-6);
+      }
+    }
+  });
+
+  it("@us US20: degenerate sample counts clamp to 2 points instead of NaN", () => {
+    for (const n of [1, 0, -5, NaN]) {
+      const c = buildDistortionCurve(40, n);
+      expect(c.length).toBe(Number.isNaN(n) ? 4096 : 2);
+      for (const v of c) expect(Number.isFinite(v)).toBe(true);
+    }
+    const two = buildDistortionCurve(40, 2);
+    expect(two[0]).toBe(-two[1]);
+    expect(two[1]).toBeGreaterThan(0);
+  });
+
   it("@us US20: drive=0 is monotonic and near-linear (low gain)", () => {
     const curve = buildDistortionCurve(0, 1024);
     // Centre (between samples 511 and 512) is 0, midway up should be positive
