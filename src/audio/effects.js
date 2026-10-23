@@ -48,13 +48,39 @@ export function buildReverbIR(
 }
 
 // Soft-clip distortion curve. `drive` in [0, 100].
+//
+// Shape is tanh(a*x) with a = 1 + drive/20: odd-symmetric, monotonic, and
+// bounded inside [-1, 1] on the WaveShaper's input domain.
+//
+// Level: a bare tanh(a*x)/a has unity small-signal gain but caps its output at
+// 1/a, so DRIVE turned loud material DOWN (-9.5 dBFS ceiling at drive 40,
+// -15.6 at drive 100; measured -2 to -12 dB on hot/dense program). The earlier
+// rational curve went the other way (+13.6 dB at drive 40). We now add makeup
+// so a loud reference level passes through at the same level at every drive:
+// the curve is scaled by a*X_REF/tanh(a*X_REF), so an input of X_REF (0.4,
+// about -8 dBFS peak) maps to itself. 0.4 balances the two failure modes: a
+// pure sine at -3 dBFS still loses ~2.5 dB at drive 100 (tanh flattens its
+// peaks) while a high-crest multi-tone gains ~2.6 dB (its small-signal gain
+// dominates); a larger X_REF would push the dense case past +3 dB. Consequence: quiet passages gain up to
+// a*X_REF/tanh(a*X_REF) of small-signal gain (about +7.7 dB at drive 100),
+// which is what a distortion's DRIVE is expected to do, and drive 0 is within
+// 0.5 dB of unity. Loud material (peaks at or above X_REF) stays near its
+// original level instead of collapsing.
+const DISTORTION_X_REF = 0.4;
+// `samples` is clamped to >= 2: the x grid divides by (N-1), so N = 1 (and 0 /
+// negative / NaN) would yield NaN. Two points is the smallest curve that still
+// spans [-1, 1]. Non-finite input falls back to the 4096 default.
 export function buildDistortionCurve(drive = 40, samples = 4096) {
+  samples = Number.isFinite(samples) ? Math.max(2, Math.floor(samples)) : 4096;
   const curve = new Float32Array(samples);
   const k = Math.max(0, drive);
-  const deg = Math.PI / 180;
+  const a = 1 + k / 20;
+  const makeup = (a * DISTORTION_X_REF) / Math.tanh(a * DISTORTION_X_REF);
   for (let i = 0; i < samples; i++) {
-    const x = (i * 2) / samples - 1;
-    curve[i] = ((3 + k) * x * 20 * deg) / (Math.PI + k * Math.abs(x));
+    // WaveShaper reads index (N-1)(x+1)/2, so x must span [-1, 1] over N-1
+    // steps; the integer numerator keeps curve[i] === -curve[N-1-i] exactly.
+    const x = (2 * i - (samples - 1)) / (samples - 1);
+    curve[i] = (Math.tanh(a * x) / a) * makeup;
   }
   return curve;
 }
@@ -85,8 +111,13 @@ export function rampGain(param, target, ctx, tau = 0.02) {
   if (typeof param.cancelAndHoldAtTime === "function") {
     param.cancelAndHoldAtTime(now);
   } else {
-    param.cancelScheduledValues(now);
-    param.setValueAtTime(param.value, now);
+    // Fallback for engines without cancelAndHoldAtTime. Cancel from just
+    // AFTER `now` so a caller's same-instant pin (setValueAtTime(0, now), used
+    // to duck the wet path before an IR / curve swap) survives, and do NOT
+    // re-anchor with `param.value` — that is still the pre-pin value and, being
+    // scheduled later at the same time, would override the pin. The new
+    // setTargetAtTime starts from whatever the surviving timeline yields.
+    param.cancelScheduledValues(now + 1e-6);
   }
   param.setTargetAtTime(target, now, tau);
   if (target === 0) {

@@ -6,6 +6,13 @@ import { LOOPER_BAR_OPTIONS } from "../data.js";
 const SLOT_COUNT = 4;
 const SLOT_COLORS = ["#00f5d4", "#a78bfa", "#f0c040", "#f472b6"];
 const DEFAULT_BPM = 128;
+// Edge fades (per-source GainNode), setTargetAtTime with tau = 1 ms:
+// 95% settled at 3*tau (3 ms), 98% at 4*tau (4 ms), 99.3% at 5*tau (5 ms).
+const LOOP_FADE_IN_TAU = 0.001; // fade-in ~95% in 3 ms
+const LOOP_FADE_OUT_TAU = 0.001; // fade-out ~99.3% in 5 ms
+// src.stop() fires 16 ms out: the fade is ≈ -43 dB at 5 ms and below -130 dB by 16 ms, and the rest is margin
+// so a late-scheduled automation (busy main thread) can't clip the tail.
+const LOOP_STOP_DELAY = 0.016;
 
 // Build an AudioBuffer from two Float32Array channels (raw PCM from the worklet).
 function pcmToAudioBuffer(ctx, left, right, sampleRate) {
@@ -45,6 +52,11 @@ export default function Looper({
   const tapAttachedRefs = useRef(Array(SLOT_COUNT).fill(false));
   // State (not a ref) so the Capture button's busy state re-renders while a
   // capture is in flight.
+  // Per-source edge-fade GainNodes (BufferSource -> fade -> slot gain), keyed by
+  // slot. Start/stop fades live on THIS node, never on the shared slot gain,
+  // which belongs to the volume slider alone (so a stop/restart or a volume
+  // change can never race a fade).
+  const fadeRefs = useRef(Array(SLOT_COUNT).fill(null));
   const [pendingSlot, setPendingSlot] = useState(null);
   // D6 — which slot's bars <select> is currently hovered (-1 = none). Native
   // selects can't carry a CSS :hover from inline styles.
@@ -132,17 +144,40 @@ export default function Looper({
     node.port.postMessage({ type: "capture", slot, seconds });
   };
 
+  // Fade a slot's current source out on its own fade node and release it from
+  // `onended`, once the tail has actually played. The slot gain is not touched.
   const stopSource = (slot) => {
     const src = sourceRefs.current[slot];
     if (!src) return;
-    try {
-      src.onended = null;
-      src.stop();
-    } catch {}
-    try {
-      src.disconnect();
-    } catch {}
+    const fade = fadeRefs.current[slot];
     sourceRefs.current[slot] = null;
+    fadeRefs.current[slot] = null;
+    const ctx = audioCtxRef.current;
+    const release = () => {
+      try { src.disconnect(); } catch {}
+      try { fade?.disconnect(); } catch {}
+    };
+    if (ctx && fade && fade.gain && typeof fade.gain.setTargetAtTime === "function") {
+      const now = ctx.currentTime;
+      // Freeze the live (possibly mid-fade-in) value, as rampGain does; never
+      // re-anchor from the stale `.value` getter.
+      if (typeof fade.gain.cancelAndHoldAtTime === "function") {
+        fade.gain.cancelAndHoldAtTime(now);
+      } else {
+        fade.gain.cancelScheduledValues(now + 1e-6);
+      }
+      fade.gain.setTargetAtTime(0, now, LOOP_FADE_OUT_TAU);
+      src.onended = release;
+      try {
+        src.stop(now + LOOP_STOP_DELAY);
+      } catch {
+        release();
+      }
+      return;
+    }
+    try { src.onended = null; } catch {}
+    try { src.stop(); } catch {}
+    release();
   };
 
   const togglePlay = (slot) => {
@@ -161,9 +196,17 @@ export default function Looper({
     const src = ctx.createBufferSource();
     src.buffer = buffer;
     src.loop = true;
-    src.connect(gain);
+    // ~4 ms fade-in on the source's own node: starting a loop mid-waveform is a
+    // step, and a re-play right after a stop must not inherit a fade-out.
+    const fade = ctx.createGain();
+    const now = ctx.currentTime;
+    fade.gain.setValueAtTime(0, now);
+    fade.gain.setTargetAtTime(1, now, LOOP_FADE_IN_TAU);
+    src.connect(fade);
+    fade.connect(gain);
     src.start();
     sourceRefs.current[slot] = src;
+    fadeRefs.current[slot] = fade;
     setSlots((s) =>
       s.map((row, i) => (i === slot ? { ...row, isPlaying: true } : row))
     );
@@ -235,7 +278,7 @@ export default function Looper({
         </h3>
         <span style={{ fontSize: 10, color: "#8892b0" }}>
           {workletReady
-            ? "Captures from master bus — a fixed window sized from bars × BPM at capture time"
+            ? "Captures the mix pre-limiter, sized from bars × BPM when you press Capture"
             : "Initializing audio worklet…"}
         </span>
       </div>

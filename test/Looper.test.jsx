@@ -161,7 +161,7 @@ describe("Looper — US28", () => {
     const playBtn = screen.getByRole("button", { name: /Play loop 1/i });
     act(() => fireEvent.click(playBtn));
     let src = ctx._lastStartedSource;
-    const slotGain = src.connections[0];
+    const slotGain = src.connections[0].connections[0];
     expect(slotGain).toBeTruthy();
     expect(slotGain.connections).toContain(refs.outputNodeRef.current);
     // The tap was null when the gain was built — no stale connection.
@@ -180,7 +180,7 @@ describe("Looper — US28", () => {
     src = ctx._lastStartedSource;
     // The slot gain is the SAME cached node (still has the output connection),
     // but it has now picked up the deferred tap connection too.
-    expect(src.connections[0]).toBe(slotGain);
+    expect(src.connections[0].connections[0]).toBe(slotGain);
     expect(slotGain.connections).toContain(refs.outputNodeRef.current);
     expect(slotGain.connections).toContain(refs.recordTapRef.current);
   });
@@ -225,9 +225,161 @@ describe("Looper — US28", () => {
     // BOTH the master output AND the parallel pre-limiter record tap.
     const src = ctx._lastStartedSource;
     expect(src).toBeTruthy();
-    const slotGain = src.connections[0];
+    const slotGain = src.connections[0].connections[0];
     expect(slotGain).toBeTruthy();
     expect(slotGain.connections).toContain(refs.outputNodeRef.current);
     expect(slotGain.connections).toContain(refs.recordTapRef.current);
+  });
+
+  // Capture a synthetic loop into slot L1 and return { ctx, playBtn }.
+  function setupLoadedSlot() {
+    let workletNode;
+    render(<Harness workletReady onWorklet={(n) => { workletNode = n; }} />);
+    const ctx = workletNode.context;
+    const buf = new Float32Array(1024);
+    act(() => {
+      for (const fn of workletNode.port._listeners) {
+        fn({ data: { type: "capture", slot: 0, left: buf.buffer.slice(0), right: buf.buffer.slice(0), sampleRate: ctx.sampleRate } });
+      }
+    });
+    return { ctx, playBtn: screen.getByRole("button", { name: /Play loop 1/i }) };
+  }
+
+  it("@us US61: a slot source plays through its own fade node, fading in from 0", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const src = ctx._lastStartedSource;
+    const fade = src.connections[0];
+    const slotGain = fade.connections[0];
+    expect(fade).not.toBe(slotGain);
+    const ev = fade.gain.scheduledValues;
+    expect(ev.find((e) => e.type === "setValue").value).toBe(0);
+    expect(ev.find((e) => e.type === "setTarget" && e.target === 1)).toBeTruthy();
+  });
+
+  it("@us US61: stopping a slot fades the per-source node, schedules a future stop and leaves the slot gain alone", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const src = ctx._lastStartedSource;
+    const fade = src.connections[0];
+    const slotGain = fade.connections[0];
+    const stops = [];
+    src.stop = (when) => stops.push(when);
+    ctx._currentTime = 3.0;
+    const slotBefore = slotGain.gain.scheduledValues.length;
+    const fadeBefore = fade.gain.scheduledValues.length;
+    act(() => fireEvent.click(playBtn)); // stop
+    const events = fade.gain.scheduledValues.slice(fadeBefore);
+    const ramp = events.find((e) => e.type === "setTarget" && e.target === 0);
+    expect(ramp, "stop must ramp the source's fade node to 0").toBeTruthy();
+    expect(stops).toHaveLength(1);
+    expect(stops[0]).toBeGreaterThan(3.0);
+    expect(stops[0]).toBeLessThan(3.02);
+    // The shared slot gain (volume slider's) is never modified by a stop.
+    expect(slotGain.gain.scheduledValues.length).toBe(slotBefore);
+    // Graph is released from onended, after the tail played — not immediately.
+    expect(typeof src.onended).toBe("function");
+    expect(src.connections.length).toBeGreaterThan(0);
+    src.onended();
+    expect(src.connections).toHaveLength(0);
+    expect(fade.connections).toHaveLength(0);
+  });
+
+  it("@us US61: stop-fade bounds — tau <= 1.25 ms, stop >= 4 tau out, delay inside the documented window", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const src = ctx._lastStartedSource;
+    const fade = src.connections[0];
+    const stops = [];
+    src.stop = (when) => stops.push(when);
+    ctx._currentTime = 3.0;
+    const before = fade.gain.scheduledValues.length;
+    act(() => fireEvent.click(playBtn));
+    const ramp = fade.gain.scheduledValues.slice(before).find((e) => e.type === "setTarget" && e.target === 0);
+    expect(ramp.time).toBe(3.0);
+    expect(ramp.tau).toBeGreaterThan(0);
+    expect(ramp.tau).toBeLessThanOrEqual(0.00125 + 1e-12);
+    const delay = stops[0] - 3.0;
+    expect(delay).toBeGreaterThanOrEqual(4 * ramp.tau - 1e-9);
+    // Documented window: >= 10 ms scheduling margin, <= 20 ms so a re-play stays tight.
+    expect(delay).toBeGreaterThanOrEqual(0.010);
+    expect(delay).toBeLessThanOrEqual(0.020);
+  });
+
+  it("@us US61: fade-in reaches >= 95% within 5 ms", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const fade = ctx._lastStartedSource.connections[0];
+    const up = fade.gain.scheduledValues.find((e) => e.type === "setTarget" && e.target === 1);
+    expect(up.tau).toBeGreaterThan(0);
+    expect(1 - Math.exp(-0.005 / up.tau)).toBeGreaterThanOrEqual(0.95);
+  });
+
+  it("@us US61: stop re-anchors with cancelAndHoldAtTime when available, never from the stale .value", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const fade = ctx._lastStartedSource.connections[0];
+    ctx._currentTime = 2.0;
+    const before = fade.gain.scheduledValues.length;
+    act(() => fireEvent.click(playBtn));
+    const ev = fade.gain.scheduledValues.slice(before);
+    expect(ev[0]).toEqual({ type: "cancelAndHold", time: 2.0 });
+    expect(ev.some((e) => e.type === "setValue")).toBe(false);
+    expect(ev.some((e) => e.type === "cancel")).toBe(false);
+    expect(ev.at(-1)).toMatchObject({ type: "setTarget", target: 0, time: 2.0 });
+  });
+
+  it("@us US61: stop falls back to cancelScheduledValues (no stale .value re-anchor) without cancelAndHoldAtTime", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const fade = ctx._lastStartedSource.connections[0];
+    fade.gain.cancelAndHoldAtTime = undefined;
+    ctx._currentTime = 2.0;
+    const before = fade.gain.scheduledValues.length;
+    act(() => fireEvent.click(playBtn));
+    const ev = fade.gain.scheduledValues.slice(before);
+    expect(ev[0].type).toBe("cancel");
+    expect(ev[0].time).toBeGreaterThanOrEqual(2.0);
+    expect(ev[0].time).toBeLessThan(2.001);
+    expect(ev.some((e) => e.type === "setValue")).toBe(false);
+    expect(ev.at(-1)).toMatchObject({ type: "setTarget", target: 0, time: 2.0 });
+  });
+
+  it("@us US61: volume set before stop survives stop and re-play (slot gain stays at the user's value)", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const slotGain = ctx._lastStartedSource.connections[0].connections[0];
+    const vol = screen.getByRole("slider", { name: /Loop 1 volume/i });
+    act(() => fireEvent.change(vol, { target: { value: "0.3" } }));
+    expect(slotGain.gain.value).toBeCloseTo(0.3, 5);
+    act(() => fireEvent.click(playBtn)); // stop
+    act(() => fireEvent.click(playBtn)); // play again
+    expect(slotGain.gain.value).toBeCloseTo(0.3, 5);
+    // No stale restore event at the old volume can land later: nothing on the
+    // slot gain after the 0.3 target.
+    const ev = slotGain.gain.scheduledValues;
+    const lastTarget = ev.map((e) => e.type).lastIndexOf("setTarget");
+    expect(ev.slice(lastTarget + 1).filter((e) => e.type === "setValue")).toHaveLength(0);
+  });
+
+  it("@us US61: an immediate re-play after stop starts a fresh source at full fade-in with no slot-gain attenuation", () => {
+    const { ctx, playBtn } = setupLoadedSlot();
+    act(() => fireEvent.click(playBtn));
+    const first = ctx._lastStartedSource;
+    const slotGain = first.connections[0].connections[0];
+    const slotEventsBefore = slotGain.gain.scheduledValues.length;
+    act(() => fireEvent.click(playBtn)); // stop
+    act(() => fireEvent.click(playBtn)); // re-play within the same instant
+    const second = ctx._lastStartedSource;
+    expect(second).not.toBe(first);
+    const fade2 = second.connections[0];
+    expect(fade2).not.toBe(first.connections[0]);
+    expect(fade2.connections[0]).toBe(slotGain);
+    const ev = fade2.gain.scheduledValues;
+    expect(ev.find((e) => e.type === "setValue").value).toBe(0);
+    expect(ev.find((e) => e.type === "setTarget").target).toBe(1);
+    // The slot gain saw no fade/restore automation from stop or play.
+    expect(slotGain.gain.scheduledValues.length).toBe(slotEventsBefore);
+    expect(slotGain.gain.value).toBeCloseTo(0.8, 5);
   });
 });

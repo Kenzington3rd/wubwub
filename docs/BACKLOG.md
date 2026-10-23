@@ -373,13 +373,14 @@ reject KEYLOCK without touching VARI:
 7. Structural tests can pin the message protocol + rate writes with a mock
    AudioWorkletNode; the QUALITY gate (grain artifacts at 1.1–1.3× on a
    vocal) is a human listening test — ship behind the toggle, listen, then
-   decide whether to promote or iterate grain size / add WSOLA correlation.
+   decide whether to promote or iterate grain size / add WSOLA correlation (done in W4.4).
 
 ### W3.1 status (2026-08-09)
 
-Landed: `src/audio/timeStretch.js` (pure granular OLA core — 4096-sample
-Hann grains, 50% unity overlap, independent rate/pitchRatio via linear-
-interp grain reads; unit-tested incl. unity-OLA and length/pitch behavior)
+Landed: `src/audio/timeStretch.js` (WSOLA core, revised in W4.4 — 2048 / 4096 / 8192-sample
+periodic-Hann grains at 44.1–48 / 88.2–96 / 192 kHz, 75% overlap, each aligned within ±SEARCH samples (±552 / 600 / 1200 samples at 44.1 / 48 / 96 kHz (floor 384), scaled with the context rate to cover ~40 Hz) by normalized
+cross-correlation, independent rate/pitchRatio via linear-
+interp grain reads; unit-tested incl. unity-OLA, alignment and length/pitch behavior)
 and `src/worklets/stretch-worklet.js` (streaming AudioWorklet mirror,
 `stretch-processor`, rate/pitchRatio AudioParams, load/play/pause/seek
 protocol, position reports — ?raw + Blob-URL ready like the looper).
@@ -653,8 +654,8 @@ checks wherever it's reasonable from a headless test environment.
   `base-uri 'self'`, `form-action 'none'`, no `'unsafe-eval'` in
   `script-src`, `worker-src` includes `blob:` (the looper worklet).
 - `test/limiter.test.jsx` — Phase B4. Asserts the App.jsx-built master
-  compressor is configured with brickwall limiter-class params
-  (threshold −9, ratio 20, knee 0, attack 0.003, release 0.1), confirms
+  compressor is configured with safety-net limiter params
+  (threshold −9 at Phase B4, −2 since W4.4; ratio 20, knee 0, attack 0.003, release 0.1), confirms
   the topology delivers every deck's analyser tap to the compressor, and
   walks the path comp → trim → masterGain → destination to confirm there
   is exactly ONE limiter on the master bus.
@@ -674,3 +675,14 @@ checks wherever it's reasonable from a headless test environment.
 - New npm scripts: `verify:build`, `verify:single`, `verify:all`.
 - Final tally: 36 test files / 435 tests, all passing. Build still 75.5 KB
   gzip JS / 90 KB budget. `npm run size` PASS.
+
+### W4.4 follow-ups
+
+- Turning the loop off within ~4 ms of the seam can leave a little already-wrapped audio at low level in the fade-out tail (the `load`-while-sounding hard cut itself was closed in the pass-1 fixes).
+- Every worklet crossfade (seek, loop-off restart) dips to ~0.7× for ~3 ms because of the level floor at stream start; inaudible on program material, measurable on a sine.
+- Master compressor lookahead is still absent (`DynamicsCompressorNode` has no lookahead), so the master stage is a safety net, not a true brickwall. Closing this needs a lookahead limiter, likely an AudioWorklet.
+- Stamp worklet messages with the worklet's `currentTime` so main-thread jank cannot shift the KEYLOCK timeline.
+- Stagger the three KEYLOCK decks' alignment searches on mobile.
+- A real-browser listening pass of the KEYLOCK WSOLA core is still owed (human): check rates 1.02 / 1.12 / 2.0 on vocals and on transient-heavy material.
+- Real-browser check for comb filtering at partial DISTORTION MIX with `oversample = "2x"` (Chromium's oversampled WaveShaper may delay the wet path by tens of samples; measure MIX 0.5, drive 0, sine sweep in Playwright).
+- If mobile glitches appear with three KEYLOCK decks, spread the WSOLA alignment search across render quanta instead of doing it all in every fourth quantum.

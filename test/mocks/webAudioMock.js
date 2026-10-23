@@ -117,6 +117,7 @@ class MockBufferSourceNode extends MockAudioNode {
     this.startedAt = 0;
     this.startOffset = 0;
     this.stopped = false;
+    this.stopTime = null; // the `when` passed to stop() (edge-fade tests)
   }
   start(when = 0, offset = 0) {
     this.started = true;
@@ -126,8 +127,9 @@ class MockBufferSourceNode extends MockAudioNode {
     // OfflineAudioContext.startRendering pass-through).
     if (this.context) this.context._lastStartedSource = this;
   }
-  stop() {
+  stop(when = 0) {
     this.stopped = true;
+    this.stopTime = when;
   }
 }
 
@@ -193,10 +195,12 @@ class MockOscillatorNode extends MockAudioNode {
     this.onended = null;
     this.started = false;
     this.stopped = false;
+    this.stopTime = null; // the `when` passed to stop() (wobble fade tests)
   }
   start() { this.started = true; }
-  stop() {
+  stop(when = 0) {
     this.stopped = true;
+    this.stopTime = when;
     if (this.onended) setTimeout(() => this.onended(), 0);
   }
 }
@@ -227,16 +231,35 @@ class MockAudioWorkletNode extends MockAudioNode {
     this.processorOptions = options?.processorOptions;
     // W3.1 — a stateful stand-in for the processor on the other side of the
     // port. It applies the same transport protocol the real
-    // `stretch-worklet.js` implements (load / play / pause / seek), so a test
-    // can assert what the worklet would be HOLDING and DOING after any
-    // sequence of app messages — not just that some message was sent. The
-    // looper worklet shares the node class; its messages are recorded and
+    // `stretch-worklet.js` implements (load / play / pause / seek / setLoop),
+    // so a test can assert what the worklet would be HOLDING and DOING after
+    // any sequence of app messages — not just that some message was sent.
+    // The looper worklet shares the node class; its messages are recorded and
     // otherwise ignored by this state machine.
+    //
+    // Loop protocol (the worklet owns the wrap):
+    //   host → worklet  { type: "setLoop", enabled, start?, end? }  seconds of
+    //                   source time; omitted start/end = whole track.
+    //                   `load` may carry `loop: boolean` (whole-track).
+    //   worklet → host  { type: "looped", seconds, regionStart, at, epoch }
+    //                   once per wrap — `seconds` is the audible position just
+    //                   past the seam, heard at context time `at`;
+    //                   `regionStart` the loop start; { type: "position",
+    //                   seconds, at, epoch } ~10 Hz; { type: "ended" } only
+    //                   with no loop enabled.
+    // Transport epoch: load / play / seek (NOT setLoop — a quantum between a
+    // roll-release pair must still report the old epoch) store `epoch` when they
+    // carry one (state.epoch, null before any) and emit() stamps it on every
+    // position / looped report that does not set its own `epoch` key — a test
+    // simulates a stale report by passing an old epoch, or an epoch-less
+    // (older-worker) report with `epoch: undefined`.
     this.state = {
       channels: null,     // transferred copies the worklet keeps resident
       sampleRate: null,
       playing: false,
-      offset: 0,          // seconds, last play/seek target
+      offset: 0,          // seconds, last play/seek target (or wrap point)
+      loop: { enabled: false, start: null, end: null }, // null = track edge
+      epoch: null,        // last transport epoch received (echoed in reports)
     };
     const node = this;
     this.port = {
@@ -255,12 +278,44 @@ class MockAudioWorkletNode extends MockAudioNode {
         this.postedMessages.push(msg);
         const m = msg || {};
         const st = node.state;
+        if (
+          (m.type === "load" || m.type === "play" || m.type === "seek") &&
+          Number.isFinite(m.epoch)
+        ) {
+          st.epoch = m.epoch;
+        }
         if (m.type === "load") {
           st.channels = m.channels || null;
           // Processor falls back to the context rate when none is sent.
           st.sampleRate = m.sampleRate || ctx?.sampleRate || null;
           st.playing = false;
           st.offset = 0;
+          // A new track resets any region. Like the processor
+          // (`this.loop = m.loop ? whole-track : null`), `loop: true` loops
+          // the whole track and anything else — including no `loop` key —
+          // clears the loop.
+          st.loop = {
+            enabled: !!m.loop,
+            start: null,
+            end: null,
+          };
+        } else if (m.type === "setLoop") {
+          // Parity with the processor: a degenerate region (end <= start, or
+          // shorter than one hop) is ignored and the previous loop state is
+          // kept. HOP = 512 · 2^round(log2(sr / 44100)) at the CONTEXT rate,
+          // compared in buffer frames, as the worklet does.
+          if (m.enabled && Number.isFinite(m.end)) {
+            const s0 = Number.isFinite(m.start) ? m.start : 0;
+            const ctxSr = ctx?.sampleRate || 44100;
+            const hop = 512 * 2 ** Math.max(0, Math.round(Math.log2(ctxSr / 44100)));
+            const minLen = hop / (st.sampleRate || ctxSr);
+            if (m.end <= s0 || m.end - s0 < minLen) return;
+          }
+          st.loop = {
+            enabled: !!m.enabled,
+            start: Number.isFinite(m.start) ? m.start : null,
+            end: Number.isFinite(m.end) ? m.end : null,
+          };
         } else if (m.type === "play") {
           st.offset = m.offset || 0;
           st.playing = true;
@@ -279,6 +334,13 @@ class MockAudioWorkletNode extends MockAudioNode {
       // *before* it reports "ended" — mirror that so a test asserting
       // `state.playing` after an ended report is not vacuous.
       if (data?.type === "ended") this.state.playing = false;
+      // A wrap moves the read head back to the region start; the processor
+      // keeps playing (no host round-trip). Older payloads carry only
+      // `seconds` (then the region start).
+      if (data?.type === "looped") this.state.offset = data.regionStart ?? data.seconds;
+      if ((data?.type === "position" || data?.type === "looped") && !("epoch" in data)) {
+        data = { ...data, epoch: this.state.epoch };
+      }
       const ev = { data };
       if (typeof this.port.onmessage === "function") this.port.onmessage(ev);
       for (const fn of this.port._listeners) fn(ev);

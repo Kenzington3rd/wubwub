@@ -28,13 +28,14 @@ hash routing, no fetch, no XHR, no WebSocket, no sendBeacon.
 
 | Output | Generated at | UI affordance to trigger | Test |
 |---|---|---|---|
-| Deck A playback (audible) | `Deck.jsx:1393` PLAY button → `togglePlay` → `src.connect(chain.gain)` ultimately reaches `AudioContext.destination` via `App.jsx:208` `gain.connect(ctx.destination)` | PLAY button on Deck A (or `Space` while focused) | `Deck.test.jsx > @us US2`; e2e `App.e2e.test.jsx > @us US26: Space toggles play` |
+| Deck A playback (audible) | Deck PLAY transport button (`Deck.jsx`, `{ icon: "play", action: play … }`) → `togglePlay` → `src → per-source edge-fade Gain (~4 ms; also roll / bite-preview sources) → chain.gain` ultimately reaches `AudioContext.destination` via `App.jsx:232` `gain.connect(ctx.destination)` (comp → trim → master gain, `App.jsx:230-232`) | PLAY button on Deck A (or `Space` while focused) | `Deck.test.jsx > @us US2`; e2e `App.e2e.test.jsx > @us US26: Space toggles play` |
 | Deck B playback (audible) | same as Deck A through Deck B's chain | PLAY button on Deck B (or `Space` while focused) | `Deck.test.jsx > @us US2` |
-| Looper slot playback | `Looper.jsx` Play button per slot → `BufferSource → slotGain → masterCompressor → … → destination` | Play / Stop button per slot in Looper | `Looper.test.jsx > @us US61` |
+| Looper capture tap | `App.jsx` looper `AudioWorkletNode` input is the pre-limiter record tap GainNode (`recordTapRef`), not the compressor output (loops re-enter the compressor, so a post-limiter tap would limit them twice) | Capture button per slot | `limiter.test.jsx > Looper capture tap` |
+| Looper slot playback | `Looper.jsx` Play button per slot → `BufferSource → per-source edge-fade Gain → slotGain → masterCompressor → … → destination` | Play / Stop button per slot in Looper (fade-in ~4 ms on start; stop = ~5 ms fade on the per-source node (tau 1 ms) + `src.stop(now+0.016)` (`LOOP_STOP_DELAY`: fade + scheduling margin), slot gain untouched, graph released in `onended`) | `Looper.test.jsx > @us US61` |
 | Sample pad trigger | `SamplePad.jsx` pad → `BufferSource → padGain → masterCompressor → … → destination` | Pad click (or `Q W E R A S D F`) | `SamplePad.test.jsx > @us US31 / US32` |
 | Bass-drop automated sweep | `Deck.jsx` bassDrop scheduling on `chain.filter.frequency` + `chain.eqLow.gain` AudioParams | BASS DROP button per deck | `Deck.test.jsx > @us US24` |
 | Wobble LFO (Wobble preset) | `Deck.jsx` spawns an `OscillatorNode → eqLow.gain` modulator | BASS DROP button + wobble preset in BassDropMenu | `Deck.test.jsx > @us US24/US34` |
-| Master compressor / brickwall limiter | `App.jsx:191-209` configured DynamicsCompressor with threshold -9, ratio 20, knee 0, attack 0.003, release 0.1 | Always-on safety net; not user-toggleable | `test/limiter.test.js` (new — Phase B4) + `chain.test.js > @us US55` (topology) |
+| Master compressor / safety-net limiter | `App.jsx:201-234` configured DynamicsCompressor (safety net, not a true brickwall) with threshold -2, ratio 20, knee 0, attack 0.003, release 0.1, then 0.65 trim (~3.7 dB margin; no lookahead, so a safety net, not a guarantee) | Always-on safety net; not user-toggleable | `test/limiter.test.jsx` (Phase B4) + `chain.test.js > @us US55` (topology) |
 
 ### Downloads (anchor click → user disk)
 
@@ -183,7 +184,7 @@ Verified by `Grep` over `src/`: no `window.location.search`, no `URLSearchParams
 | B1 | PWA manifest + sw.js + registerSW.js + icons exist on disk and validate | `test/build.test.js` |
 | B2 | Single-file build has zero external scripts/styles; fonts inlined as data: URIs; CSP meta still present | `test/build-single.test.js` |
 | B3 | CSP forbids `connect-src` external, `frame-src 'none'`, `object-src 'none'`, `base-uri 'self'`, no `'unsafe-eval'` | `test/csp.test.js` |
-| B4 | Master compressor configured with limiter-class params (threshold, ratio, knee, attack, release) | `test/limiter.test.js` |
+| B4 | Master compressor configured with limiter-class params (threshold, ratio, knee, attack, release) | `test/limiter.test.jsx` |
 | B5 | Adversarial MIDI cases (1-byte, pitch bend, channel pressure, sysex injection, all 16 channels, mid-stream disconnect, learn-mode stuck-on key) | extended in `test/midiMap.test.js` |
 | B6 | `:focus-visible` rule present in `src/index.css` with correct color token | `test/focus-rings.test.js` |
 | B7 | `@keyframes beatPulse` present in `src/index.css` and consumed by at least one component | `test/animations.test.js` |

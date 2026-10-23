@@ -255,6 +255,76 @@ describe("Deck — integration tests across many user stories", () => {
     expect(bassDrop).toBeDisabled();
   });
 
+  it("@us US34: the wobble preset hands the LPF back to the user's cutoff with a glide, not a jump", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    await act(async () => {
+      await api.deckRef.current.loadBuffer(new MockAudioBuffer(1, sr * 4, sr), "wob.mp3");
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByTitle(/Bass drop preset/i), { target: { value: "wobble" } });
+    });
+    const ctx = api.audioCtxRef.current;
+    const oscs = [];
+    const realCreateOsc = ctx.createOscillator.bind(ctx);
+    ctx.createOscillator = () => { const o = realCreateOsc(); oscs.push(o); return o; };
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /BASS DROP/i }));
+    });
+    expect(oscs).toHaveLength(1);
+    // osc → depth gain → the sweep filter's frequency param.
+    const freq = oscs[0].connections[0].connections[0];
+    // End of the wobble window (the oscillator's scheduled stop at t3).
+    await act(async () => { oscs[0].onended(); });
+    const restore = freq.scheduledValues.at(-1);
+    expect(restore.type).toBe("setTarget");
+    expect(restore.target).toBe(20000);
+    expect(restore.tau).toBe(0.03); // same smoothing as the user filter sweep
+  });
+
+  // The LFO is summed onto the cutoff; osc.stop(t3) removes its instantaneous
+  // value in one sample. Only a depth fade that has reached 0 by the stop
+  // makes the exit clean for every preset (not just whole-cycle ones).
+  it("@us US34: the wobble LFO depth fades to 0 before the oscillator stops", async () => {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const sr = 11025;
+    await act(async () => {
+      await api.deckRef.current.loadBuffer(new MockAudioBuffer(1, sr * 4, sr), "wob.mp3");
+    });
+    await act(async () => {
+      fireEvent.change(screen.getByTitle(/Bass drop preset/i), { target: { value: "wobble" } });
+    });
+    const ctx = api.audioCtxRef.current;
+    const oscs = [];
+    const realCreateOsc = ctx.createOscillator.bind(ctx);
+    ctx.createOscillator = () => { const o = realCreateOsc(); oscs.push(o); return o; };
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /BASS DROP/i }));
+    });
+    expect(oscs).toHaveLength(1);
+    const osc = oscs[0];
+    const depthGain = osc.connections[0];
+    expect(depthGain.nodeType).toBe("GainNode");
+    expect(osc.stopTime).toBeGreaterThan(ctx.currentTime);
+    const sv = depthGain.gain.scheduledValues;
+    const rampIdx = sv.findIndex((e) => e.type === "linearRamp" && e.value === 0);
+    expect(rampIdx).toBeGreaterThan(0);
+    const ramp = sv[rampIdx];
+    // Silent by the stop — never after it.
+    expect(ramp.time).toBeLessThanOrEqual(osc.stopTime);
+    // Anchored at full depth ~20 ms earlier, so it is a ramp, not a step.
+    const anchor = sv[rampIdx - 1];
+    expect(anchor.type).toBe("setValue");
+    expect(anchor.value).toBeGreaterThan(0);
+    expect(ramp.time - anchor.time).toBeGreaterThanOrEqual(0.015);
+    // Pinned window: the fade is anchored 15-30 ms before the oscillator stops.
+    const lead = osc.stopTime - anchor.time;
+    expect(lead).toBeGreaterThanOrEqual(0.015 - 1e-9);
+    expect(lead).toBeLessThanOrEqual(0.03 + 1e-9);
+  });
+
   it("@us US58: no compatible-keys hint before a key is auto-detected", () => {
     render(<Harness />);
     expect(screen.queryByText(/mix →/i)).toBeNull();
@@ -929,6 +999,37 @@ describe("Deck — integration tests across many user stories", () => {
     // At least one new entry — and it must be a setTarget, not a direct write.
     expect(after.length).toBeGreaterThan(0);
     expect(after.at(-1).type).toBe("setTarget");
+  });
+
+  // @us US4 — the speed re-anchor used currentTimeRef, which only the 100 ms
+  // position interval writes. During a slider drag every re-anchor pinned the
+  // timeline to that same stale value: the display froze and pause() later
+  // resumed ~drag-length early (an audible jump; `C` cues landed late).
+  it("@us US4: speed changes inside one interval tick re-anchor from the LIVE position, so pause/play resumes where the audio is", async () => {
+    vi.useFakeTimers(); // the position interval never ticks in this test
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 60, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "drag.mp3"); });
+      await act(async () => { await api.deckRef.current.play(); });
+      const ctx = api.audioCtxRef.current;
+
+      act(() => { ctx.advance(1); }); //            1.0 s at 1.0×  → 1.0
+      await act(async () => { api.deckRef.current.setSpeed(1.2); });
+      act(() => { ctx.advance(1); }); //          + 1.0 s at 1.2×  → 2.2
+      await act(async () => { api.deckRef.current.setSpeed(0.8); });
+      act(() => { ctx.advance(0.5); }); //        + 0.5 s at 0.8×  → 2.6
+      await act(async () => { api.deckRef.current.setSpeed(1.0); });
+
+      await act(async () => { api.deckRef.current.pause(); });
+      await act(async () => { await api.deckRef.current.play(); });
+      // Stale-anchor math would have resumed at 0 (no tick ever ran).
+      expect(ctx._lastStartedSource.startOffset).toBeCloseTo(2.6, 6);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   // @us US18 (V1 R19) — the reverb-size duck-swap-restore race. The prior fix
@@ -1759,7 +1860,13 @@ describe("Deck pump — US70", () => {
     const curves = pumpGain.gain.scheduledValues.filter((s) => s.type === "setValueCurve");
     expect(curves.length).toBeGreaterThanOrEqual(3); // ~4 beats armed ahead
     const c = curves[0].curve;
-    expect(c[0]).toBeCloseTo(1 - 0.6, 2); // default depth 0.6 dips to 0.4
+    // Starts at exactly unity — continuous with the previous window's
+    // recovery. A first sample of 1 - depth was a hard gain step at every
+    // window start: a click on every beat.
+    expect(c[0]).toBe(1);
+    // The dip is carried by the following points (a few-ms linear attack).
+    expect(c[1]).toBeCloseTo(1 - 0.6, 5);
+    expect(Math.min(...c)).toBeCloseTo(1 - 0.6, 5); // default depth 0.6 dips to 0.4
     expect(c[c.length - 1]).toBe(1); // recovers to unity
     // Windows are beat-length: default 128 BPM → ~0.46 s.
     expect(curves[0].duration).toBeCloseTo((60 / 128) * 0.98, 2);
@@ -1776,6 +1883,45 @@ describe("Deck pump — US70", () => {
     const last = pumpGain.gain.scheduledValues.at(-1);
     expect(last.type).toBe("setTarget");
     expect(last.target).toBe(1);
+    // Hold (not cancel) whatever the in-flight window is producing, so the
+    // glide to unity starts from the audible value instead of snapping.
+    expect(pumpGain.gain.scheduledValues.at(-2).type).toBe("cancelAndHold");
+  });
+
+  it("@us US70: the PUMP bypass never throws, even when the engine rejects the glide", async () => {
+    const api = await loadedDeck();
+    const ctx = api.audioCtxRef.current;
+    const pumpBtn = screen.getByRole("button", { name: /Toggle pump ducking on deck A/i });
+    await act(async () => { fireEvent.click(pumpBtn); });
+    const param = findPumpGain(ctx).gain;
+    // Overlapping-curve rejection, as some engines throw for setTargetAtTime
+    // inside a setValueCurveAtTime window.
+    param.setTargetAtTime = () => { throw new Error("NotSupportedError: overlaps a curve"); };
+    await act(async () => { fireEvent.click(pumpBtn); });
+    expect(pumpBtn.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  it("@us US70: the PUMP bypass survives cancelAndHoldAtTime throwing and still glides to 1", async () => {
+    const api = await loadedDeck();
+    const ctx = api.audioCtxRef.current;
+    const pumpBtn = screen.getByRole("button", { name: /Toggle pump ducking on deck A/i });
+    await act(async () => { fireEvent.click(pumpBtn); });
+    const param = findPumpGain(ctx).gain;
+    param.cancelAndHoldAtTime = () => { throw new Error("InvalidStateError: inside a curve"); };
+    const errors = [];
+    const onErr = (e) => { errors.push(e); e.preventDefault?.(); };
+    window.addEventListener("error", onErr);
+    try {
+      await act(async () => { fireEvent.click(pumpBtn); });
+    } finally {
+      window.removeEventListener("error", onErr);
+    }
+    expect(errors).toHaveLength(0);
+    expect(pumpBtn.getAttribute("aria-pressed")).toBe("false");
+    // Fallback cancel, then the glide to exactly unity.
+    expect(param.scheduledValues.at(-2)).toMatchObject({ type: "cancel", time: ctx.currentTime });
+    expect(param.scheduledValues.at(-1)).toMatchObject({ type: "setTarget", target: 1 });
+    expect(param.value).toBe(1);
   });
 
   it("@us US70: PUMP is disabled until a track is loaded", () => {
@@ -1871,6 +2017,129 @@ describe("Deck loop roll — US72", () => {
     expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
   });
 
+  // Roll in/out points come from the live wall-clock playhead. The 100 ms
+  // interval never ticks here (fake timers), so currentTimeRef stays at the
+  // seek target (2 s): the old code would loop [2-len, 2] and resume at 2.
+  it("@us US72: roll in/out points come from the live playhead, not the stale 100 ms position ref", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 60, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "live.mp3"); });
+      await act(async () => { await api.deckRef.current.play(); });
+      const ctx = api.audioCtxRef.current;
+      await act(async () => { await api.deckRef.current.setSpeed(1.25); });
+      // Anchor deterministically at 5 s on the new rate.
+      await act(async () => { api.deckRef.current.seekTo(5); });
+      const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+
+      act(() => { ctx.advance(0.37); }); // live = 5 + 0.37 * 1.25 = 5.4625
+      await act(async () => { fireEvent.pointerDown(rollBtn); });
+      const rollSrc = ctx._lastStartedSource;
+      expect(rollSrc.loop).toBe(true);
+      expect(rollSrc.loopEnd).toBeCloseTo(5 + 0.37 * 1.25, 4);
+      expect(rollSrc.loopEnd - rollSrc.loopStart).toBeCloseTo(60 / 128, 4);
+
+      act(() => { ctx.advance(0.5); }); // timeline keeps running: live = 6.0875
+      await act(async () => {
+        fireEvent.pointerUp(rollBtn);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const resumed = ctx._lastStartedSource;
+      expect(resumed).not.toBe(rollSrc);
+      expect(resumed.startOffset).toBeCloseTo(5 + 0.87 * 1.25, 4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // A NUDGE held during a VARI roll: there is no main source, but the
+  // timeline underneath must still be re-anchored at the bent rate and the
+  // roll source kept in tempo — otherwise release lands (time since anchor)
+  // × bend away from where the audio is.
+  it("@us US72 / US59: NUDGE during a held VARI roll re-anchors the timeline and bends the roll source", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 60, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "bend.mp3"); });
+      await act(async () => { await api.deckRef.current.play(); });
+      const ctx = api.audioCtxRef.current;
+      await act(async () => { api.deckRef.current.seekTo(5); });
+      const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+      const up = screen.getByRole("button", { name: /Pitch bend up deck A/i });
+
+      act(() => { ctx.advance(0.2); }); // live 5.2
+      await act(async () => { fireEvent.pointerDown(rollBtn); });
+      const rollSrc = ctx._lastStartedSource;
+      expect(rollSrc.loop).toBe(true);
+      act(() => { ctx.advance(2); }); // timeline 7.2 underneath the roll
+      await act(async () => { fireEvent.pointerDown(up, { pointerId: 1 }); });
+      const bend = rollSrc.playbackRate.scheduledValues.at(-1);
+      expect(bend.type).toBe("setTarget");
+      expect(bend.target).toBeCloseTo(1.04, 6);
+      expect(bend.time).toBe(ctx.currentTime);
+      act(() => { ctx.advance(1); }); // bent: 7.2 + 1.04 = 8.24
+      await act(async () => { fireEvent.pointerUp(up, { pointerId: 1 }); });
+      expect(rollSrc.playbackRate.scheduledValues.at(-1).target).toBeCloseTo(1, 6);
+      act(() => { ctx.advance(0.5); }); // 8.74
+      await act(async () => {
+        fireEvent.pointerUp(rollBtn);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const resumed = ctx._lastStartedSource;
+      expect(resumed).not.toBe(rollSrc);
+      expect(resumed.startOffset).toBeCloseTo(5 + 0.2 + 2 + 1.04 + 0.5, 4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Same hazard through the speed slider: with no main source the timeline
+  // underneath must be re-anchored at the NEW rate and the roll kept in tempo.
+  it("@us US72 / US59: a speed change during a held VARI roll retargets the roll source and release lands at the live position", async () => {
+    vi.useFakeTimers();
+    try {
+      let api;
+      render(<Harness onMount={(a) => { api = a; }} />);
+      const sr = 11025;
+      const buf = new MockAudioBuffer(1, sr * 60, sr);
+      await act(async () => { await api.deckRef.current.loadBuffer(buf, "speed.mp3"); });
+      await act(async () => { await api.deckRef.current.play(); });
+      const ctx = api.audioCtxRef.current;
+      await act(async () => { api.deckRef.current.seekTo(5); });
+      const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+
+      act(() => { ctx.advance(0.2); }); // live 5.2
+      await act(async () => { fireEvent.pointerDown(rollBtn); });
+      const rollSrc = ctx._lastStartedSource;
+      expect(rollSrc.loop).toBe(true);
+      act(() => { ctx.advance(2); }); // timeline 7.2 underneath the roll
+      await act(async () => { api.deckRef.current.setSpeed(1.25); });
+      const tgt = rollSrc.playbackRate.scheduledValues.at(-1);
+      expect(tgt.type).toBe("setTarget");
+      expect(tgt.target).toBeCloseTo(1.25, 6);
+      expect(tgt.time).toBe(ctx.currentTime);
+      act(() => { ctx.advance(1); }); // 7.2 + 1.25 = 8.45
+      await act(async () => {
+        fireEvent.pointerUp(rollBtn);
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      const resumed = ctx._lastStartedSource;
+      expect(resumed).not.toBe(rollSrc);
+      expect(resumed.startOffset).toBeCloseTo(5 + 0.2 + 2 + 1.25, 4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("@us US72: pausing mid-roll kills the roll source (nothing keeps ringing)", async () => {
     const api = await playingDeck();
     const ctx = api.audioCtxRef.current;
@@ -1880,6 +2149,196 @@ describe("Deck loop roll — US72", () => {
     await act(async () => { api.deckRef.current.pause(); });
     expect(rollSrc.stopped).toBe(true);
     expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
+  });
+});
+
+// ─── Transport edge fades (US2 / US72 / US69) ───
+//
+// A BufferSource stopped mid-waveform is a sample step — a click on every
+// pause / stop / seek / cue / roll edge. Each deck source runs through its own
+// tiny GainNode; edges fade it over ~4 ms (setTargetAtTime — never a timer)
+// and the stop is scheduled just after, while the NEXT source starts at once.
+describe("Deck transport edge fades — US2", () => {
+  const sr = 11025;
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+
+  async function playingDeck() {
+    let api;
+    render(<Harness onMount={(a) => { api = a; }} />);
+    const buf = new MockAudioBuffer(1, sr * 10, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "edges.mp3"); });
+    await act(async () => { await api.deckRef.current.play(); });
+    const ctx = api.audioCtxRef.current;
+    act(() => { ctx.advance(1); });
+    return { api, ctx };
+  }
+
+  // EDGE_FADE_S in Deck.jsx: the stop lands this long after the fade starts.
+  const EDGE_FADE_S = 0.004;
+  // Scheduling slack on top of the fade (EDGE_STOP_MARGIN_S in Deck.jsx): only
+  // protects against a late-scheduled automation event shrinking the fade.
+  const EDGE_STOP_MARGIN_S = 0.01;
+  // The source faded its own gain node to 0 at `now`, and its stop lands
+  // after the fade has run — never a hard stop in the past or at `now`.
+  // ≥ 6 time constants of fade before the stop: e^-6 ≈ 0.25% (−52 dB) left.
+  function expectFadedStop(src, now) {
+    expect(src.stopped).toBe(true);
+    expect(src.stopTime).toBeGreaterThanOrEqual(now);
+    expect(src.stopTime - now).toBeLessThanOrEqual(0.03);
+    const fade = src.connections[0];
+    expect(fade.nodeType).toBe("GainNode");
+    const ramp = fade.gain.scheduledValues.at(-1);
+    expect(ramp.type).toBe("setTarget");
+    expect(ramp.target).toBe(0);
+    expect(ramp.time).toBe(now);
+    expect(ramp.tau).toBeGreaterThan(0);
+    expect(ramp.tau).toBeLessThanOrEqual(EDGE_FADE_S / 6 + 1e-12);
+    expect(src.stopTime - now).toBeGreaterThanOrEqual(EDGE_FADE_S + EDGE_STOP_MARGIN_S - 1e-9);
+    expect(src.stopTime - now).toBeGreaterThanOrEqual(6 * ramp.tau - 1e-9);
+    return fade;
+  }
+
+  it("@us US2: a seek fades the old source out and starts the new one immediately on its own fade node", async () => {
+    const { api, ctx } = await playingDeck();
+    const old = ctx._lastStartedSource;
+    await act(async () => { await api.deckRef.current.seekTo(5); });
+    const fade = expectFadedStop(old, ctx.currentTime);
+    const next = ctx._lastStartedSource;
+    expect(next).not.toBe(old);
+    // Not delayed by the outgoing fade: starts now, at the cue.
+    expect(next.startedAt).toBe(0);
+    expect(next.startOffset).toBe(5);
+    const nextFade = next.connections[0];
+    expect(nextFade).not.toBe(fade);
+    expect(nextFade.gain.scheduledValues.at(-1)).toMatchObject({ type: "setTarget", target: 1 });
+    // The outgoing tail stays wired until it has actually played out…
+    expect(old.connections).toContain(fade);
+    old.onended();
+    // …then the whole per-source graph is released.
+    expect(old.connections).toHaveLength(0);
+    expect(fade.connections).toHaveLength(0);
+  });
+
+  it("@us US2: pause and stop fade the source instead of cutting it", async () => {
+    const { api, ctx } = await playingDeck();
+    const first = ctx._lastStartedSource;
+    await act(async () => { api.deckRef.current.pause(); });
+    expectFadedStop(first, ctx.currentTime);
+
+    await act(async () => { await api.deckRef.current.play(); });
+    act(() => { ctx.advance(0.5); });
+    const second = ctx._lastStartedSource;
+    expect(second).not.toBe(first);
+    await act(async () => { api.deckRef.current.stop(); });
+    expectFadedStop(second, ctx.currentTime);
+  });
+
+  it("@us US72: roll start fades the main source; roll release fades the roll source", async () => {
+    const { ctx } = await playingDeck();
+    const main = ctx._lastStartedSource;
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    expectFadedStop(main, ctx.currentTime);
+    const roll = ctx._lastStartedSource;
+    expect(roll.loop).toBe(true);
+    expect(roll.connections[0].nodeType).toBe("GainNode");
+    act(() => { ctx.advance(0.25); });
+    await act(async () => { fireEvent.pointerUp(rollBtn); await tick(); });
+    expectFadedStop(roll, ctx.currentTime);
+  });
+
+  it("@us US69: stopping the bite preview fades it out", async () => {
+    const { api, ctx } = await playingDeck();
+    await act(async () => { api.deckRef.current.pause(); });
+    await act(async () => { api.deckRef.current.seekTo(1); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set bite in point on deck A/i }));
+    });
+    await act(async () => { api.deckRef.current.seekTo(3); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set bite out point on deck A/i }));
+    });
+    const preview = screen.getByRole("button", { name: /Preview the bite on deck A/i });
+    await act(async () => { fireEvent.click(preview); });
+    const src = ctx._lastStartedSource;
+    expect(src.loopStart).toBe(1);
+    act(() => { ctx.advance(0.3); });
+    await act(async () => { fireEvent.click(preview); });
+    expectFadedStop(src, ctx.currentTime);
+  });
+
+  it("@us US72: a seek or stop during a held VARI roll fades the roll source out", async () => {
+    const { api, ctx } = await playingDeck();
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    const roll = ctx._lastStartedSource;
+    expect(roll.loop).toBe(true);
+    act(() => { ctx.advance(0.2); });
+    await act(async () => { await api.deckRef.current.seekTo(5); });
+    expectFadedStop(roll, ctx.currentTime);
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
+
+    // …and the same via stop.
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    const roll2 = ctx._lastStartedSource;
+    expect(roll2).not.toBe(roll);
+    expect(roll2.loop).toBe(true);
+    act(() => { ctx.advance(0.2); });
+    await act(async () => { api.deckRef.current.stop(); });
+    expectFadedStop(roll2, ctx.currentTime);
+  });
+
+  // A source that plays out to the end of the track (loop off) is finished:
+  // its per-source graph must be released in onended, and the deck must forget
+  // it - a later stop/pause must not try to fade a dead source.
+  it("@us US2: a main source that ends naturally releases its fade node, its WeakMap entry and the deck's reference", async () => {
+    const { api, ctx } = await playingDeck();
+    // Loop defaults on; turn it off so the end of the track is a real end.
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Loop deck A$/i })); });
+    const src = ctx._lastStartedSource;
+    const fade = src.connections[0];
+    expect(fade.nodeType).toBe("GainNode");
+    const delSpy = vi.spyOn(WeakMap.prototype, "delete");
+    try {
+      await act(async () => { src.onended(); });
+      expect(delSpy.mock.calls.some((c) => c[0] === src)).toBe(true);
+    } finally {
+      delSpy.mockRestore();
+    }
+    expect(src.connections).toHaveLength(0);
+    expect(fade.connections).toHaveLength(0);
+    expect(api.deckRef.current.isPlaying()).toBe(false);
+    // The deck no longer holds the ended source: stopping must not fade it.
+    await act(async () => { api.deckRef.current.stop(); });
+    expect(src.stopped).toBe(false);
+  });
+
+  it("@us US69: unmounting mid bite preview fades it out and releases its fade node", async () => {
+    let api;
+    const { unmount } = render(<Harness onMount={(a) => { api = a; }} />);
+    const buf = new MockAudioBuffer(1, sr * 10, sr);
+    await act(async () => { await api.deckRef.current.loadBuffer(buf, "bite.mp3"); });
+    await act(async () => { api.deckRef.current.seekTo(1); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set bite in point on deck A/i }));
+    });
+    await act(async () => { api.deckRef.current.seekTo(3); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Set bite out point on deck A/i }));
+    });
+    const ctx = api.audioCtxRef.current;
+    await act(async () => {
+      fireEvent.click(screen.getByRole("button", { name: /Preview the bite on deck A/i }));
+    });
+    const src = ctx._lastStartedSource;
+    expect(src.loopStart).toBe(1);
+    act(() => { ctx.advance(0.4); });
+    unmount();
+    const fade = expectFadedStop(src, ctx.currentTime);
+    // The tail plays out, then the per-source graph — fade node included — goes.
+    src.onended();
+    expect(src.connections).toHaveLength(0);
+    expect(fade.connections).toHaveLength(0);
   });
 });
 
@@ -2110,13 +2569,476 @@ describe("Deck KEYLOCK — worklet state follows every transport path — US73",
     assertNeverPlaysEmpty(node);
   });
 
-  it("@us US73: a worklet 'ended' report with loop ON restarts the worklet from 0", async () => {
+  it("@us US73: with loop ON the worklet wraps on its own — a 'looped' report re-anchors the timeline and the host posts no play", async () => {
     const { api, node } = await keylockDeck({ loop: true });
+    expect(node.state.loop.enabled).toBe(true);
     await act(async () => { api.deckRef.current.seekTo(8); await tick(); });
-    await act(async () => { node.emit({ type: "ended" }); });
+    const posted = node.port.postedMessages.length;
+    await act(async () => { node.emit({ type: "looped", seconds: 0 }); });
+    // No host round-trip: nothing was posted in response to the wrap.
+    expect(node.port.postedMessages.length).toBe(posted);
     expect(api.deckRef.current.isPlaying()).toBe(true);
     expect(node.state.playing).toBe(true);
     expect(node.state.offset).toBe(0);
+    const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+    expect(Number(wave.getAttribute("aria-valuenow"))).toBe(0);
+    // The re-anchored timeline runs on from the wrap point (an un-anchored
+    // one would read (8 + 3) mod 10 = 1). aria-valuenow is whole seconds.
+    await act(async () => { api.audioCtxRef.current.advance(3); api.deckRef.current.pause(); });
+    expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3);
+  });
+
+  it("@us US73: an 'ended' report is never answered with a host re-post of play — loop state lives in the worklet", async () => {
+    // The old host-side "coarse loop" (ended → play offset 0) is gone: the
+    // worklet only reports `ended` with no loop enabled, so the host treats
+    // it as the end of the track whatever its own toggle says.
+    const { api, node } = await keylockDeck({ loop: true });
+    const posted = node.port.postedMessages.length;
+    await act(async () => { node.emit({ type: "ended" }); });
+    expect(node.port.postedMessages.slice(posted).filter((m) => m.type === "play")).toHaveLength(0);
+    expect(node.state.playing).toBe(false);
+    expect(api.deckRef.current.isPlaying()).toBe(false);
+  });
+
+  it("@us US73: toggling Loop in KEYLOCK posts setLoop to the worklet", async () => {
+    const { node } = await keylockDeck({ loop: false });
+    expect(node.state.loop.enabled).toBe(false);
+    const loopBtn = screen.getByRole("button", { name: /^Loop deck A$/i });
+    await act(async () => { fireEvent.click(loopBtn); });
+    expect(node.port.postedMessages.at(-1)).toEqual({ type: "setLoop", enabled: true });
+    expect(node.state.loop).toEqual({ enabled: true, start: null, end: null });
+    await act(async () => { fireEvent.click(loopBtn); });
+    expect(node.port.postedMessages.at(-1)).toEqual({ type: "setLoop", enabled: false });
+    expect(node.state.loop.enabled).toBe(false);
+  });
+
+  it("@us US73: KEYLOCK entry carries the deck's loop state — on load and on every play", async () => {
+    const { api, node } = await keylockDeck({ loop: true });
+    // Mode hop: the first load carries the whole-track loop flag.
+    expect(node.port.postedMessages.find((m) => m.type === "load").loop).toBe(true);
+    // Loop toggled while paused, then play: the worklet hears the new state
+    // before it is told to play (no new `load` for the same track).
+    await act(async () => { api.deckRef.current.pause(); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Loop deck A$/i })); });
+    await act(async () => { await api.deckRef.current.play(); await tick(); });
+    const msgs = node.port.postedMessages;
+    const lastPlay = msgs.map((m) => m.type).lastIndexOf("play");
+    // One transport epoch for the setLoop + play pair.
+    expect(msgs[lastPlay - 1]).toEqual({ type: "setLoop", enabled: false, epoch: msgs[lastPlay].epoch });
+    expect(node.state.loop.enabled).toBe(false);
+    expect(node.state.playing).toBe(true);
+    assertNeverPlaysEmpty(node);
+  });
+
+  it("@us US73 / US72: a roll in KEYLOCK loops a region INSIDE the worklet — no BufferSource, constant pitch", async () => {
+    const { api, node } = await keylockDeck({ loop: true });
+    const ctx = api.audioCtxRef.current;
+    await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+    await act(async () => { api.deckRef.current.setSpeed(1.25); });
+    const startedBefore = ctx._nodes.filter((n) => n.nodeType === "AudioBufferSourceNode" && n.started).length;
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+    const posted = node.port.postedMessages.length;
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("true");
+    const sent = node.port.postedMessages.slice(posted);
+    expect(sent[0].type).toBe("setLoop");
+    expect(sent[0].enabled).toBe(true);
+    // Default 128 BPM → 1 beat = 60/128 s of SOURCE time ending at the playhead.
+    expect(sent[0].end).toBeCloseTo(4, 2);
+    expect(sent[0].end - sent[0].start).toBeCloseTo(60 / 128, 3);
+    expect(sent[1]).toEqual({ type: "seek", offset: sent[0].start, epoch: sent[0].epoch });
+    expect(sent.some((m) => m.type === "pause")).toBe(false);
+    expect(node.state.playing).toBe(true);
+    expect(node.state.loop.start).toBeCloseTo(sent[0].start, 6);
+    // No varispeed source at effRate (that was the pitch-shifted roll).
+    const startedDuring = ctx._nodes.filter((n) => n.nodeType === "AudioBufferSourceNode" && n.started).length;
+    expect(startedDuring).toBe(startedBefore);
+    // The worklet's own wrap reports must not drag the deck's timeline back.
+    await act(async () => { node.emit({ type: "looped", seconds: sent[0].start }); });
+    await act(async () => { node.emit({ type: "position", seconds: sent[0].start + 0.1 }); });
+
+    // 2 s of wall clock at 1.25× while held: the timeline ran on to 6.5 s.
+    await act(async () => { ctx.advance(2); });
+    const before = node.port.postedMessages.length;
+    await act(async () => { fireEvent.pointerUp(rollBtn); await tick(); });
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
+    const released = node.port.postedMessages.slice(before);
+    // The release pair moves the read head: a new transport epoch for both.
+    expect(released[0]).toEqual({ type: "setLoop", enabled: true, epoch: released[1].epoch });
+    expect(released[1].epoch).toBe(sent[0].epoch + 1);
+    expect(released[1].type).toBe("seek");
+    expect(released[1].offset).toBeCloseTo(4 + 2 * 1.25, 3);
+    expect(released.some((m) => m.type === "play")).toBe(false);
+    expect(node.state.loop).toEqual({ enabled: true, start: null, end: null });
+    expect(node.state.offset).toBeCloseTo(6.5, 3);
+    expect(node.state.playing).toBe(true);
+    expect(ctx._nodes.filter((n) => n.nodeType === "AudioBufferSourceNode" && n.started).length).toBe(startedBefore);
+    assertNeverPlaysEmpty(node);
+  });
+
+  // The Loop effect must not clobber a held roll's region with a whole-track
+  // setLoop; the new state is applied when the roll releases.
+  it("@us US73 / US72: toggling Loop during a held KEYLOCK roll leaves the roll region alone and applies on release", async () => {
+    const { api, node } = await keylockDeck({ loop: false });
+    await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    const region = { ...node.state.loop };
+    expect(region.enabled).toBe(true);
+    expect(region.start).not.toBeNull();
+    expect(region.end).not.toBeNull();
+    const posted = node.port.postedMessages.length;
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /^Loop deck A$/i })); });
+    expect(node.port.postedMessages.slice(posted).some((m) => m.type === "setLoop")).toBe(false);
+    expect(node.state.loop).toEqual(region);
+    await act(async () => { fireEvent.pointerUp(rollBtn); await tick(); });
+    // Loop is now ON (toggled during the hold): release applies it whole-track.
+    expect(node.state.loop).toEqual({ enabled: true, start: null, end: null });
+    expect(node.state.playing).toBe(true);
+  });
+
+  // The worklet stamps `at` (its currentTime when it read the position). The
+  // anchor must use it, so message latency does not skew the timeline.
+  it("@us US73: a position report carrying `at` anchors the timeline to the worklet clock, not the arrival time", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck();
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      act(() => { ctx.advance(1); });
+      // Reading taken 0.6 s before it arrived (large so the slider's
+      // whole-second aria-valuenow tells the two anchors apart).
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: ctx.currentTime - 0.6 }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      // 3 s at `at`, +0.6 +0.1 s since: 3.7 -> 4 (arrival anchor: 3.1 -> 3).
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Review pass 5 — every host move that re-bases the worklet's read position
+  // must take a NEW epoch (strictly above the previous outgoing message's),
+  // or a report from before the move is accepted as current.
+  const prevEpoch = (msgs, idx) => {
+    for (let i = idx - 1; i >= 0; i--) if (Number.isFinite(msgs[i].epoch)) return msgs[i].epoch;
+    return null;
+  };
+
+  it("@us US73: the KEYLOCK load posted for a new buffer takes a new transport epoch (strictly above the previous outgoing message's)", async () => {
+    const { api, node } = await keylockDeck();
+    await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+    const next = new MockAudioBuffer(1, 22050 * 3, 22050);
+    await act(async () => { await api.deckRef.current.loadBuffer(next, "next.wav"); });
+    await act(async () => { await api.deckRef.current.play(); await tick(); });
+    const msgs = node.port.postedMessages;
+    const i = msgs.map((m) => m.type).lastIndexOf("load");
+    expect(msgs[i].channels).not.toBeNull();
+    expect(Number.isFinite(msgs[i].epoch)).toBe(true);
+    expect(prevEpoch(msgs, i)).not.toBeNull();
+    expect(msgs[i].epoch).toBeGreaterThan(prevEpoch(msgs, i));
+  });
+
+  it("@us US73: EJECT's load {channels:null} takes a new transport epoch (strictly above the previous outgoing message's)", async () => {
+    const { api, node } = await keylockDeck();
+    await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: /Eject the track from deck A/i })); });
+    const msgs = node.port.postedMessages;
+    const i = msgs.map((m) => m.type).lastIndexOf("load");
+    expect(msgs[i].channels).toBeNull();
+    expect(Number.isFinite(msgs[i].epoch)).toBe(true);
+    expect(prevEpoch(msgs, i)).not.toBeNull();
+    expect(msgs[i].epoch).toBeGreaterThan(prevEpoch(msgs, i));
+  });
+
+  it("@us US73 / US72: a KEYLOCK roll start's setLoop + seek pair takes one new transport epoch (strictly above the previous outgoing message's)", async () => {
+    const { api, node } = await keylockDeck({ loop: true });
+    await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+    const n = node.port.postedMessages.length;
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    const msgs = node.port.postedMessages;
+    expect(msgs[n].type).toBe("setLoop");
+    expect(msgs[n + 1].type).toBe("seek");
+    expect(msgs[n + 1].epoch).toBe(msgs[n].epoch);
+    expect(prevEpoch(msgs, n)).not.toBeNull();
+    expect(msgs[n].epoch).toBeGreaterThan(prevEpoch(msgs, n));
+    await act(async () => { fireEvent.pointerUp(rollBtn); await tick(); });
+  });
+
+  // Review pass 4 — transport epoch. A report already in flight when the host
+  // moves the read position (load / play / seek / roll release) describes the
+  // OLD playhead. Its `at` cannot say so: in real Chromium stale reports carry
+  // `at` from anchor+0 to anchor+512 frames and fresh ones from anchor+128,
+  // so each stale report below is stamped AFTER the anchor — only its epoch
+  // gives it away. Applying it would drag the timeline back.
+  it("@us US73: after a seek, position / looped reports from the previous transport epoch are dropped; the current epoch applies", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      act(() => { ctx.advance(1); });
+      const old = node.state.epoch;
+      await act(async () => { api.deckRef.current.seekTo(6); await tick(); });
+      const cur = node.state.epoch;
+      expect(cur).toBeGreaterThan(old);
+      const seekAt = ctx.currentTime;
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: seekAt + 0.002, epoch: old }); });
+      await act(async () => { node.emit({ type: "looped", seconds: 0.01, regionStart: 0, at: seekAt, epoch: old }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(6); // 6.1, not 3.1 / 0.11
+      // Current epoch → re-anchors, whatever its `at`.
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: ctx.currentTime, epoch: cur }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3); // 3.1
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("@us US73: after a play, a report from the previous transport epoch is dropped; the current epoch applies", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      await act(async () => { api.deckRef.current.pause(); });
+      await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+      const old = node.state.epoch;
+      await act(async () => { await api.deckRef.current.play(); await tick(); });
+      const cur = node.state.epoch;
+      expect(cur).toBeGreaterThan(old);
+      expect(node.port.postedMessages.filter((m) => m.type === "play").at(-1).epoch).toBe(cur);
+      await act(async () => { node.emit({ type: "position", seconds: 8, at: ctx.currentTime + 0.002, epoch: old }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(4); // 4.1, not 8.1
+      await act(async () => { node.emit({ type: "position", seconds: 8, at: ctx.currentTime, epoch: cur }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(8); // 8.1
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The roll release is the anchor path that posts no play: setLoop + seek.
+  // A report from inside the roll (its region) still in flight across the
+  // release must not drag the timeline back into the roll window.
+  it("@us US73 / US72: after a KEYLOCK roll release, a report from the roll's epoch is dropped; the release epoch applies", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+      const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+      await act(async () => { fireEvent.pointerDown(rollBtn); });
+      const rollEpoch = node.state.epoch;
+      act(() => { ctx.advance(1); });
+      await act(async () => { fireEvent.pointerUp(rollBtn); await tick(); });
+      const cur = node.state.epoch;
+      expect(cur).toBe(rollEpoch + 1);
+      const released = node.port.postedMessages.slice(-2);
+      expect(released.map((m) => [m.type, m.epoch])).toEqual([["setLoop", cur], ["seek", cur]]);
+      // Roll-region report measured before the release, stamped after it.
+      await act(async () => { node.emit({ type: "position", seconds: 3.7, at: ctx.currentTime + 0.002, epoch: rollEpoch }); });
+      await act(async () => { node.emit({ type: "looped", seconds: 3.6, regionStart: 3.53, at: ctx.currentTime, epoch: rollEpoch }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(5); // 5.1, not 3.8 / 3.7
+      await act(async () => { node.emit({ type: "position", seconds: 7, at: ctx.currentTime, epoch: cur }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(7); // 7.1
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Older workers send no epoch: the `at` fallback drops a report heard AT or
+  // before the host's last re-anchor (`<=` — the commonest stale case has
+  // `at` exactly equal to the anchor time).
+  it("@us US73: a report without an epoch heard at the last re-anchor (seek) is dropped (<=); a later one applies", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      act(() => { ctx.advance(1); });
+      await act(async () => { api.deckRef.current.seekTo(6); await tick(); });
+      const seekAt = ctx.currentTime;
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: seekAt - 0.5, epoch: undefined }); });
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: seekAt, epoch: undefined }); });
+      await act(async () => { node.emit({ type: "looped", seconds: 0.01, regionStart: 0, at: seekAt, epoch: undefined }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(6); // 6.1, not 3.1 / 0.11
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: ctx.currentTime, epoch: undefined }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3); // 3.1
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Speed changes (and bends) do not move the read position, so they bump no
+  // epoch; they still re-anchor the `at` fallback for epoch-less reports.
+  it("@us US73: a speed change re-anchors the `at` fallback — an epoch-less report heard at it is dropped; an epoch report is not", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      act(() => { ctx.advance(1); });
+      await act(async () => { api.deckRef.current.seekTo(6); await tick(); });
+      act(() => { ctx.advance(1); });
+      const epoch = node.state.epoch;
+      await act(async () => { api.deckRef.current.setSpeed(1.2); });
+      expect(node.state.epoch).toBe(epoch); // not a transport move
+      const speedAt = ctx.currentTime;
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: speedAt, epoch: undefined }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(7); // 7.12, not 3.12
+      await act(async () => { node.emit({ type: "position", seconds: 3, at: speedAt, epoch }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3); // 3.24
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("@us US73: a position report without `at` falls back to the arrival-time anchor", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck();
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      act(() => { ctx.advance(1); });
+      await act(async () => { node.emit({ type: "position", seconds: 3 }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("@us US73: a `looped` report carrying `at` anchors to the worklet clock too", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      const wave = screen.getByRole("slider", { name: /Seek position in deck A track/i });
+      act(() => { ctx.advance(1); });
+      await act(async () => { node.emit({ type: "looped", seconds: 2, at: ctx.currentTime - 0.6 }); });
+      act(() => { ctx.advance(0.1); vi.advanceTimersByTime(100); });
+      expect(Number(wave.getAttribute("aria-valuenow"))).toBe(3); // 2.7 (arrival anchor: 2.1 -> 2)
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // Mock parity with stretch-worklet.js#setLoop: a degenerate region (end <=
+  // start, or shorter than one 512-frame hop) is ignored and the previous
+  // loop state stands.
+  it("@us US73: (mock parity) setLoop ignores degenerate regions and keeps the previous loop state", async () => {
+    const { node } = await keylockDeck({ loop: true });
+    node.port.postMessage({ type: "setLoop", enabled: true, start: 1, end: 2 });
+    const good = { enabled: true, start: 1, end: 2 };
+    expect(node.state.loop).toEqual(good);
+    node.port.postMessage({ type: "setLoop", enabled: true, start: 3, end: 3 });
+    expect(node.state.loop).toEqual(good); // end == start
+    node.port.postMessage({ type: "setLoop", enabled: true, start: 3, end: 2 });
+    expect(node.state.loop).toEqual(good); // end < start
+    node.port.postMessage({ type: "setLoop", enabled: true, start: 3, end: 3 + 511 / sr });
+    expect(node.state.loop).toEqual(good); // one frame short of a hop
+    node.port.postMessage({ type: "setLoop", enabled: true, start: 3, end: 3 + 512 / sr + 1e-9 });
+    expect(node.state.loop.start).toBe(3); // a full hop is accepted
+    node.port.postMessage({ type: "setLoop", enabled: false });
+    expect(node.state.loop.enabled).toBe(false); // disabling is never degenerate
+  });
+
+  it("@us US73: (mock parity) the degenerate-region hop scales with the context rate — 700 frames ignored at 96 kHz, accepted at 48 kHz", async () => {
+    const { api, node } = await keylockDeck({ loop: true });
+    const ctx = api.audioCtxRef.current;
+    node.port.postMessage({ type: "setLoop", enabled: true, start: 1, end: 2 });
+    for (const [sr, accepted] of [[96000, false], [48000, true]]) {
+      ctx.sampleRate = sr;
+      node.state.sampleRate = sr;
+      node.port.postMessage({ type: "setLoop", enabled: true, start: 3, end: 3 + 700 / sr });
+      expect(node.state.loop.start, `700 frames @ ${sr}`).toBe(accepted ? 3 : 1);
+    }
+  });
+
+  it("@us US73 / US72: pausing mid-roll in KEYLOCK restores the whole-track loop state before pausing", async () => {
+    const { api, node } = await keylockDeck({ loop: false });
+    await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 2 beats on deck A/i });
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    expect(node.state.loop.enabled).toBe(true);
+    await act(async () => { api.deckRef.current.pause(); });
+    expect(node.state.loop).toEqual({ enabled: false, start: null, end: null });
+    expect(node.state.playing).toBe(false);
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("false");
+  });
+
+  // Mirror of the VARI live-playhead roll test: the 100 ms interval never
+  // ticks (setInterval faked), so currentTimeRef stays at the seek target.
+  it("@us US73 / US72: a KEYLOCK roll region ends at the LIVE playhead, not the stale 100 ms position ref", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+    try {
+      const { api, node } = await keylockDeck({ loop: true });
+      const ctx = api.audioCtxRef.current;
+      await act(async () => { api.deckRef.current.seekTo(4); await tick(); });
+      await act(async () => { api.deckRef.current.setSpeed(1.25); });
+      act(() => { ctx.advance(0.4); }); // live = 4 + 0.4 × 1.25 = 4.5
+      const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+      const posted = node.port.postedMessages.length;
+      await act(async () => { fireEvent.pointerDown(rollBtn); });
+      const sent = node.port.postedMessages.slice(posted);
+      expect(sent[0].type).toBe("setLoop");
+      expect(sent[0].end).toBeCloseTo(4.5, 4);
+      expect(sent[0].end - sent[0].start).toBeCloseTo(60 / 128, 4);
+      expect(node.state.loop.end).toBeCloseTo(4.5, 4);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The stretch worklet ignores a region shorter than one HOP (512 frames).
+  // A roll pressed in the first few ms must still post a region it accepts.
+  it("@us US73 / US72: a KEYLOCK roll at the very start of the track posts a region of at least one hop", async () => {
+    const { api, node } = await keylockDeck({ loop: true });
+    await act(async () => { api.deckRef.current.seekTo(0.003); await tick(); });
+    const rollBtn = screen.getByRole("button", { name: /Hold to roll 1 beat on deck A/i });
+    const posted = node.port.postedMessages.length;
+    await act(async () => { fireEvent.pointerDown(rollBtn); });
+    const sent = node.port.postedMessages.slice(posted);
+    expect(sent[0].type).toBe("setLoop");
+    expect(sent[0].start).toBe(0);
+    // ≥ 512 frames at 48 kHz (the strictest common rate), with headroom.
+    expect(sent[0].end - sent[0].start).toBeGreaterThanOrEqual(0.02);
+    expect((sent[0].end - sent[0].start) * 48000).toBeGreaterThan(512);
+    expect(rollBtn.getAttribute("aria-pressed")).toBe("true");
+  });
+
+  // The mock must clear the loop on a `load` without a `loop` key, exactly
+  // like stretch-worklet.js (`this.loop = m.loop ? whole-track : null`).
+  it("@us US73: (mock parity) a worklet 'load' without a loop key clears any loop", async () => {
+    const { node, buf } = await keylockDeck({ loop: true });
+    node.port.postMessage({ type: "setLoop", enabled: true, start: 1, end: 2 });
+    expect(node.state.loop.enabled).toBe(true);
+    node.port.postMessage({ type: "load", channels: [buf.getChannelData(0)], sampleRate: sr });
+    expect(node.state.loop).toEqual({ enabled: false, start: null, end: null });
+    node.port.postMessage({ type: "load", channels: [buf.getChannelData(0)], sampleRate: sr, loop: true });
+    expect(node.state.loop).toEqual({ enabled: true, start: null, end: null });
+  });
+
+  it("@us US73: the KEYLOCK inline hint reads at the MODE label's size and says what to do", async () => {
+    await keylockDeck({ loop: true });
+    const hint = screen.getByText("experimental — flip to VARI if it smears");
+    expect(hint.style.fontSize).toBe("9px");
+    expect(screen.queryByText(/trust your ears/)).toBeNull();
+    // The mode button's tooltip keeps its leading "Experimental —".
+    expect(
+      screen.getByRole("button", { name: /Set deck A playback mode to keylock/i }).getAttribute("title")
+    ).toMatch(/^Experimental —/);
   });
 
   it("@us US73: a worklet 'position' report is the playhead truth in KEYLOCK", async () => {

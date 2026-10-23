@@ -87,25 +87,137 @@ describe("buildDistortionCurve — US20", () => {
   it("@us US20: curve is odd-symmetric about zero (input -x maps to -y)", () => {
     const samples = 1024;
     const curve = buildDistortionCurve(50, samples);
-    // Sample at indices equidistant from center.
-    const center = samples / 2;
-    expect(curve[center + 100] + curve[center - 100]).toBeCloseTo(0, 2);
+    // Mirror pairs are (i, N-1-i): the WaveShaper maps x to index (N-1)(x+1)/2.
+    expect(curve[412] + curve[samples - 1 - 412]).toBeCloseTo(0, 6);
+  });
+
+  it("@us US20: exact odd symmetry — odd N has a zero centre, curve[i] === -curve[N-1-i]", () => {
+    for (const n of [1025, 4095, 1024, 4096]) {
+      for (const drive of [0, 40, 100]) {
+        const c = buildDistortionCurve(drive, n);
+        if (n % 2 === 1) expect(c[(n - 1) / 2]).toBe(0);
+        for (let i = 0; i < n; i++) {
+          expect(Math.abs(c[i] + c[n - 1 - i])).toBeLessThanOrEqual(1e-12);
+        }
+        expect(c[0]).toBeLessThan(0);
+        expect(c[n - 1]).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("@us US20: endpoints pin the (N-1) denominator — curve[N-1] is the closed form at x = 1", () => {
+    for (const n of [1024, 1025, 4096]) {
+      for (const drive of [0, 40, 100]) {
+        const c = buildDistortionCurve(drive, n);
+        const a = 1 + drive / 20;
+        const makeup = (a * 0.4) / Math.tanh(a * 0.4);
+        const expected = (Math.tanh(a) / a) * makeup;
+        expect(c[0]).toBe(-c[n - 1]);
+        expect(Math.abs(c[n - 1] - expected)).toBeLessThan(1e-6);
+      }
+    }
+  });
+
+  it("@us US20: degenerate sample counts clamp to 2 points instead of NaN", () => {
+    for (const n of [1, 0, -5, NaN]) {
+      const c = buildDistortionCurve(40, n);
+      expect(c.length).toBe(Number.isNaN(n) ? 4096 : 2);
+      for (const v of c) expect(Number.isFinite(v)).toBe(true);
+    }
+    const two = buildDistortionCurve(40, 2);
+    expect(two[0]).toBe(-two[1]);
+    expect(two[1]).toBeGreaterThan(0);
+  });
+
+  // `new Float32Array(4.5)` throws RangeError — the Math.floor is load-bearing.
+  it("@us US20: a fractional sample count floors to an integer length (no RangeError) and stays odd-symmetric", () => {
+    for (const [n, len] of [[4.5, 4], [2.9, 2], [1.5, 2], [1024.999, 1024]]) {
+      let c;
+      expect(() => { c = buildDistortionCurve(40, n); }, `samples ${n}`).not.toThrow();
+      expect(c.length, `samples ${n}`).toBe(len);
+      for (let i = 0; i < len; i++) {
+        expect(Number.isFinite(c[i])).toBe(true);
+        expect(c[i]).toBe(-c[len - 1 - i]);
+      }
+      expect(c[len - 1]).toBeGreaterThan(0);
+    }
   });
 
   it("@us US20: drive=0 is monotonic and near-linear (low gain)", () => {
     const curve = buildDistortionCurve(0, 1024);
-    // Center should be 0, midway up should be positive
-    expect(curve[512]).toBeCloseTo(0, 3);
+    // Centre (between samples 511 and 512) is 0, midway up should be positive
+    expect(curve[511] + curve[512]).toBeCloseTo(0, 6);
+    expect(Math.abs(curve[512])).toBeLessThan(0.002);
     expect(curve[768]).toBeGreaterThan(0);
     expect(curve[256]).toBeLessThan(0);
   });
 
-  it("@us US20: higher drive yields stronger compression at the same input", () => {
+  it("@us US20: higher drive saturates harder (flatter toward the edge)", () => {
     const lowDrive = buildDistortionCurve(10, 4096);
     const highDrive = buildDistortionCurve(80, 4096);
-    // Both should be positive at the same edge index, but high drive should
-    // saturate further/sooner.
-    expect(highDrive[3500]).toBeGreaterThanOrEqual(lowDrive[3500]);
+    // Both are unity-gain near zero; compare how much of the linear value
+    // survives at x ~ 0.71 — the harder-driven curve keeps less of it.
+    const xi = 3500;
+    const x = (xi * 2) / 4096 - 1;
+    expect(highDrive[xi] / x).toBeLessThan(lowDrive[xi] / x);
+  });
+
+  it("@us US20: low-drive small-signal gain stays ~unity (MIX is not a loudness boost)", () => {
+    // Makeup gain (see buildDistortionCurve) deliberately raises small-signal
+    // gain at high drive, so this slope bound only holds for low drives.
+    const n = 4096;
+    for (const drive of [0, 5, 10]) {
+      const c = buildDistortionCurve(drive, n);
+      const i = n / 2 + 8; // x = 8*2/n
+      const x = (i * 2) / n - 1;
+      const slope = c[i] / x;
+      expect(slope, `drive ${drive}`).toBeGreaterThan(0.8);
+      expect(slope, `drive ${drive}`).toBeLessThan(1.25);
+    }
+  });
+
+  it("@us US20: DRIVE keeps loud material at ~constant level (wet/dry RMS within 3 dB, drives 0-100)", () => {
+    const n = 4096;
+    const apply = (curve, x) => {
+      const pos = ((Math.max(-1, Math.min(1, x)) + 1) / 2) * (curve.length - 1);
+      const i = Math.floor(pos);
+      const f = pos - i;
+      return curve[i] * (1 - f) + (curve[Math.min(i + 1, curve.length - 1)]) * f;
+    };
+    const rms = (arr) => Math.sqrt(arr.reduce((t, v) => t + v * v, 0) / arr.length);
+    const N = 48000;
+    const peak3 = Math.pow(10, -3 / 20);
+    const sine = Float32Array.from({ length: N }, (_, i) => peak3 * Math.sin((2 * Math.PI * 440 * i) / 48000));
+    // Dense multi-tone: 6 partials, scaled to a -3 dBFS peak.
+    const freqs = [110, 247, 523, 1100, 2300, 4200];
+    const raw = Float32Array.from({ length: N }, (_, i) =>
+      freqs.reduce((t, f, k) => t + Math.sin((2 * Math.PI * f * i) / 48000 + k), 0)
+    );
+    let mx = 0;
+    for (const v of raw) mx = Math.max(mx, Math.abs(v));
+    const dense = raw.map((v) => (v / mx) * peak3);
+    for (const [name, sig] of [["sine", sine], ["dense", dense]]) {
+      for (const drive of [0, 25, 50, 100]) {
+        const c = buildDistortionCurve(drive, n);
+        const wet = Float32Array.from(sig, (v) => apply(c, v));
+        const db = 20 * Math.log10(rms(wet) / rms(sig));
+        expect(Math.abs(db), `${name} drive ${drive}: ${db.toFixed(2)} dB`).toBeLessThanOrEqual(3);
+      }
+    }
+  });
+
+  it("@us US20: curve is bounded in [-1, 1], monotonic and odd-symmetric", () => {
+    const n = 4096;
+    for (const drive of [0, 40, 100]) {
+      const c = buildDistortionCurve(drive, n);
+      for (let i = 0; i < n; i++) {
+        expect(Math.abs(c[i])).toBeLessThanOrEqual(1);
+        if (i > 0) expect(c[i]).toBeGreaterThanOrEqual(c[i - 1]);
+      }
+      for (let d = 1; d < 1000; d += 97) {
+        expect(c[n / 2 + d] + c[n / 2 - 1 - d]).toBeCloseTo(0, 6);
+      }
+    }
   });
 });
 
@@ -125,6 +237,29 @@ describe("clamp — US53", () => {
   it("@us US53: handles negative ranges", () => {
     expect(clamp(0, -1, -0.5)).toBe(-0.5);
     expect(clamp(-2, -1, -0.5)).toBe(-1);
+  });
+});
+
+describe("rampGain — fallback without cancelAndHoldAtTime", () => {
+  it("@us US19: a same-instant wet pin survives and is not overridden by a stale param.value anchor", () => {
+    const ctx = new AudioContext();
+    ctx._currentTime = 2.0;
+    const node = ctx.createGain();
+    const param = node.gain;
+    param.cancelAndHoldAtTime = undefined; // older engine
+    param.value = 0.8; // stale pre-pin value
+    param.setValueAtTime(0, ctx.currentTime); // caller's duck pin
+    const before = param.scheduledValues.length;
+    rampGain(param, 0.5, ctx, 0.02);
+    const added = param.scheduledValues.slice(before);
+    const cancel = added.find((e) => e.type === "cancel");
+    // Cancel starts strictly AFTER now, so an event at exactly now survives.
+    expect(cancel.time).toBeGreaterThan(ctx.currentTime);
+    // No re-anchor to the stale value at `now`.
+    expect(
+      added.some((e) => e.type === "setValue" && e.time === ctx.currentTime)
+    ).toBe(false);
+    expect(added.at(-1).type).toBe("setTarget");
   });
 });
 

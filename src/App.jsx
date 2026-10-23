@@ -103,7 +103,7 @@ export default function App() {
   const audioCtxRef = useRef(null);
   const masterCompressorRef = useRef(null);
   // A1 — fixed trim GainNode between the limiter and the master gain; gives
-  // the brickwall limiter extra headroom so the destination never clips.
+  // the safety-net limiter extra headroom so the destination never clips.
   const masterTrimRef = useRef(null);
   const masterGainRef = useRef(null);
   // W1.7 — parallel pre-limiter sum node. Every deck's analyser fans out into
@@ -199,26 +199,30 @@ export default function App() {
     const ctx = audioCtxRef.current;
 
     if (!masterCompressorRef.current) {
-      // A1 — true brickwall safety-net limiter. Both decks + bass drop + 4
-      // looper slots + 8 sample pads all sum into this single compressor; the
-      // old gentle settings (threshold -6 dB, ratio 4) let the summed signal
-      // run far past full scale and clip at the destination. Brickwall config:
-      //   threshold -9 dB  — start limiting before the sum reaches 0 dBFS
+      // A1 — safety-net limiter. Decks + bass drop + 4 looper slots + 8 sample
+      // pads all sum into this single compressor. It is a SAFETY NET, not a
+      // program compressor: a single deck at default fader peaks around -5
+      // dBFS, so the old -9 dB threshold kept it permanently over threshold
+      // and pumped audibly. Now:
+      //   threshold -2 dB  — only engages on genuine summed overs
       //   ratio     20     — near-infinite ratio = hard ceiling, not a knee
-      //   knee      0      — abrupt onset (a true limiter, not a soft comp)
-      //   attack    0.003  — fast enough to catch transients
+      //   knee      0      — abrupt onset
+      //   attack    0.003  — catches most transients, but
+      //   DynamicsCompressorNode has no lookahead, so this is NOT a true
+      //   brickwall; the 0.65 trim below gives ~3.7 dB of margin but it is a
+      //   safety net, not a guarantee.
       //   release   0.1    — quick recovery without audible pumping
       const comp = ctx.createDynamicsCompressor();
-      comp.threshold.value = -9;
+      comp.threshold.value = -2;
       comp.knee.value = 0;
       comp.ratio.value = 20;
       comp.attack.value = 0.003;
       comp.release.value = 0.1;
       // A1 — fixed make-up trim *down* between the limiter and the master
-      // gain. Even a brickwall limiter passes a peak slightly above threshold
-      // during its short attack window; a 0.65 trim guarantees the signal
-      // reaching the destination stays below full scale under worst-case
-      // simultaneous playback. The user's master volume is applied after this.
+      // gain. Even a safety-net limiter passes a peak slightly above threshold
+      // during its short attack window; a 0.65 trim leaves ~3.7 dB of
+      // margin below full scale (no lookahead, so a safety net, not a
+      // guarantee, under worst-case simultaneous playback). The user's master volume is applied after this.
       const trim = ctx.createGain();
       trim.gain.value = 0.65;
       const gain = ctx.createGain();
@@ -284,7 +288,12 @@ export default function App() {
             numberOfOutputs: 0,
             processorOptions: { seconds: 60 },
           });
-          masterCompressorRef.current.connect(node);
+          // Looper capture taps the PRE-limiter record tap (the parallel deck sum),
+          // not the compressor output: loops are played back INTO the compressor,
+          // so tapping its output would limit them twice. recordTapRef is built
+          // in the same ensureMasterCtx pass, before this async block runs.
+          if (!recordTapRef.current) throw new Error("record tap missing");
+          recordTapRef.current.connect(node);
           workletNodeRef.current = node;
           setWorkletReady(true);
         } catch (err) {

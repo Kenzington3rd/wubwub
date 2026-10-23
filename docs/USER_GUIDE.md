@@ -84,13 +84,14 @@ Each deck has Reverb, Delay, and Distortion. Click an effect's title to toggle i
 on. Knobs:
 - **Reverb** — MIX, SIZE (room length).
 - **Delay** — MIX, TIME, FB (feedback; capped at 90% so it can't run away).
-- **Distortion** — MIX, DRIVE.
+- **Distortion** — MIX, DRIVE. DRIVE keeps the level roughly constant on loud material (quiet passages get a little louder as DRIVE rises), so raising MIX or DRIVE adds colour rather than turning the deck down.
 
 ## Bass drop
 
 Pick a preset (Standard / Heavy / Wobble) from the dropdown, then hit **BASS
 DROP**. It runs an automated filter sweep + EQ kick. Wobble adds an LFO wobble
-on the filter after the drop.
+on the filter after the drop, then glides the filter back to wherever your FLT
+knob is.
 
 ## Three decks
 
@@ -111,11 +112,14 @@ The **MODE** row on each deck picks how the speed slider works:
   This is the polished, battle-tested mode.
 - **KEYLOCK** — the speed slider changes *tempo only*; the track keeps its
   original pitch. Perfect for running a vocal at 128 BPM without the
-  chipmunk effect. It's granular time-stretching done live in your browser
-  — marked *experimental* because texture quality depends on the material:
-  trust your ears, and flip back to VARI any time (switching is seamless,
+  chipmunk effect. It's waveform-aligned time-stretching done live in your
+  browser — marked *experimental* because texture quality depends on the
+  material: if it smears, flip back to VARI any time (switching is seamless,
   even mid-play). NUDGE in keylock bends tempo, not pitch — which is what
-  you want for beatmatching.
+  you want for beatmatching. LOOP and ROLL work in keylock too, and keep the
+  track's pitch. Quality is best near 1.0x and depends on the material.
+  Content below about 40 Hz (some 808 tails) still shifts with tempo; everything
+  above holds pitch.
 
 ## Roll
 
@@ -124,13 +128,18 @@ N beats repeat; the moment you let go, the track resumes exactly where it
 would have been if you'd never rolled — the timeline keeps running
 underneath. Classic EDM build tool: ¼-beat rolls tighten into a snare rush,
 release on the drop. Rolls need the deck to be playing, and the loop starts
-from wherever you press (it doesn't snap to the bar grid).
+from wherever you press (it doesn't snap to the bar grid). In KEYLOCK the roll
+keeps the track's original pitch, whatever the speed slider says.
+
+Pause, stop, seeks, cue jumps and rolls all take a ~4 ms fade at the edge, so
+they land without a click but still feel instant.
 
 ## Pump
 
 Next to BASS DROP, the **PUMP** button ducks the deck's level on every beat —
 the classic sidechain "breathing" EDM feel — with the **DEPTH** knob setting
-how hard it ducks. The rate follows the deck's effective BPM (detected BPM ×
+how hard it ducks (each duck starts with a few-ms slope, so it pumps without
+clicking). The rate follows the deck's effective BPM (detected BPM ×
 speed), so it keeps time after SYNC or a speed change. The pulse is
 free-running (it doesn't lock to the track's bar grid — same as the beat
 indicator), so engage it on a downbeat for the tightest feel.
@@ -159,12 +168,14 @@ The dropdown under the fader picks the curve:
 ## Looper
 
 Four slots. Pick a bar count (4 / 8 / 16); **Capture** grabs a fixed-length
-window of whatever is playing on the master bus, sized from bars × BPM at the
-moment you press it. Because it's a BPM snapshot, the captured loop won't be
-exactly N bars if the tempo drifts afterward. Click **Capture**, then **Play**
-to loop it. While a capture is running that slot's button shows "…" and
-ignores further presses; the rest of the looper stays usable. The volume
-slider sets the loop's level.
+window of whatever is playing, sized from bars × BPM at the moment you press
+it. Because it's a BPM snapshot, the captured loop won't be exactly N bars if
+the tempo drifts afterward. Click **Capture**, then **Play** to loop it. While
+a capture is running that slot's button shows "…" and ignores further presses;
+the rest of the looper stays usable. The volume slider sets the loop's level.
+Loops are captured before the master limiter, so they are not limited twice.
+Starting and stopping a slot fades in and out over a few milliseconds, so there
+is no click. Stop and play leave the volume slider's setting unchanged.
 
 ## Sample pad
 
